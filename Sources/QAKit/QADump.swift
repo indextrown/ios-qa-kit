@@ -43,7 +43,7 @@ public enum QADump {
             if !value.isEmpty, type != .secureTextField { parts.append("value=\"\(value)\"") }
             if !node.isEnabled { parts.append("(disabled)") }
             let f = node.frame
-            parts.append("@\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height))")
+            parts.append("@\(coord(f.minX)),\(coord(f.minY)) \(coord(f.width))x\(coord(f.height))")
             lines.append(String(repeating: "  ", count: depth) + parts.joined(separator: " "))
 
             if interactiveTypes.contains(type) {
@@ -72,6 +72,12 @@ public enum QADump {
         }
         print("[qakit-coverage] \(withID)/\(total) (\(ratio)%)")
         return output
+    }
+
+    /// 좌표를 정수 문자열로. 화면 밖·레이아웃 전 요소는 무한대/NaN일 수 있어 그대로 Int로 바꾸면 크래시한다.
+    static func coord(_ value: CGFloat) -> String {
+        guard value.isFinite, abs(value) < 1_000_000 else { return "?" }
+        return String(Int(value.rounded()))
     }
 
     static func typeName(_ type: XCUIElement.ElementType) -> String {
