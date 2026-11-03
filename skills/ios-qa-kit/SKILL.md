@@ -43,7 +43,7 @@ qakit doctor           # ❌가 있으면 → 안내대로 해결
    - 버튼 → 액션: VC의 `bind`/`rx.tap`/`addTarget` → ViewModel → Coordinator/Router 순으로 따라간다.
    - 확인할 것: **push / modal / 같은 화면 안 교체(시트·탭)** 중 무엇인지, 뒤로·닫기가 **어디로** 돌아가는지.
    - **상수가 있다고 화면에 보이는 것은 아니다.** 공통 컴포넌트의 버튼(예: back/close 둘 다 선언)은 화면마다 일부만 붙는다. 실제로 보이는지는 소스의 `isHidden`/`addSubview` 또는 덤프로 확인한다.
-3. **화면 덤프** — 실제 구조·라벨·좌표가 필요할 때만.
+3. **화면 덤프** — 실제 구조·라벨·좌표가 필요할 때. **화면 enum에 ID가 몇 개 없으면**(목록·탭바처럼 UIKit 기본 컴포넌트 위주 화면) 위치 규칙 ID와 라벨을 봐야 하므로 덤프를 먼저 한다.
    - 첫 화면: `qakit dump-ui --wait-id <QAID 문자열>`
    - 깊은 화면: 그 화면까지 가는 테스트를 먼저 돌린 뒤 `qakit dump-ui --attach` (앱이 떠 있는 화면 그대로 덤프)
    - 결과: `results/ui-dump.txt` (`#ID "라벨" @x,y WxH`). 맨 위에 ID 커버리지와 ID 없는 요소 목록이 있다.
@@ -119,6 +119,12 @@ final class ItemListFlowTests: QATestCase {
 - 그림으로 그리는 영역(지도, 차트, 캔버스)은 내부 요소가 없다 → 좌표(`app.coordinate(withNormalizedOffset:)`)로 조작하고, 결과는 그 위의 UI로 확인한다.
 - 팝업이 떠 있으면 아래 화면 요소가 접근성 구조에서 사라질 수 있다 → 팝업을 먼저 처리하고 NOTES에 적는다.
 - **"닫혔다" 판정**: 하단 시트·드로어처럼 닫혀도 화면 밖에 남는 화면은 `exists`가 계속 true다 → `page.waitUntilGone()` / `page.isVisibleOnScreen`을 쓴다. 판정에 쓴 근거를 note로 남긴다.
+- **같은 ID가 여러 개인 시스템 셀·섹션 헤더**(덤프에서 헤더도 `Cell` 타입으로 나온다)는 ID와 라벨을 함께 건다:
+  `app.cells.matching(NSPredicate(format: "identifier == %@ AND label == %@", QAID.X.collectionView + ".header", "제목")).firstMatch`
+  (`cell(_:labelID:label:)`은 셀 *안의 라벨*에 ID가 있는 앱 셀용이다)
+- **탭바**: 탭 버튼은 `app.buttons["Tab.<탭 첫 화면 VC>"]`. 선택 상태는 `isSelected`로 판정한다. 탭바 자체는 Page로 만들지 말고 탭 버튼 묶음 헬퍼(일반 struct)로 두고, 각 탭 화면을 Page로 만든다.
+- **탭 전환 판정**: 이전 탭 화면은 보통 접근성 구조에서 빠진다 → 새 탭 Page `isDisplayed` + 이전 탭 Page `isVisibleOnScreen == false` + 탭 버튼 `isSelected`.
+- `isVisibleOnScreen`은 Page에서는 속성(`page.isVisibleOnScreen`), 요소에서는 함수(`element.isVisibleOnScreen(in: app)`)다.
 - `Pages/`, `Flows/`에 새 Swift 파일을 만들면 `qakit test`가 프로젝트에 자동으로 포함한다 (Xcode 프로젝트를 직접 고치지 않는다).
 
 ## 4. 실행 → 고치기 루프
