@@ -11,23 +11,95 @@
 
 ---
 
-## 동작 방식
+## 전체 흐름 한눈에
+
+### 세 곳: 앱 · 도구 · 작업공간
+
+| 곳 | 예시 위치 | 들어 있는 것 | 누가 바꾸나 |
+|---|---|---|---|
+| **앱 프로젝트** (기존 그대로) | `~/work/MyApp` | 앱 소스. **복사하지 않고 경로만 참조**합니다 | 아무도 (qakit은 읽기만) |
+| **도구** (이 레포) | `~/ios-qa-kit` | qakit CLI, 자동 ID 라이브러리, QAKit, 스킬, 템플릿 | 도구 개발자 ([docs/gitflow.md](docs/gitflow.md)) |
+| **작업공간** (앱별 QA 폴더) | `~/work/qa-workspaces/myapp` | 설정·계정·테스트·빌드 결과. git으로 관리하지 않는 일회용 | 사람(설정·계정) + AI(테스트) + qakit(자동 생성) |
 
 ```
- 앱 (수정 없음)                       작업공간 (앱별 QA 폴더)
- ┌──────────────────┐   빌드·설치    ┌─────────────────────────────┐
- │ iOS 앱 프로젝트    │ ───────────▶ │ qakit.yml  (앱 경로·scheme)   │
- └──────────────────┘              │ secrets.txt (테스트 계정)      │
-          │ 소스 읽기                │ NOTES.md   (앱 특이사항)       │
-          ▼                         │ Runner/UITests/              │
-   QAIDs.swift (ID 상수) ─────────▶ │   Pages/  화면별 Page Object   │
-                                    │   Flows/  시나리오 테스트       │
- 시뮬레이터에서 실행 시               └─────────────────────────────┘
- AutoID.dylib 주입 → 화면 요소에 ID 자동 부여 → XCUITest가 ID로 찾음
+ 앱 프로젝트 (수정 없음)                 작업공간 (qa-workspaces/myapp)
+ ┌───────────────────┐  ① 경로 참조     ┌──────────────────────────────────┐
+ │ MyApp.xcodeproj    │ ◀───────────── │ qakit.yml   앱 경로·scheme·bundleId │
+ │ Sources/*.swift    │                 │ secrets.txt 테스트 계정 (사람)       │
+ └───────────────────┘                 │ NOTES.md    앱 특이사항 (AI가 기록)  │
+     │ ② 빌드 (xcodebuild)              │ Runner/UITests/                    │
+     │    결과는 작업공간 .build/에 ───▶ │   Pages/      화면별 Page  (AI)     │
+     │ ③ 소스 읽기 (gen-ids)            │   Flows/      시나리오 테스트 (AI)   │
+     │    → ID 상수 ──────────────────▶ │   Generated/  QAIDs.swift (자동)    │
+     ▼                                  │ .build/  앱·테스트 빌드 결과 (자동)   │
+ 시뮬레이터                              │ results/ 로그·덤프·실패 요약 (자동)   │
+  ④ 앱 설치 + 실행할 때 AutoID 주입       └──────────────────────────────────┘
+     → 화면 요소에 ID 자동 부여 → 테스트가 ID로 찾아 조작
 ```
 
-- **도구 레포 (`ios-qa-kit`)**: 어느 앱에나 쓰는 범용 코드만 있습니다.
-- **작업공간 (`qa-workspaces/<앱>`)**: 앱 하나의 설정·계정·테스트. `qakit init`이 만들어 줍니다.
+### 기존 프로젝트를 가져오는 방법
+
+**앱 프로젝트는 복사하거나 고치지 않습니다.** `qakit init`이 앱 경로를 `qakit.yml`에 적어 두고, 이후 모든 명령은 그 경로를 읽기만 합니다.
+
+| 단계 | 명령 | 앱 프로젝트에 하는 일 | 결과가 저장되는 곳 |
+|---|---|---|---|
+| 연결 | `qakit init ~/work/MyApp` | `xcodebuild -list`로 scheme·bundle ID 읽기 | 작업공간 생성, `qakit.yml`에 경로 기록 |
+| 빌드 | `qakit build-app` | `xcodebuild build` (패키지 버전 고정, 빌드 전후 git 상태 비교 → 바뀌면 경고) | `작업공간/.build/app/` → 시뮬레이터에 설치 |
+| ID 상수 | `qakit gen-ids` (`sync`·`test`가 자동 실행) | `*.swift` 읽기 (Pods·Tests 제외) | `작업공간/Runner/UITests/Generated/QAIDs.swift` |
+| 실행 | `qakit test` | 없음 (설치된 앱을 실행, 자동 ID 라이브러리를 끼워 넣음) | `작업공간/results/` |
+| 앱 변경 감지 | `qakit test` 시작 시 | `git` 브랜치·커밋·미커밋 변경 읽기 | `작업공간/.qakit/` (마지막 빌드 상태) |
+
+- 다른 브랜치를 검증하려면 앱을 옮기지 말고 그 브랜치 폴더(git worktree)를 가리킵니다: `qakit --app ~/work/MyApp-release test`. 빌드 결과는 경로별로 따로 저장됩니다.
+- 같은 앱에 작업공간을 여러 개 만들어도 됩니다 (예: 연습용, 기능별). 작업공간을 지워도 앱에는 아무 영향이 없습니다.
+
+### 테스트가 처음부터 만들어지는 과정
+
+| # | 누가 | 하는 일 | 만들어지는 것 |
+|---|---|---|---|
+| 1 | 사람 | `qakit init <앱>` → `qakit.yml` 확인(권한 등) → `secrets.txt`에 계정 | 작업공간, 기본 테스트(`SmokeTests`) |
+| 2 | qakit | `build-app`: 앱 빌드·설치·권한 허용 / `dump-ui`: 첫 화면 구조 | `.build/`, `results/ui-dump.txt` |
+| 3 | 사람 | AI에게 시나리오를 한 문장으로 요청: `/ios-qa-kit 로그인 후 홈이 뜨는지 확인해줘` | — |
+| 4 | AI | `NOTES.md`·기존 공통 단계 읽기 → `QAIDs.swift`에서 화면 ID grep → 필요하면 앱 소스·덤프 확인 | — (읽기만) |
+| 5 | AI | 화면마다 Page, 시나리오 테스트, 여러 테스트가 쓸 공통 단계 작성 | `Pages/LoginPage.swift`, `Flows/LoginTests.swift`, `Flows/AuthSteps.swift` |
+| 6 | AI ↔ qakit | `qakit test` → 실패하면 텍스트 요약(원인·마지막 단계·그 순간 화면 구조)을 읽고 수정 → 통과할 때까지 (같은 원인 3번이면 멈추고 사람에게 보고) | 통과하는 테스트 |
+| 7 | AI | 새로 알게 된 것(뜨는 팝업, 상태 판별 기준, ID 없는 영역, 사람의 결정)을 기록 | `NOTES.md` |
+| 8 | 사람 | 다음 시나리오 요청. AI는 이미 있는 공통 단계(예: `ensureLoggedIn()`)를 재사용 | 시나리오가 쌓일수록 빨라짐 |
+
+이후에는 사람·AI 없이 `qakit test`만 반복하면 됩니다 (토큰 0). 앱이 바뀌면 `qakit test`가 먼저 재빌드·ID 재생성을 하고, 깨진 테스트는 다시 AI에게 "`qakit sync` 결과대로 고쳐줘"라고 맡깁니다.
+
+### 누가 무엇을 만드나
+
+| 파일 | 만드는 쪽 | 설명 |
+|---|---|---|
+| `qakit.yml` | qakit 초안 → 사람 확인 | 앱 경로, scheme, bundle ID, 시뮬레이터, 미리 허용할 권한 |
+| `secrets.txt` | **사람만** | 테스트 계정. AI는 값을 열어 보지 않고 `QASecrets`로만 씁니다 |
+| `Pages/*Page.swift` | AI | 화면 하나 = Page 하나. 화면 대표 요소(anchor)와 요소·동작. ID는 여기에만 |
+| `Flows/*Tests.swift` | AI | 시나리오 테스트. Page만 사용 |
+| `Flows/*Steps.swift` | AI | 여러 테스트가 쓰는 공통 단계 (로그인, 메뉴 열기 …) |
+| `NOTES.md` | AI (사람도 가능) | 앱 특이사항. 다음 세션의 AI가 먼저 읽습니다 |
+| `Generated/QAIDs.swift` | qakit (자동) | 앱 소스에서 만든 ID 상수. 직접 고치지 않습니다 |
+| `Runner/project.yml`, `Host/`, `QAKit/` | qakit (템플릿) | 테스트 실행용 Xcode 프로젝트 틀. 손대지 않습니다 |
+| `.build/`, `results/`, `.qakit/` | qakit (자동) | 빌드 결과, 로그·덤프·실패 요약, 마지막 빌드 상태 |
+
+시나리오가 몇 개 쌓인 작업공간 예:
+
+```
+qa-workspaces/myapp/
+├── qakit.yml  secrets.txt  NOTES.md  AGENTS.md  CLAUDE.md
+├── Runner/UITests/
+│   ├── Pages/        LoginPage  HomePage  MenuPage  SearchPage       ← AI
+│   ├── Flows/        AuthSteps  MenuSteps                            ← AI (공통 단계)
+│   │                 LoginTests  MenuTests  SearchTests  SmokeTests  ← AI (시나리오)
+│   ├── Generated/    QAIDs.swift                                     ← 자동
+│   └── QAKit/        QAKitDumpTests.swift                            ← 템플릿
+├── .build/  results/  .qakit/                                        ← 자동
+```
+
+`AGENTS.md`·`CLAUDE.md`는 작업공간을 연 AI가 스킬 규칙을 따르게 하는 안내입니다 (스킬이 설치돼 있지 않은 AI도 읽음).
+
+### 자동 ID가 붙는 원리
+
+시뮬레이터에서 앱을 실행할 때 `DYLD_INSERT_LIBRARIES`로 `AutoID.dylib`를 끼워 넣습니다. 이 라이브러리는 화면이 뜰 때 ViewController·커스텀 뷰의 **저장 프로퍼티 이름**을 읽어(Swift `Mirror`) 그 뷰에 `accessibilityIdentifier`를 붙입니다. 앱 바이너리와 소스는 그대로이고, 시뮬레이터에서 qakit으로 실행할 때만 동작합니다. 규칙은 [자동으로 붙는 ID 규칙](#자동으로-붙는-id-규칙).
 
 ---
 
