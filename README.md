@@ -80,6 +80,7 @@ cp secrets.example.txt secrets.txt
 8. [UI 요소를 찾는 우선순위](#ui-요소를-찾는-우선순위)
    - [화면에 보이는 것은 어떻게 읽나](#화면에-보이는-것은-어떻게-읽나) · [AI가 요소를 알아내는 순서](#ai가-요소를-알아내는-순서) · [찾은 뒤 상태 판정하기](#찾은-뒤-상태-판정하기)
 9. [앱이 바뀌었을 때](#앱이-바뀌었을-때)
+   - [QA 워크트리 최신화](#qa-워크트리-최신화)
 
 **참고**
 
@@ -156,6 +157,7 @@ cd ~/path/to/MyApp-qa/QA
 - `QA/`를 이 PC의 git 무시 목록(`.git/info/exclude`)에 넣습니다.
   - 팀이 커밋하기로 하면 그대로 커밋하면 됩니다. `QA/.gitignore`가 생성물·비밀값을 이미 제외합니다.
 - scheme·configuration·bundle ID를 자동으로 찾아 `qakit.yml`에 적습니다.
+- 워크트리는 **계속 유지**합니다. 자세한 건 [QA 워크트리 최신화](#qa-워크트리-최신화).
 
 **`qakit.yml`을 확인하고 필요한 권한을 넣으세요.**
 
@@ -735,6 +737,34 @@ Button #LoginView.loginButton "로그인" @16,682 370x56
 | 다른 브랜치 폴더(git worktree) 검증 | `qakit --app ~/path/MyApp-release test` |
 | 자동 동기화 끄기 | `qakit.yml`에 `sync: warn` (알리기만) 또는 `off` |
 
+### QA 워크트리 최신화
+
+QA 워크트리(`qa/workspace`)는 **한 번 만들면 계속 유지**합니다. 개발 브랜치(`develop`)가 앞서 나가면 그 커밋을 **QA 워크트리 쪽으로 가져와** 최신 앱으로 테스트합니다.
+
+```text
+develop       ──●──●──●──●──●
+                 \         \  가져오기 (merge)
+qa/workspace      ●──●──●───●   ← QA 결과물은 여기 그대로
+```
+
+| 하는 것 (기본) | 하지 않는 것 |
+|---|---|
+| `qakit test`·`qakit run` 전에 `develop`(원격이 앞서면 `origin/develop`)보다 뒤처졌는지 확인 → 뒤처졌으면 가져오기 → 바뀐 앱으로 재빌드 | QA 브랜치를 `develop` 등 다른 브랜치로 **병합하지 않습니다** (사용자가 명시적으로 요청할 때만) |
+| 앱 소스에 미커밋 변경이 있거나 충돌이 나면 **가져오지 않고 알려 줌** (충돌은 자동으로 되돌림) | **push하지 않습니다** |
+
+```bash
+qakit worktree-update --check      # 뒤처졌는지만 확인 (doctor도 알려 줌)
+qakit worktree-update              # 지금 가져오기
+qakit worktree-update --from release/1.2.0   # 다른 브랜치를 따라가기
+```
+
+```yaml
+# qakit.yml
+worktree:
+  base: develop      # 따라갈 브랜치
+  update: auto       # auto: test/run 전에 자동 / warn: 알리기만 / off
+```
+
 <sub>[↑ 목차](#목차)</sub>
 
 ---
@@ -762,6 +792,7 @@ Button #LoginView.loginButton "로그인" @16,682 370x56
 | `qakit gen-ids [--verify]` | ID 상수 생성 (`--verify`: 실제 화면 ID와 비교) |
 | `qakit swiftui-ids --list` | SwiftUI 화면에 붙을 ID 목록 (`--insert`/`--restore`: 손으로 삽입·되돌리기) |
 | `qakit sync` | 앱 변경 반영 (재빌드 + ID 재생성 + 테스트 코드 컴파일 확인) |
+| `qakit worktree-update [--check] [--from 브랜치]` | QA 워크트리를 따라갈 브랜치(기본 `develop`)의 최신 커밋으로 (merge, push 안 함. test/run 전에 자동) |
 
 **실행·결과**
 
@@ -802,6 +833,7 @@ Button #LoginView.loginButton "로그인" @16,682 370x56
 | 🔒 **대상 앱 레포를 수정하지 않습니다** | 빌드할 때도 `Package.resolved`를 고치지 않도록 고정하고, 빌드 전후로 앱 레포에 바뀐 파일이 있으면 경고합니다 |
 | 🔑 **비밀값은 `secrets.txt`에만** | 테스트 출력·로그·실패 요약에서 비밀값은 `•••`로 가려집니다 |
 | ⚠️ **되돌릴 수 없는 동작은 승인 후에만** | 탈퇴·결제·삭제·실제 전송은 사람이 승인한 경우에만 테스트에 넣고 `NOTES.md`에 기록합니다 |
+| 🌿 **QA 워크트리는 유지하고 병합하지 않습니다** | 다른 브랜치가 앞서면 그 커밋을 QA 워크트리로 가져올 뿐, QA 브랜치를 다른 브랜치로 병합하거나 push하지 않습니다 (사용자가 명시적으로 요청할 때만) |
 | 🧩 **테스트끼리 상태를 공유하지 않습니다** | 공통 진입(로그인 등)은 `Flows/*Steps.swift`에 한 번만 만들어 재사용합니다 |
 
 > [!CAUTION]

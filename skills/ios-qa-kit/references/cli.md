@@ -8,6 +8,7 @@
 | `qakit update [--check]` | 도구를 최신 버전으로 받기 (설치 폴더를 git fast-forward). `--check`: 새 버전이 있는지만 |
 | `qakit doctor` | 환경·설정·secrets 키 점검 |
 | `qakit build-app` | 앱 빌드 → 시뮬레이터 설치 → 권한 허용 |
+| `qakit worktree-update [--check] [--from 브랜치]` | QA 워크트리를 따라갈 브랜치(`worktree.base`, 기본 develop. 원격이 앞서면 origin/…)의 새 커밋으로 merge. push·다른 브랜치로 병합은 하지 않음. 미커밋 변경·충돌이면 가져오지 않고 알림. `test`·`run` 전에 자동(`worktree.update: auto`) |
 | `qakit sync [--rebuild] [--skip-build]` | 앱 변경 반영: 재빌드·설치 + ID 재생성(추가/삭제 보고) + 테스트 코드 컴파일 확인 |
 | `qakit gen-ids [--verify]` | ID 상수 생성 (SwiftUI ID 포함). `--verify`: 저장된 덤프와 비교 |
 | `qakit swiftui-ids --list \| --insert \| --restore` | SwiftUI ID 삽입 도구. `--list`: 삽입될 ID 목록. `--insert`: 워크트리 소스에 삽입한 채 둠(diff 확인용). `--restore`: 되돌림. `build-app`은 자동으로 삽입→빌드→복원 |
@@ -37,6 +38,9 @@ permissions: [location-always]   # simctl privacy 이름
 secrets: ./secrets.txt
 autoid: inject                   # inject(시뮬레이터 주입) | embedded
 sync: auto                       # auto | warn | off
+worktree:                        # QA 워크트리(init --worktree)일 때
+  base: develop                  # 따라갈 브랜치
+  update: auto                   # auto(test/run 전 자동으로 가져옴) | warn | off
 # ids:
 #   sources: [~/path/App/Sources]
 ```

@@ -142,6 +142,10 @@ class Workspace:
         self.autoid = self.cfg.get("autoid", "inject")
         self.swiftui = str(self.cfg.get("swiftui", "auto"))  # auto | insert | off — SwiftUI 소스에 ID 삽입(QA 워크트리 빌드 중)
         self.sync_mode = self.cfg.get("sync", "auto")  # auto | warn | off
+        wt = self.cfg.get("worktree") or {}
+        wt = wt if isinstance(wt, dict) else {}
+        self.worktree_base = str(wt.get("base", "develop"))     # QA 워크트리가 따라갈 브랜치
+        self.worktree_update = str(wt.get("update", "auto"))    # auto | warn | off
         ids = self.cfg.get("ids") or {}
         srcs = ids.get("sources") if isinstance(ids, dict) else None
         self.id_sources = [expand(x, self.root) for x in (srcs if isinstance(srcs, list) else [srcs] if srcs else [])]
@@ -675,6 +679,7 @@ def cmd_init(args):
         "BUNDLE_ID": bundle_id or "TODO.bundle.id",
         "SIMULATOR": args.simulator or default_simulator(),
         "KIT_DIR": str(KIT_DIR),
+        "WORKTREE_BASE": getattr(args, "base", None) or "develop",
     }
     copy_template(TEMPLATE_DIR, root, values, force=args.force)
     (root / "results").mkdir(exist_ok=True)
@@ -896,6 +901,13 @@ def cmd_doctor(args):
         if not SWIFTUI_IDS_BIN.exists():
             info("ℹ️  swiftui-ids 도구는 첫 qakit build-app 때 빌드됩니다 (몇 분)")
 
+    st = worktree_status(ws) if ws.app_dir else None
+    if st and st["ref"]:
+        if st["behind"]:
+            warn(f"QA 워크트리({st['branch']})가 {st['ref']}보다 {st['behind']}커밋 뒤처짐 → qakit worktree-update"
+                 + (" (test/run 전에 자동으로 가져옴)" if ws.worktree_update == "auto" else ""))
+        else:
+            ok(f"QA 워크트리({st['branch']})가 {st['ref']} 기준 최신")
     if ws.secrets_path.exists():
         keys = sorted(ws.secrets().keys())
         example = ws.root / "secrets.example.txt"
@@ -1270,7 +1282,93 @@ def app_changed(ws):
     return changed, describe_change(old, new) if changed else "", new
 
 
+# ─────────────────────────────── QA 워크트리 최신화 ───────────────────────────────
+# 원칙: QA 워크트리 브랜치(qa/workspace)는 그대로 유지한다. 사용자가 명시적으로 요청하지 않는 한
+# 다른 브랜치로 병합하지 않고 push하지 않는다. 따라갈 브랜치(develop)가 앞서 있으면 그 커밋을 QA 쪽으로 가져온다.
+
+def _git_quiet_fetch(repo_dir, branch):
+    if not git(repo_dir, "remote"):
+        return
+    env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    try:
+        subprocess.run(["git", "-C", str(repo_dir), "fetch", "--quiet", "origin", branch],
+                       env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+
+
+def worktree_status(ws, base=None, fetch=True):
+    """QA 워크트리가 따라갈 브랜치보다 몇 커밋 뒤처졌는지. QA 워크트리가 아니면 None."""
+    d = ws.app_dir
+    if not d or APP_OVERRIDE or not is_qa_worktree(d):
+        return None
+    base = base or ws.worktree_base
+    if fetch:
+        _git_quiet_fetch(d, base)
+    refs = [r for r in (f"origin/{base}", base) if git(d, "rev-parse", "--verify", "--quiet", r) is not None]
+    ref = refs[0] if refs else None
+    for other in refs[1:]:   # 로컬이 원격보다 앞서 있으면 로컬을 쓴다
+        if git(d, "merge-base", "--is-ancestor", ref, other) is not None:
+            ref = other
+    branch = git(d, "rev-parse", "--abbrev-ref", "HEAD")
+    behind = int(git(d, "rev-list", "--count", f"HEAD..{ref}") or 0) if ref else 0
+    return {"base": base, "ref": ref, "branch": branch, "behind": behind}
+
+
+def update_worktree(ws, base=None, check_only=False, strict=True):
+    """따라갈 브랜치의 새 커밋을 QA 워크트리로 가져온다 (merge, push 안 함). strict=False면 실패해도 경고만."""
+    def stop(msg, hint=None):
+        if strict:
+            fail(msg, hint)
+        warn(msg + (f" → {hint}" if hint else ""))
+        return False
+
+    st = worktree_status(ws, base)
+    if st is None:
+        return stop("앱 폴더가 QA 워크트리가 아닙니다.", "qakit init <앱> --worktree 로 만든 작업공간에서 실행하세요")
+    if not st["ref"]:
+        return stop(f"따라갈 브랜치 '{st['base']}'를 찾지 못했습니다.", "qakit.yml의 worktree.base 또는 --from <브랜치>")
+    d, ref, branch, n = ws.app_dir, st["ref"], st["branch"], st["behind"]
+    if n == 0:
+        if strict:
+            ok(f"QA 워크트리({branch})가 {ref} 기준 최신입니다")
+        return True
+    if check_only:
+        warn(f"QA 워크트리({branch})가 {ref}보다 {n}커밋 뒤처져 있습니다 → qakit worktree-update")
+        return True
+    dirty = git(d, "status", "--porcelain", "--untracked-files=no", "--", *app_pathspec(ws))
+    if dirty:
+        return stop(f"QA 워크트리({branch})가 {ref}보다 {n}커밋 뒤처졌지만, 앱 소스에 미커밋 변경이 있어 가져오지 않았습니다.",
+                    "변경을 커밋하거나 정리한 뒤 qakit worktree-update")
+    if ws.swiftui_manifest.exists():
+        return stop("SwiftUI ID 삽입이 복원되지 않은 상태라 가져오지 않았습니다.", "qakit swiftui-ids --restore 후 다시")
+    before = git(d, "rev-parse", "--short", "HEAD")
+    info(f"🔄 QA 워크트리({branch})가 {ref}보다 {n}커밋 뒤처짐 → {ref}에서 가져와 최신화 (QA 브랜치 유지, push 안 함)")
+    r = run(["git", "-C", str(d), "merge", "--no-edit", "-m",
+             f"Merge {ref} into {branch} (qakit worktree-update)", ref], check=False)
+    if r.returncode != 0:
+        run(["git", "-C", str(d), "merge", "--abort"], check=False)
+        conflicts = [l for l in (r.stdout or "").splitlines() if "CONFLICT" in l][:5]
+        return stop(f"{ref}를 가져오다 충돌이 나서 되돌렸습니다." + ("\n   " + "\n   ".join(conflicts) if conflicts else ""),
+                    f"직접 해결: git -C {d} merge {ref}")
+    ok(f"{ref}의 {n}커밋을 가져옴 ({before} → {git(d, 'rev-parse', '--short', 'HEAD')}). 다음 test/run이 앱을 다시 빌드합니다")
+    return True
+
+
+def follow_worktree(ws):
+    """test/run 전에: QA 워크트리가 따라갈 브랜치보다 뒤처졌으면 가져온다 (qakit.yml worktree.update)."""
+    if ws.worktree_update == "off":
+        return
+    update_worktree(ws, check_only=ws.worktree_update == "warn", strict=False)
+
+
+def cmd_worktree_update(args):
+    ws = find_workspace(args.workspace)
+    update_worktree(ws, base=args.base, check_only=args.check)
+
+
 def auto_sync(ws):
+    follow_worktree(ws)
     if ws.sync_mode == "off":
         return
     changed, why, _ = app_changed(ws)
@@ -1813,6 +1911,11 @@ def main():
     p.add_argument("--rebuild", action="store_true", help="변경이 없어도 앱 재빌드")
     p.add_argument("--skip-build", action="store_true", help="앱 빌드 생략 (ID 재생성·컴파일 확인만)")
     p.set_defaults(func=cmd_sync)
+
+    p = sub.add_parser("worktree-update", help="QA 워크트리를 따라갈 브랜치(기본 develop)의 최신 커밋으로 (merge, push 안 함)")
+    p.add_argument("--from", dest="base", help="따라갈 브랜치 (기본: qakit.yml worktree.base, 없으면 develop)")
+    p.add_argument("--check", action="store_true", help="뒤처졌는지만 확인")
+    p.set_defaults(func=cmd_worktree_update)
 
     p = sub.add_parser("gen-ids", help="앱 소스에서 ID 상수(QAIDs.swift) 생성")
     p.add_argument("--verify", action="store_true", help="저장된 화면 덤프와 비교")
