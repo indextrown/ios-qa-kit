@@ -19,7 +19,7 @@
 //    snapshot: { of: <대상>, as: 이름 }
 //    expect: <조건>, timeout?: 초, hold?: 초, message?: 글자
 //    hide-keyboard: true (키보드가 버튼을 가릴 때)
-//    repeat: { until: <조건>, max: 5, wait: 3, steps: [단계] }   조건이 맞을 때까지 반복
+//    repeat: { until: <조건>, max: 5, wait: 3, watch?: 설정키, steps: [단계] }   조건이 맞을 때까지 반복
 //    read-pref: { key: 키, as: 변수 }      앱 설정(UserDefaults) 값 읽기
 //    note: 글자 / relaunch: true / group: 이름 + steps (use: 가 펼쳐진 것) / fail: 글자
 //
@@ -189,13 +189,31 @@ public final class QAScenarioRunner {
             let max = Int(number(spec["max"]) ?? 5)
             let wait = number(spec["wait"]) ?? 3
             guard let until = spec["until"] else { throw fail("repeat에 until: 조건이 필요함") }
+            // watch: 앱 설정 키. 매 반복 뒤 그 값이 실제로 바뀔 때까지(최대 wait초) 기다렸다가 판정한다.
+            // UserDefaults는 디스크에 늦게 쓰여, 그냥 판정하면 옛 값을 보고 한 번 더 반복해 목표를 넘친다.
+            let watch = spec["watch"] as? String
             var count = 0
             while try !evaluate(until, timeout: 0) && count < max {
                 count += 1
+                let before = watch.flatMap { prefValue($0) }.map { formatPref($0) }
                 try XCTContext.runActivity(named: "반복 \(count)/\(max)") { _ in
                     try runSteps(spec["steps"] as? [Any] ?? [])
                 }
-                if try evaluate(until, timeout: wait) { break }
+                if let watch {
+                    // 값이 바뀐 뒤 1초 동안 더 변하지 않을 때(관성 확대·스크롤이 멈췄을 때) 판정한다
+                    let deadline = Date().addingTimeInterval(wait)
+                    var last = before
+                    var lastChange = Date()
+                    while Date() < deadline {
+                        let now = prefValue(watch).map { formatPref($0) }
+                        if now != last { last = now; lastChange = Date() }
+                        if last != before && Date().timeIntervalSince(lastChange) >= 1.0 { break }
+                        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+                    }
+                    if try evaluate(until, timeout: 0) { break }
+                } else if try evaluate(until, timeout: wait) {
+                    break
+                }
             }
             let done = try evaluate(until, timeout: 0)
             testCase.note("반복 \(count)번 → 조건 \(done ? "충족" : "미충족"): \(compact(until))")
