@@ -234,6 +234,7 @@ qakit run search-favorite        # 실행 (reset: true면 앱 초기화부터)
 
 - 단계·대상·조건 전체 문법: [scenario-language.md](skills/ios-qa-kit/references/scenario-language.md)
 - 분기(`if`/`unless`), 값 읽기(`read`), 여러 후보 대기(`wait-any`), 위치 비교(`right-of`), 화면 변화(`changed`)까지 표현합니다.
+- **화면에 안 나오는 앱 상태**(예: 지도 줌)는 앱 설정(UserDefaults) 값으로 판정하고(`pref`, `read-pref`), 목표 값까지 반복합니다(`repeat` + `watch`). 예: "줌 15가 될 때까지 핀치".
 - 언어로 표현이 안 되는 계산·판정만 Swift(`QA/Runner/UITests/Flows`)로 씁니다. 두 방식은 같은 작업공간에서 함께 씁니다.
 
 ---
