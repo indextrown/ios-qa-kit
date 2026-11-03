@@ -1,0 +1,38 @@
+# qakit이 관리하는 테스트 실행 프로젝트. xcodegen으로 .xcodeproj를 만든다 (qakit test가 자동 처리).
+name: QARunner
+options:
+  bundleIdPrefix: com.qakit
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  QAKit:
+    path: {{KIT_DIR}}
+targets:
+  QARunnerHost:
+    type: application
+    platform: iOS
+    sources: [Host]
+    settings:
+      GENERATE_INFOPLIST_FILE: YES
+      INFOPLIST_KEY_UILaunchScreen_Generation: YES
+      CODE_SIGNING_ALLOWED: NO
+  UITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: QARunnerHost
+      - package: QAKit
+    settings:
+      GENERATE_INFOPLIST_FILE: YES
+      CODE_SIGNING_ALLOWED: NO
+      TEST_TARGET_NAME: QARunnerHost
+      SWIFT_VERSION: "5.0"
+schemes:
+  UITests:
+    build:
+      targets:
+        QARunnerHost: all
+        UITests: [test]
+    test:
+      targets: [UITests]

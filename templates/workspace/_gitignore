@@ -1,0 +1,6 @@
+.build/
+results/
+secrets.txt
+Runner/*.xcodeproj/
+.DS_Store
+.qakit/
