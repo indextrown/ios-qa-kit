@@ -426,6 +426,10 @@ def render_node(node, level, root=False):
     return out
 
 
+def declared_as_uikit(model, typ):
+    return bool(typ) and not model.is_app(typ) and typ.startswith("UI")
+
+
 def inherits_external(model, typ):
     if not typ or not model.is_app(typ):
         return False
@@ -455,6 +459,10 @@ def verify(generated, model, dump_files, types=None):
             matched.append(rid)
         elif types and inherits_external(model, types.get(rid.rsplit(".", 1)[0])):
             external.append(rid)  # 외부 SDK 부모 클래스의 프로퍼티 (소스 없음)
+        elif types and declared_as_uikit(model, types.get(rid.rsplit(".", 1)[0])):
+            # 예: `var x: UIView?`로 선언하고 실제로는 앱의 하위 클래스를 넣음 → 실행 중에는 안쪽 이름이 붙지만
+            # 소스의 선언만으로는 알 수 없다 (정적 분석 한계)
+            external.append(rid)
         else:
             missing.append(rid)
     return matched, missing, external

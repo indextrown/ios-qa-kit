@@ -12,6 +12,7 @@
 | `typeText` 실패 / 키보드 없음 | 탭이 입력칸 컨테이너에 감 | 덤프에서 실제 `TextField`/`SecureTextField` ID 사용 |
 | 버튼이 키보드에 가림 | `isHittable == false` | 키보드 내리기 후 탭 |
 | 앱이 예전 버전 같음 | 동기화 꺼짐 또는 다른 경로 빌드 | `qakit sync` (필요 시 `--rebuild`) |
+| 화면에는 ID가 있는데 `QAIDs.swift`에 없음 | 프로퍼티를 부모 타입으로 선언(`var x: UIView?`)하고 실제로는 앱의 하위 클래스를 넣음 → 소스만 읽는 생성기는 안쪽을 모름 | 덤프에 나온 ID를 문자열로 쓴다 (`gen-ids --verify`는 "선언 타입 차이"로 분류) |
 | `QAID…has no member` 컴파일 에러 | 앱 프로퍼티 이름 변경 | `qakit sync` 출력의 삭제/추가 목록대로 Page 수정 |
 | 시뮬레이터 권한 팝업 반복 | 권한 미허용 | `qakit.yml permissions`에 추가 → `qakit build-app` |
 | 로그인 상태가 테스트마다 다름 | 테스트끼리 상태 공유 | 시작을 공통 단계(예: `ensureLoggedIn`)로 통일, 로그아웃 상태가 필요하면 `--reset` |
