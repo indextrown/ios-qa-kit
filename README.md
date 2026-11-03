@@ -39,7 +39,7 @@
 ### 1. 설치
 
 ```bash
-git clone -b main https://github.com/indextrown/ios-qa-kit.git ~/ios-qa-kit   # 비공개 레포: 접근 권한 필요
+git clone -b main https://github.com/indextrown/ios-qa-kit.git ~/ios-qa-kit
 ~/ios-qa-kit/bin/qakit install-skill
 ```
 
