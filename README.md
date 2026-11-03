@@ -1,13 +1,206 @@
 # ios-qa-kit
 
-**앱 코드를 한 줄도 고치지 않고** iOS 앱에 XCUITest를 붙이고, AI가 그 테스트를 쉽게 만들고 고칠 수 있게 해 주는 도구입니다.
+**앱 코드를 한 줄도 고치지 않고** iOS 앱에 XCUITest를 붙이고, AI가 테스트를 만들고 고치게 하는 도구입니다.
 
-- 시뮬레이터에서 앱을 실행할 때 작은 라이브러리를 끼워 넣어, 화면 요소마다 `LoginView.loginButton` 같은 **ID를 자동으로** 붙입니다 (Swift 프로퍼티 이름 기반).
-- 앱 소스를 읽어 그 ID를 **Swift 상수(`QAID`)** 로 만들어 줍니다. 앱에서 이름이 바뀌면 테스트가 컴파일 에러로 바로 알려 줍니다.
-- `qakit` 명령 하나로 빌드·설치·실행·실패 요약까지 합니다. 실패 요약은 텍스트라서 AI가 스크린샷 없이 읽고 고칠 수 있습니다.
-- Claude Code / Codex용 **스킬**이 들어 있어서, "이 시나리오 테스트 만들어줘"라고 말하면 AI가 규칙대로 작성하고 통과할 때까지 고칩니다.
+> **한 줄 요약** — AI가 시나리오를 한 번 테스트로 만들어 두면, 이후에는 `qakit test` 한 줄로 토큰 없이 계속 돌립니다.
+> computer use(스크린샷 보며 조작)처럼 매번 AI 비용이 들지 않습니다.
 
-> computer use(스크린샷 보며 조작)로 QA하면 매번 토큰이 듭니다. 이 도구는 **AI가 한 번 테스트를 만들고, 이후 실행은 토큰 없이** 반복하게 하는 게 목적입니다.
+| 무엇을 | 어떻게 |
+|---|---|
+| 화면 요소 찾기 | 시뮬레이터에서 실행할 때 라이브러리를 끼워 넣어 `LoginView.loginButton` 같은 **ID를 자동으로** 붙입니다 (Swift 프로퍼티 이름 기반) |
+| 앱 변경에 강하게 | 앱 소스에서 ID를 **Swift 상수(`QAID`)** 로 만들어, 이름이 바뀌면 컴파일 에러로 바로 알려 줍니다 |
+| 실행·실패 분석 | `qakit` 명령 하나로 빌드·설치·실행·실패 요약까지. 요약은 텍스트라 AI가 스크린샷 없이 고칩니다 |
+| AI 작업 | Claude Code / Codex **스킬**: "이 시나리오 테스트 만들어줘" → 작성하고 통과할 때까지 수정 |
+
+## 목차
+
+| 시작하기 | 이해하기 | 참고 |
+|---|---|---|
+| [준비물](#준비물)<br>[빠른 시작](#빠른-시작) | [전체 흐름 한눈에](#전체-흐름-한눈에)<br>[자동으로 붙는 ID 규칙](#자동으로-붙는-id-규칙)<br>[UI 요소를 찾는 우선순위](#ui-요소를-찾는-우선순위)<br>[앱이 바뀌었을 때](#앱이-바뀌었을-때) | [명령 요약](#명령-요약) · [원칙](#원칙) · [한계](#한계)<br>[레포 구조](#레포-구조) · [기여하기](#기여하기) · [검증 현황](#검증-현황) |
+
+---
+
+## 준비물
+
+| 항목 | 확인 |
+|---|---|
+| macOS + Xcode (16 이상, 26.6에서 검증) | `xcodebuild -version` |
+| iOS 시뮬레이터 | `xcrun simctl list devices available` |
+| Python 3 (macOS 기본) | `python3 --version` |
+| XcodeGen | `brew install xcodegen` |
+| UIKit 앱 | SwiftUI 화면은 자동 ID가 붙지 않습니다 (아래 [한계](#한계) 참고) |
+
+---
+
+## 빠른 시작
+
+처음 한 번, 약 10분. 아래 순서대로 따라 하면 첫 테스트까지 돌아갑니다.
+
+### 1. 설치
+
+```bash
+git clone -b main https://github.com/indextrown/ios-qa-kit.git ~/ios-qa-kit   # 비공개 레포: 접근 권한 필요
+~/ios-qa-kit/bin/qakit install-skill
+```
+
+`install-skill`은 다음을 **심볼릭 링크**로 설치합니다 (레포를 고치면 바로 반영, 제거는 `--uninstall`).
+
+- `qakit` 명령 → `~/.local/bin/qakit` (PATH에 없으면 안내가 나옵니다)
+- Claude Code 스킬 → `~/.claude/skills/ios-qa-kit` (`/ios-qa-kit`)
+- Codex 스킬 → `~/.agents/skills/ios-qa-kit` (`$ios-qa-kit`)
+
+### 2. 앱에 작업공간 만들기
+
+```bash
+qakit init ~/path/to/MyApp            # .xcodeproj / .xcworkspace 또는 그 폴더
+```
+
+scheme, configuration, bundle ID를 자동으로 찾아 `~/path/to/qa-workspaces/myapp/`을 만듭니다 (`--dir`로 위치 지정 가능). 출력된 값이 맞는지 `qakit.yml`을 열어 확인하세요.
+
+> **처음이라면 연습용 작업공간으로** 해 보세요: `qakit init ~/path/to/MyApp --name myapp-practice`. 작업공간은 git으로 관리하지 않는 일회용 폴더라서, 다 해 본 뒤 지우면 끝입니다 ([8. 정리](#8-정리)). 같은 앱에 작업공간이 여러 개여도 됩니다.
+
+```yaml
+app:
+  project: ~/path/to/MyApp/MyApp.xcodeproj
+  scheme: MyApp-Dev
+  configuration: Debug
+  bundleId: com.example.myapp.dev
+simulator: iPhone 17
+permissions: [location-always]     # 테스트 전에 미리 허용할 권한 (위치·사진 등)
+```
+
+### 3. 점검 → 빌드 → 첫 화면 보기
+
+```bash
+cd ~/path/to/qa-workspaces/myapp
+qakit doctor        # ❌가 있으면 → 안내대로
+qakit build-app     # 앱 빌드 + 시뮬레이터 설치 (처음엔 몇 분)
+qakit dump-ui       # 첫 화면 구조 → results/ui-dump.txt
+```
+
+`results/ui-dump.txt` 맨 위에 **ID 커버리지**(누를 수 있는 요소 중 ID가 붙은 비율)가 나옵니다.
+
+- `dump-ui`는 앱을 새로 띄워 **처음 보이는 화면**을 덤프합니다. 로그인돼 있으면 로그인 화면이 아니라 홈 화면(또는 그 위의 팝업)이 잡힙니다.
+- 특정 요소가 뜰 때까지 기다리려면 `--wait-id <ID>` (30초 안에 안 뜨면 실패), 테스트로 원하는 화면까지 간 뒤 그 화면을 보려면 `qakit dump-ui --attach`.
+- 화면 위에 팝업이 떠 있으면 **아래 화면 요소가 덤프에서 사라집니다.** 커버리지가 이상하게 낮으면 덤프 맨 아래쪽(최상단 요소)을 보세요.
+
+```text
+# interactive: 8, with auto/app ID: 8 (100%)
+Button #LoginView.loginButton "로그인" @16,682 370x56
+TextField #LoginView.emailField.textField @28,496 346x28
+```
+
+### 4. 로그인이 필요한 앱이면 계정 넣기
+
+```bash
+cp secrets.example.txt secrets.txt    # git에 올라가지 않습니다
+```
+
+```text
+EMAIL=qa@example.com
+PASSWORD=...
+```
+
+키 이름은 자유입니다. `secrets.example.txt`에 적은 키는 `qakit doctor`가 빠졌는지 검사합니다.
+
+### 5. 첫 테스트
+
+**AI에게 맡기기 (권장)** — 작업공간 폴더에서 Claude Code / Codex를 열고:
+
+```text
+/ios-qa-kit 로그인 화면에서 테스트 계정으로 로그인하면 홈 화면이 뜨는지 확인하는 테스트 만들어줘
+```
+
+AI는 스킬 규칙대로 ID 상수를 찾고, Page와 테스트를 만들고, `qakit test`가 통과할 때까지 고칩니다.
+
+**직접 쓰기** — `Runner/UITests/Pages/LoginPage.swift`
+
+```swift
+import QAKit
+import XCTest
+
+final class LoginPage: BasePage {
+    override var anchor: XCUIElement { el(QAID.LoginView.loginButton) }      // 이 화면의 대표 요소
+    var email: XCUIElement { app.textFields[QAID.LoginView.emailField.textField] }
+    var password: XCUIElement { app.secureTextFields[QAID.LoginView.passwordField.textField] }
+}
+```
+
+`Runner/UITests/Flows/LoginTests.swift`
+
+```swift
+import QAKit
+import XCTest
+
+final class LoginTests: QATestCase {
+    func test_login() throws {
+        launchApp()
+        let page = LoginPage(app).waitUntilDisplayed()
+        try step("로그인 입력") {
+            page.email.clearAndType(try QASecrets.require("EMAIL"))
+            page.password.clearAndType(try QASecrets.require("PASSWORD"))
+            page.anchor.tap()
+        }
+        XCTAssertTrue(HomePage(app).isDisplayed(timeout: 20), "로그인 후 홈 화면이 떠야 함")
+    }
+}
+```
+
+```bash
+qakit test LoginTests
+```
+
+새 파일은 자동으로 프로젝트에 포함됩니다. 실패하면 원인·마지막 단계·실패 시점 화면 구조가 바로 출력됩니다.
+
+### 6. 실패를 읽고 고쳐 보기
+
+```bash
+qakit test                 # 전체 실행
+qakit summarize            # 마지막 실패 요약 다시 보기
+```
+
+실패 요약은 이렇게 나옵니다. AI도 이것만 읽고 고칩니다.
+
+```text
+❌ LoginTests/test_login()
+   원인: 로그인 후 홈 화면이 뜨지 않음. 화면 안내: 팝업: 이미 다른 기기에서 로그인 중입니다…
+   마지막 단계:
+     - 로그인 입력
+   실패 시점 화면 구조 (ID/라벨 있는 요소):
+     Button, identifier: 'AlertView.confirmButton', label: '로그인'
+   스크린샷: results/test-…-attachments/….png
+```
+
+- 체험: `Pages/`에서 `QAID` 상수 하나를 없는 이름으로 바꿔 보세요. 실행 전에 **컴파일 에러**로 막히고 위치가 출력됩니다.
+- 새 작업공간의 `NOTES.md`는 비어 있습니다. 로그인 후 공지·권한 팝업처럼 앱마다 다른 것은 AI가 실패를 통해 찾아 고치고 `NOTES.md`에 적습니다. 다음 세션의 AI는 그걸 먼저 읽습니다.
+- 로그아웃 상태부터 확인하는 테스트는 `qakit test --reset <테스트>` (앱 재설치 + 키체인 초기화).
+
+### 7. 앱이 바뀌었을 때 체험 (선택)
+
+```bash
+qakit --app ~/path/to/MyApp-other-branch test    # 다른 브랜치 폴더(git worktree)로 테스트 → 자동 재빌드
+qakit test                                       # 원래 앱으로 돌아오면 다시 자동 재빌드
+```
+
+자세한 내용: [앱이 바뀌었을 때](#앱이-바뀌었을-때)
+
+### 8. 정리
+
+```bash
+rm -rf ~/path/to/qa-workspaces/myapp-practice
+```
+
+시뮬레이터에 설치된 앱은 그대로 둬도 됩니다. 다른 작업공간에서 다음 `qakit test`를 하면 그 작업공간 기준으로 다시 맞춥니다.
+
+### 처음 쓸 때 알아 둘 것
+
+| 상황 | 알아 둘 것 |
+|---|---|
+| qakit을 동시에 두 개 실행 | **한 시뮬레이터에서 테스트를 동시에 돌리지 마세요.** 서로 앱을 껐다 켜서 실패합니다. 다른 작업공간·AI 세션이 돌고 있으면 끝난 뒤에 |
+| 새 작업공간의 첫 `build-app` | 작업공간마다 빌드 폴더가 따로라서 처음엔 몇 분 걸립니다. 이후는 바뀐 부분만 |
+| 로그인 테스트가 다른 기기를 로그아웃시킴 | 동시 로그인 기기 수 제한이 있는 앱이면 테스트 로그인이 다른 기기 세션을 끊을 수 있습니다. QA 전용 계정을 쓰고, 이런 동작은 사람이 승인한 뒤 `NOTES.md`에 기록합니다 |
+| 권한 팝업(위치·사진 등)이 테스트를 막음 | `qakit.yml`의 `permissions`에 넣고 `qakit build-app`을 다시 실행 |
+| 내가 쓰는 qakit 버전 | `qakit --version` (버전과 도구 폴더의 브랜치) |
 
 ---
 
@@ -101,7 +294,7 @@ flowchart LR
 
 시나리오가 몇 개 쌓인 작업공간 예:
 
-```
+```text
 qa-workspaces/myapp/
 ├── qakit.yml  secrets.txt  NOTES.md  AGENTS.md  CLAUDE.md
 ├── Runner/UITests/
@@ -115,191 +308,13 @@ qa-workspaces/myapp/
 
 `AGENTS.md`·`CLAUDE.md`는 작업공간을 연 AI가 스킬 규칙을 따르게 하는 안내입니다 (스킬이 설치돼 있지 않은 AI도 읽음).
 
-### 자동 ID가 붙는 원리
+<details>
+<summary>자동 ID가 붙는 원리 (dylib 주입 + Mirror)</summary>
+
 
 시뮬레이터에서 앱을 실행할 때 `DYLD_INSERT_LIBRARIES`로 `AutoID.dylib`를 끼워 넣습니다. 이 라이브러리는 화면이 뜰 때 ViewController·커스텀 뷰의 **저장 프로퍼티 이름**을 읽어(Swift `Mirror`) 그 뷰에 `accessibilityIdentifier`를 붙입니다. 앱 바이너리와 소스는 그대로이고, 시뮬레이터에서 qakit으로 실행할 때만 동작합니다. 규칙은 [자동으로 붙는 ID 규칙](#자동으로-붙는-id-규칙).
 
----
-
-## 준비물
-
-| 항목 | 확인 |
-|---|---|
-| macOS + Xcode (16 이상, 26.6에서 검증) | `xcodebuild -version` |
-| iOS 시뮬레이터 | `xcrun simctl list devices available` |
-| Python 3 (macOS 기본) | `python3 --version` |
-| XcodeGen | `brew install xcodegen` |
-| UIKit 앱 | SwiftUI 화면은 자동 ID가 붙지 않습니다 (아래 [한계](#한계) 참고) |
-
----
-
-## 빠른 시작 (처음 한 번, 약 10분)
-
-### 1. 설치
-
-```bash
-git clone -b main https://github.com/indextrown/ios-qa-kit.git ~/ios-qa-kit   # 비공개 레포: 접근 권한 필요
-~/ios-qa-kit/bin/qakit install-skill
-```
-
-`install-skill`은 다음을 **심볼릭 링크**로 설치합니다 (레포를 고치면 바로 반영, 제거는 `--uninstall`).
-
-- `qakit` 명령 → `~/.local/bin/qakit` (PATH에 없으면 안내가 나옵니다)
-- Claude Code 스킬 → `~/.claude/skills/ios-qa-kit` (`/ios-qa-kit`)
-- Codex 스킬 → `~/.agents/skills/ios-qa-kit` (`$ios-qa-kit`)
-
-### 2. 앱에 작업공간 만들기
-
-```bash
-qakit init ~/path/to/MyApp            # .xcodeproj / .xcworkspace 또는 그 폴더
-```
-
-scheme, configuration, bundle ID를 자동으로 찾아 `~/path/to/qa-workspaces/myapp/`을 만듭니다 (`--dir`로 위치 지정 가능). 출력된 값이 맞는지 `qakit.yml`을 열어 확인하세요.
-
-> **처음이라면 연습용 작업공간으로** 해 보세요: `qakit init ~/path/to/MyApp --name myapp-practice`. 작업공간은 git으로 관리하지 않는 일회용 폴더라서, 다 해 본 뒤 지우면 끝입니다 ([8. 정리](#8-정리)). 같은 앱에 작업공간이 여러 개여도 됩니다.
-
-```yaml
-app:
-  project: ~/path/to/MyApp/MyApp.xcodeproj
-  scheme: MyApp-Dev
-  configuration: Debug
-  bundleId: com.example.myapp.dev
-simulator: iPhone 17
-permissions: [location-always]     # 테스트 전에 미리 허용할 권한 (위치·사진 등)
-```
-
-### 3. 점검 → 빌드 → 첫 화면 보기
-
-```bash
-cd ~/path/to/qa-workspaces/myapp
-qakit doctor        # ❌가 있으면 → 안내대로
-qakit build-app     # 앱 빌드 + 시뮬레이터 설치 (처음엔 몇 분)
-qakit dump-ui       # 첫 화면 구조 → results/ui-dump.txt
-```
-
-`results/ui-dump.txt` 맨 위에 **ID 커버리지**(누를 수 있는 요소 중 ID가 붙은 비율)가 나옵니다.
-
-- `dump-ui`는 앱을 새로 띄워 **처음 보이는 화면**을 덤프합니다. 로그인돼 있으면 로그인 화면이 아니라 홈 화면(또는 그 위의 팝업)이 잡힙니다.
-- 특정 요소가 뜰 때까지 기다리려면 `--wait-id <ID>` (30초 안에 안 뜨면 실패), 테스트로 원하는 화면까지 간 뒤 그 화면을 보려면 `qakit dump-ui --attach`.
-- 화면 위에 팝업이 떠 있으면 **아래 화면 요소가 덤프에서 사라집니다.** 커버리지가 이상하게 낮으면 덤프 맨 아래쪽(최상단 요소)을 보세요.
-
-```
-# interactive: 8, with auto/app ID: 8 (100%)
-Button #LoginView.loginButton "로그인" @16,682 370x56
-TextField #LoginView.emailField.textField @28,496 346x28
-```
-
-### 4. 로그인이 필요한 앱이면 계정 넣기
-
-```bash
-cp secrets.example.txt secrets.txt    # git에 올라가지 않습니다
-```
-
-```
-EMAIL=qa@example.com
-PASSWORD=...
-```
-
-키 이름은 자유입니다. `secrets.example.txt`에 적은 키는 `qakit doctor`가 빠졌는지 검사합니다.
-
-### 5. 첫 테스트
-
-**AI에게 맡기기 (권장)** — 작업공간 폴더에서 Claude Code / Codex를 열고:
-
-```
-/ios-qa-kit 로그인 화면에서 테스트 계정으로 로그인하면 홈 화면이 뜨는지 확인하는 테스트 만들어줘
-```
-
-AI는 스킬 규칙대로 ID 상수를 찾고, Page와 테스트를 만들고, `qakit test`가 통과할 때까지 고칩니다.
-
-**직접 쓰기** — `Runner/UITests/Pages/LoginPage.swift`
-
-```swift
-import QAKit
-import XCTest
-
-final class LoginPage: BasePage {
-    override var anchor: XCUIElement { el(QAID.LoginView.loginButton) }      // 이 화면의 대표 요소
-    var email: XCUIElement { app.textFields[QAID.LoginView.emailField.textField] }
-    var password: XCUIElement { app.secureTextFields[QAID.LoginView.passwordField.textField] }
-}
-```
-
-`Runner/UITests/Flows/LoginTests.swift`
-
-```swift
-import QAKit
-import XCTest
-
-final class LoginTests: QATestCase {
-    func test_login() throws {
-        launchApp()
-        let page = LoginPage(app).waitUntilDisplayed()
-        try step("로그인 입력") {
-            page.email.clearAndType(try QASecrets.require("EMAIL"))
-            page.password.clearAndType(try QASecrets.require("PASSWORD"))
-            page.anchor.tap()
-        }
-        XCTAssertTrue(HomePage(app).isDisplayed(timeout: 20), "로그인 후 홈 화면이 떠야 함")
-    }
-}
-```
-
-```bash
-qakit test LoginTests
-```
-
-새 파일은 자동으로 프로젝트에 포함됩니다. 실패하면 원인·마지막 단계·실패 시점 화면 구조가 바로 출력됩니다.
-
-### 6. 실패를 읽고 고쳐 보기
-
-```bash
-qakit test                 # 전체 실행
-qakit summarize            # 마지막 실패 요약 다시 보기
-```
-
-실패 요약은 이렇게 나옵니다. AI도 이것만 읽고 고칩니다.
-
-```
-❌ LoginTests/test_login()
-   원인: 로그인 후 홈 화면이 뜨지 않음. 화면 안내: 팝업: 이미 다른 기기에서 로그인 중입니다…
-   마지막 단계:
-     - 로그인 입력
-   실패 시점 화면 구조 (ID/라벨 있는 요소):
-     Button, identifier: 'AlertView.confirmButton', label: '로그인'
-   스크린샷: results/test-…-attachments/….png
-```
-
-- 체험: `Pages/`에서 `QAID` 상수 하나를 없는 이름으로 바꿔 보세요. 실행 전에 **컴파일 에러**로 막히고 위치가 출력됩니다.
-- 새 작업공간의 `NOTES.md`는 비어 있습니다. 로그인 후 공지·권한 팝업처럼 앱마다 다른 것은 AI가 실패를 통해 찾아 고치고 `NOTES.md`에 적습니다. 다음 세션의 AI는 그걸 먼저 읽습니다.
-- 로그아웃 상태부터 확인하는 테스트는 `qakit test --reset <테스트>` (앱 재설치 + 키체인 초기화).
-
-### 7. 앱이 바뀌었을 때 체험 (선택)
-
-```bash
-qakit --app ~/path/to/MyApp-other-branch test    # 다른 브랜치 폴더(git worktree)로 테스트 → 자동 재빌드
-qakit test                                       # 원래 앱으로 돌아오면 다시 자동 재빌드
-```
-
-자세한 내용: [앱이 바뀌었을 때](#앱이-바뀌었을-때)
-
-### 8. 정리
-
-```bash
-rm -rf ~/path/to/qa-workspaces/myapp-practice
-```
-
-시뮬레이터에 설치된 앱은 그대로 둬도 됩니다. 다른 작업공간에서 다음 `qakit test`를 하면 그 작업공간 기준으로 다시 맞춥니다.
-
-### 처음 쓸 때 알아 둘 것
-
-| 상황 | 알아 둘 것 |
-|---|---|
-| qakit을 동시에 두 개 실행 | **한 시뮬레이터에서 테스트를 동시에 돌리지 마세요.** 서로 앱을 껐다 켜서 실패합니다. 다른 작업공간·AI 세션이 돌고 있으면 끝난 뒤에 |
-| 새 작업공간의 첫 `build-app` | 작업공간마다 빌드 폴더가 따로라서 처음엔 몇 분 걸립니다. 이후는 바뀐 부분만 |
-| 로그인 테스트가 다른 기기를 로그아웃시킴 | 동시 로그인 기기 수 제한이 있는 앱이면 테스트 로그인이 다른 기기 세션을 끊을 수 있습니다. QA 전용 계정을 쓰고, 이런 동작은 사람이 승인한 뒤 `NOTES.md`에 기록합니다 |
-| 권한 팝업(위치·사진 등)이 테스트를 막음 | `qakit.yml`의 `permissions`에 넣고 `qakit build-app`을 다시 실행 |
-| 내가 쓰는 qakit 버전 | `qakit --version` (버전과 도구 폴더의 브랜치) |
+</details>
 
 ---
 
@@ -362,6 +377,26 @@ ID는 **"누가 이 뷰를 프로퍼티로 갖고 있나"** 로 정해집니다.
 | 선택 표시가 있나 (배지 등) | 그 표시 요소가 **있는지** | 숨긴(`isHidden`) 뷰는 접근성 구조에서 빠지므로 "없음 = 숨김" |
 | 여러 후보 중 먼저 뜬 것 | `QAWait.forAny([...])` | 로그인 화면 vs 홈 화면처럼 분기할 때 |
 
+---
+
+## 앱이 바뀌었을 때
+
+따로 할 일이 거의 없습니다. `qakit test`가 실행 전에 앱 상태(경로·브랜치·커밋·미커밋 변경)를 마지막 빌드와 비교하고, 바뀌었으면 **재빌드 → ID 재생성**을 먼저 합니다.
+
+```text
+🔄 앱 변경 감지 (브랜치 develop → feature/new-login) → 동기화
+   ID 변경: 추가 1, 삭제 1
+     - LoginView.loginButton
+     + LoginView.signInButton
+❌ Runner/UITests/Pages/LoginPage.swift:5: 'QAID.LoginView' has no member 'loginButton'
+```
+
+- 삭제·추가 목록을 보고 Page의 상수만 바꾸면 됩니다 (AI에게 "`qakit sync` 결과대로 테스트 고쳐줘").
+- 다른 브랜치 폴더(git worktree)를 검증: `qakit --app ~/path/MyApp-release test`
+- 자동 동기화를 끄려면 `qakit.yml`에 `sync: warn` (알리기만) 또는 `off`.
+
+---
+
 ## 명령 요약
 
 작업공간 폴더에서 실행합니다.
@@ -381,24 +416,6 @@ ID는 **"누가 이 뷰를 프로퍼티로 갖고 있나"** 로 정해집니다.
 전역 옵션: `--app <다른 앱 폴더>` (다른 브랜치 워크트리 검증), `--secrets <파일>` (다른 계정), `-w <작업공간>`.
 
 상세: [skills/ios-qa-kit/references/cli.md](skills/ios-qa-kit/references/cli.md), QAKit API: [qakit-api.md](skills/ios-qa-kit/references/qakit-api.md)
-
----
-
-## 앱이 바뀌었을 때
-
-따로 할 일이 거의 없습니다. `qakit test`가 실행 전에 앱 상태(경로·브랜치·커밋·미커밋 변경)를 마지막 빌드와 비교하고, 바뀌었으면 **재빌드 → ID 재생성**을 먼저 합니다.
-
-```
-🔄 앱 변경 감지 (브랜치 develop → feature/new-login) → 동기화
-   ID 변경: 추가 1, 삭제 1
-     - LoginView.loginButton
-     + LoginView.signInButton
-❌ Runner/UITests/Pages/LoginPage.swift:5: 'QAID.LoginView' has no member 'loginButton'
-```
-
-- 삭제·추가 목록을 보고 Page의 상수만 바꾸면 됩니다 (AI에게 "`qakit sync` 결과대로 테스트 고쳐줘").
-- 다른 브랜치 폴더(git worktree)를 검증: `qakit --app ~/path/MyApp-release test`
-- 자동 동기화를 끄려면 `qakit.yml`에 `sync: warn` (알리기만) 또는 `off`.
 
 ---
 
@@ -427,7 +444,11 @@ ID는 **"누가 이 뷰를 프로퍼티로 갖고 있나"** 로 정해집니다.
 
 ## 레포 구조
 
-```
+<details>
+<summary>폴더 구성 보기</summary>
+
+
+```text
 ios-qa-kit/
 ├── bin/qakit                 CLI (Python 3 표준 라이브러리만)
 ├── AutoID/                   자동 ID 라이브러리 (시뮬레이터 주입용 dylib)
@@ -441,13 +462,25 @@ ios-qa-kit/
     └── gitflow.md            브랜치 규칙·기여 순서 (Git Flow)
 ```
 
+</details>
+
+---
+
 ## 기여하기
 
 이 저장소는 Git Flow를 씁니다 — 사용자는 `main`을 설치하고, 개발은 `develop`에서 `feature/…` 브랜치 → PR로 합칩니다. CI가 없으니 PR 전에 [머지 전 확인](docs/gitflow.md#머지-전-확인)을 직접 돌립니다. 자세한 순서: [docs/gitflow.md](docs/gitflow.md)
 
+---
+
 ## 검증 현황
+
+<details>
+<summary>검증한 앱과 결과 보기</summary>
+
 
 | 앱 | 결과 |
 |---|---|
 | 앱 A (UIKit + RxSwift + SnapKit, 로그인 있음) | 로그인 화면 ID 100%, 메인 92%. 로그인·재실행·메뉴·검색 테스트 5개 통과. 새 AI 세션이 스킬만 보고 시나리오 2개를 첫 실행에 통과 |
 | 앱 B (UIKit, 리스트·탭바 위주) | 첫 화면 ID 100%. init → build → dump → 생성 ID 검증 → 기본 테스트 통과 |
+
+</details>
