@@ -151,6 +151,11 @@ qakit test --reset FreshLoginTests            # 앱 재설치+키체인 초기�
 
 ## 5. 마무리
 
+- **QA 폴더 `README.md`의 QA 목록은 qakit이 자동으로 만든다** (run·test·check·save 때 갱신, `<!-- qakit:auto -->` 사이). AI는 그 부분을 직접 고치지 않는다. 대신 설명이 잘 나오게 쓴다:
+  - 시나리오: `name:` = 한 줄 제목, 바로 아래 **맨 위 주석 1~2줄** = 무엇을 확인하나 (자세한 메모는 그 아래에)
+  - 공통 단계: 맨 위 주석 1~2줄 = 하는 일
+  - Swift 테스트: 테스트 함수 위 `///` 한 줄
+
 - `qakit save -m "무엇을 만들었나"` — 결과물 목록·해시(qa.lock.json)와 보관소 복사. 시나리오 파일·공통 단계·Swift·NOTES가 모두 포함된다. 이후 복구는 AI 없이 `qakit restore`.
 - 시나리오 파일로 만들었다면 NOTES.md에 그 시나리오가 쓰는 ID·판정 방법도 적는다 (Swift 헬퍼 이름만 적지 않는다).
 

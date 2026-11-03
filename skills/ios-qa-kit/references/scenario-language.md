@@ -107,6 +107,7 @@ steps:
 
 ## 쓰는 기준
 
+- **`name:`과 그 아래 맨 위 주석 1~2줄이 QA 폴더 README의 설명이 된다** (qakit이 자동으로 목록을 만든다). 무엇을 확인하는지 짧게 쓰고, 자세한 메모는 한 줄 띄워 그 아래에 쓴다.
 - 만들기 전에 `scenarios/`, `steps/`, `Runner/UITests/Flows/`에 **같은 시나리오·단계가 이미 있는지** 본다.
 - NOTES.md나 Swift Page에 적힌 헬퍼(예: `openMenu()`)는 Swift용이다. 시나리오 파일에서는 그 Page 소스(`Runner/UITests/Pages`)에 적힌 ID를 그대로 쓴다.
 
