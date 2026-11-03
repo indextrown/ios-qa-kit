@@ -258,10 +258,11 @@ def clean_prop_name(name):
 
 # ─────────────────────────── ID 트리 생성 ───────────────────────────
 
-def build(sources):
+def build(sources, exclude=()):
     classes = {}
     other_types = set()
-    files = list(iter_swift_files(sources))
+    excl = [Path(e).resolve() for e in exclude]
+    files = [f for f in iter_swift_files(sources) if not any(_inside(f, e) for e in excl)]
     for f in files:
         try:
             text = f.read_text(encoding="utf-8", errors="replace")
@@ -330,6 +331,14 @@ def subtree(model, prop, typ, path, stack, depth=0):
         for child, ctyp in model.view_props(typ):
             node["children"].append(subtree(model, child, ctyp, f"{path}.{child}", stack + [typ], depth + 1))
     return node
+
+
+def _inside(path, folder):
+    try:
+        Path(path).resolve().relative_to(folder)
+        return True
+    except ValueError:
+        return False
 
 
 def iter_swift_files(sources):

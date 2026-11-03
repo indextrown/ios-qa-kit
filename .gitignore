@@ -2,3 +2,4 @@
 *.xcresult
 .DS_Store
 __pycache__/
+ScenarioRunner/*.xcodeproj/

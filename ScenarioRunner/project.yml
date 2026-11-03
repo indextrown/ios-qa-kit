@@ -1,0 +1,39 @@
+# qakit 범용 시나리오 실행기 — 앱마다 프로젝트를 만들지 않고 이것 하나로 .qa.yml 시나리오를 실행한다.
+# qakit run이 필요할 때 자동으로 빌드한다 (결과: <kit>/.build/scenario-runner).
+name: QAScenarioRunner
+options:
+  bundleIdPrefix: com.qakit
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  QAKit:
+    path: ..
+targets:
+  QAScenarioHost:
+    type: application
+    platform: iOS
+    sources: [Host]
+    settings:
+      GENERATE_INFOPLIST_FILE: YES
+      INFOPLIST_KEY_UILaunchScreen_Generation: YES
+      CODE_SIGNING_ALLOWED: NO
+  ScenarioTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [Tests]
+    dependencies:
+      - target: QAScenarioHost
+      - package: QAKit
+    settings:
+      GENERATE_INFOPLIST_FILE: YES
+      CODE_SIGNING_ALLOWED: NO
+      TEST_TARGET_NAME: QAScenarioHost
+      SWIFT_VERSION: "5.0"
+schemes:
+  ScenarioTests:
+    build:
+      targets:
+        QAScenarioHost: all
+        ScenarioTests: [test]
+    test:
+      targets: [ScenarioTests]
