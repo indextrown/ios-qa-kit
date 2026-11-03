@@ -634,7 +634,8 @@ def copy_local_files(src_repo, wt, max_bytes=1_000_000):
 
 def add_git_exclude(repo_dir, path):
     """레포의 .gitignore를 건드리지 않고 이 PC에서만 무시 (.git/info/exclude)."""
-    git_dir = git(repo_dir, "rev-parse", "--git-dir")
+    # 워크트리에서는 --git-dir이 .git/worktrees/<이름>을 가리키지만 git은 공통 디렉터리의 info/exclude만 읽는다
+    git_dir = git(repo_dir, "rev-parse", "--git-common-dir")
     if not git_dir:
         return
     exclude = (Path(repo_dir) / git_dir).resolve() / "info" / "exclude"
@@ -822,7 +823,9 @@ def cmd_build_app_ws(ws):
     info(f"앱 빌드 중: {ws.scheme} ({ws.configuration}) — 처음엔 몇 분 걸립니다")
     log_path = ws.results_dir / "build-app.log"
     cmd = ["xcodebuild", "build", *project_flag(ws.project), "-scheme", ws.scheme,
-           "-configuration", ws.configuration, "-sdk", "iphonesimulator",
+           "-configuration", ws.configuration,
+           # -sdk는 주지 않는다: 모든 타깃의 SDK를 덮어써서 Swift 매크로 플러그인(macOS 실행 파일)까지
+           # 시뮬레이터용으로 빌드돼 "produced malformed response"로 실패한다. -destination이 SDK를 정한다.
            "-destination", "generic/platform=iOS Simulator",
            "-derivedDataPath", str(ws.app_build_dir)]
     state = app_state(ws)

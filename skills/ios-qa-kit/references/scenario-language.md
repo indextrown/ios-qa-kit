@@ -31,6 +31,7 @@ steps:
 | repeat | `repeat: { until: <조건>, max: 5, wait: 3, watch?: 설정키, steps: [단계] }` | **처음 실행 전에 조건을 먼저 본다** — 이미 맞으면 한 번도 실행하지 않는다("반복 0번"). 맞을 때까지 최대 max번 반복, 끝까지 안 맞으면 실패 (`required: false`면 통과). `wait`: 매 반복 뒤 조건을 기다리는 최대 초. **`watch`**: 매 반복 뒤 그 앱 설정 값이 바뀌고 1초간 멈출 때까지 최대 `wait`초 기다렸다 판정 — 관성 확대·늦은 저장으로 목표를 넘치는 것을 막는다. 값이 안 바뀌면(한계 도달 등) `wait`초를 다 쓴다 |
 | read-pref | `read-pref: { key: 키, as: 변수 }` | 앱 설정(UserDefaults) 값을 변수로 (기록·비교용) |
 | hide-keyboard | `hide-keyboard: true` | 키보드 내리기 |
+| dump | `dump: 이름`, `settle?: 초` | 지금 화면 구조를 `results/dumps/이름.txt`에 저장. 앱을 다시 켜면 못 가는 화면을 볼 때 (`dump-ui`는 첫 화면만) |
 | note / relaunch / fail | `note: 글자` / `relaunch: true` / `fail: 글자` | |
 
 ## 대상

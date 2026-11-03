@@ -185,6 +185,12 @@ public final class QAScenarioRunner {
         } else if let message = step["note"] {
             testCase.note(text(message))
 
+        } else if let name = step["dump"] {
+            // 지금 화면 구조를 results/dumps/<이름>.txt에 저장. 앱을 다시 켜면 못 가는 화면(세션 중간 화면)을 볼 때 쓴다.
+            let output = try QADump.run(app: app, settle: number(step["settle"]) ?? 1, name: text(name))
+            let header = output.split(separator: "\n").prefix(4).joined(separator: "\n")
+            testCase.note("dump \(text(name)):\n\(header)")
+
         } else if let spec = step["repeat"] as? [String: Any] {
             let max = Int(number(spec["max"]) ?? 5)
             let wait = number(spec["wait"]) ?? 3
