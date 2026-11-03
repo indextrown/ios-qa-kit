@@ -1281,6 +1281,14 @@ def ensure_scenario_runner(udid):
     return list((SCENARIO_BUILD / "Build" / "Products").glob("*.xctestrun"))[0]
 
 
+def app_prefs_path(udid, bundle_id):
+    """시뮬레이터 안 앱의 UserDefaults 파일 (시나리오의 pref 조건·read-pref용). 앱을 재설치하면 바뀌므로 실행 직전에 구한다."""
+    r = run(["xcrun", "simctl", "get_app_container", udid, bundle_id, "data"], check=False)
+    if r.returncode != 0:
+        return None
+    return str(Path(r.stdout.strip()) / "Library" / "Preferences" / f"{bundle_id}.plist")
+
+
 def run_scenario_runner(ws, method, extra_env, label, quiet=False, history_name=None):
     ws.results_dir.mkdir(exist_ok=True)
     ensure_autoid(ws)
@@ -1288,6 +1296,10 @@ def run_scenario_runner(ws, method, extra_env, label, quiet=False, history_name=
     if not app_installed(udid, ws.bundle_id):
         fail(f"시뮬레이터에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app")
     xctestrun = ensure_scenario_runner(udid)
+    extra_env = dict(extra_env or {})
+    prefs = app_prefs_path(udid, ws.bundle_id)
+    if prefs:
+        extra_env["APP_PREFS"] = prefs
     ts = timestamp()
     xcresult = ws.results_dir / f"{label}-{ts}.xcresult"
     cmd = ["xcodebuild", "test-without-building", "-xctestrun", str(xctestrun),

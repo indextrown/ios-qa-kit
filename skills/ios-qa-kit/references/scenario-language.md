@@ -28,6 +28,8 @@ steps:
 | pinch | `pinch: { on: <대상>, scale: 2.5 }` | 1보다 크면 확대 |
 | snapshot | `snapshot: { of: <대상>, as: 이름 }` | 스크린샷 저장·첨부 (changed 조건용) |
 | expect | `expect: <조건>`, `timeout:`, `hold:`, `message:` | 판정. hold는 그 시간 동안 유지돼야 통과 |
+| repeat | `repeat: { until: <조건>, max: 5, wait: 3, steps: [단계] }` | 조건이 맞을 때까지 단계 반복 (wait: 매 반복 뒤 조건을 기다리는 초). 끝까지 안 맞으면 실패 (`required: false`면 통과) |
+| read-pref | `read-pref: { key: 키, as: 변수 }` | 앱 설정(UserDefaults) 값을 변수로 (기록·비교용) |
 | hide-keyboard | `hide-keyboard: true` | 키보드 내리기 |
 | note / relaunch / fail | `note: 글자` / `relaunch: true` / `fail: 글자` | |
 
@@ -49,9 +51,27 @@ steps:
 | `visible` | 있고, 프레임이 화면 안에 있다 |
 | `hidden` | 없거나, 화면 밖에 있다 → **하단 시트·드로어를 닫았는지**는 이걸로 판정 (닫혀도 화면 밖에 남아 exists는 참) |
 | `selected` / `hittable` | 있고 선택됨 / 있고 누를 수 있음 |
+| `pref: { key, gte\|lte\|gt\|lt\|eq\|ne\|exists }` | 앱 설정(UserDefaults) 값 비교. **화면에 안 나오는 앱 상태**(지도 줌, 모드 등)를 판정할 때. 디스크 반영이 늦을 수 있어 `timeout:`/`wait:`와 함께 쓴다 |
 
 `right-of: [A, B]` (A가 B 가운데보다 오른쪽 — 커스텀 토글 판정 등) · `contains: { target, text }` · `equals: [a, b]`
 `changed: { of: <대상>, since: 스냅샷 }` · `not:` · `all: [..]` · `any: [..]`
+
+## 앱 설정값(pref)으로 판정하기
+
+화면에 노출되지 않는 상태도 앱이 UserDefaults에 저장한다면 읽을 수 있다 (시뮬레이터 안 앱 데이터의 `Library/Preferences/<bundleId>.plist`, qakit이 경로를 넘겨 줌).
+어떤 키가 있는지는 앱 소스(UserDefaults 키)나 `plutil -p <경로>`로 확인한다.
+
+```yaml
+# 예: 지도를 줌 20 근처까지 확대 (핀치 한 번에 대략 log2(scale) × 0.9 단계)
+- repeat:
+    until: { pref: { key: zoom, gte: 17 } }
+    max: 6
+    steps: [ pinch: { on: HomeView.mapView, scale: 10 } ]
+- repeat:
+    until: { pref: { key: zoom, gte: 19.5 } }
+    max: 6
+    steps: [ pinch: { on: HomeView.mapView, scale: 2 } ]
+```
 
 ## 기본 대기 시간
 

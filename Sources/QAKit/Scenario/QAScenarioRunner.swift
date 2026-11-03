@@ -19,6 +19,8 @@
 //    snapshot: { of: <대상>, as: 이름 }
 //    expect: <조건>, timeout?: 초, hold?: 초, message?: 글자
 //    hide-keyboard: true (키보드가 버튼을 가릴 때)
+//    repeat: { until: <조건>, max: 5, wait: 3, steps: [단계] }   조건이 맞을 때까지 반복
+//    read-pref: { key: 키, as: 변수 }      앱 설정(UserDefaults) 값 읽기
 //    note: 글자 / relaunch: true / group: 이름 + steps (use: 가 펼쳐진 것) / fail: 글자
 //
 //  대상(target):
@@ -28,7 +30,7 @@
 //
 //  조건: exists / missing / visible / hidden / selected / hittable: <대상>
 //        right-of: [A, B]  contains: { target, text }  equals: [a, b]
-//        changed: { of: <대상>, since: 스냅샷 }  not / all / any
+//        changed: { of: <대상>, since: 스냅샷 }  pref: { key, gte|lte|gt|lt|eq|ne|exists }  not / all / any
 //
 //  글자 안의 {변수}, {secret:KEY}는 실행 시 바뀐다. 단계 제목에는 원문({secret:…})만 남는다.
 //
@@ -179,6 +181,32 @@ public final class QAScenarioRunner {
         } else if let message = step["note"] {
             testCase.note(text(message))
 
+        } else if let spec = step["repeat"] as? [String: Any] {
+            let max = Int(number(spec["max"]) ?? 5)
+            let wait = number(spec["wait"]) ?? 3
+            guard let until = spec["until"] else { throw fail("repeat에 until: 조건이 필요함") }
+            var count = 0
+            while try !evaluate(until, timeout: 0) && count < max {
+                count += 1
+                try XCTContext.runActivity(named: "반복 \(count)/\(max)") { _ in
+                    try runSteps(spec["steps"] as? [Any] ?? [])
+                }
+                if try evaluate(until, timeout: wait) { break }
+            }
+            let done = try evaluate(until, timeout: 0)
+            testCase.note("반복 \(count)번 → 조건 \(done ? "충족" : "미충족"): \(compact(until))")
+            if !done && spec["required"] as? Bool != false {
+                throw fail("\(max)번 반복해도 조건을 만족하지 못함: \(compact(until))")
+            }
+
+        } else if let spec = step["read-pref"] as? [String: Any] {
+            guard let key = spec["key"] as? String, let name = spec["as"] as? String else {
+                throw fail("read-pref: { key, as } 형식")
+            }
+            guard let value = prefValue(key) else { throw fail("앱 설정에 '\(key)' 값이 없음 (\(prefsPathNote))") }
+            vars[name] = formatPref(value)
+            testCase.note("앱 설정 \(key) = \(vars[name] ?? "")")
+
         } else if step["hide-keyboard"] != nil {
             let keyboard = app.keyboards.firstMatch
             if keyboard.exists {
@@ -239,6 +267,22 @@ public final class QAScenarioRunner {
             guard let spec = value as? [String: Any], let since = spec["since"] as? String,
                   let before = snapshots[since] else { throw fail("changed: { of, since: 스냅샷 } — 스냅샷이 없음") }
             return resolve(spec["of"] as Any).screenshot().pngRepresentation != before
+        case "pref":
+            guard let spec = value as? [String: Any], let key = spec["key"] as? String else {
+                throw fail("pref: { key, gte|lte|gt|lt|eq|ne|exists } 형식")
+            }
+            let actual = prefValue(key)
+            if let want = spec["exists"] as? Bool { return (actual != nil) == want }
+            guard let actual else { return false }
+            if let n = (actual as? NSNumber)?.doubleValue {
+                if let v = number(spec["gte"]) { return n >= v }
+                if let v = number(spec["lte"]) { return n <= v }
+                if let v = number(spec["gt"]) { return n > v }
+                if let v = number(spec["lt"]) { return n < v }
+            }
+            if let v = spec["eq"] { return formatPref(actual) == text(v) || ((actual as? NSNumber)?.doubleValue == number(v)) }
+            if let v = spec["ne"] { return formatPref(actual) != text(v) }
+            throw fail("pref 비교 연산이 없음 (gte/lte/gt/lt/eq/ne/exists)")
         case "not": return try !check(value)
         case "all": return try (value as? [Any] ?? []).allSatisfy { try check($0) }
         case "any": return try (value as? [Any] ?? []).contains { try check($0) }
@@ -329,6 +373,24 @@ public final class QAScenarioRunner {
         }
         let r = m.numberOfRanges > 1 ? m.range(at: 1) : m.range
         return (source as NSString).substring(with: r)
+    }
+
+    /// 앱 설정(UserDefaults) 파일. qakit이 시뮬레이터 앱 데이터 경로를 넘겨 준다 (QA_ARG_APP_PREFS).
+    /// UserDefaults는 디스크에 늦게 쓰일 수 있으므로 조건은 timeout으로 기다리며 읽는다.
+    private var prefsPathNote: String { QAConfig.value("APP_PREFS") ?? "QA_ARG_APP_PREFS 없음" }
+
+    private func prefValue(_ key: String) -> Any? {
+        guard let path = QAConfig.value("APP_PREFS"),
+              let dict = NSDictionary(contentsOfFile: path) as? [String: Any] else { return nil }
+        return dict[key]
+    }
+
+    private func formatPref(_ value: Any) -> String {
+        if let n = value as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID() {
+            let d = n.doubleValue
+            return d == d.rounded() ? String(Int(d)) : String(format: "%.2f", d)
+        }
+        return "\(value)"
     }
 
     private func mergeVars(_ raw: Any?) {
