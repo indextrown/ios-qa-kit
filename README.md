@@ -66,6 +66,8 @@ qakit init ~/path/to/MyApp            # .xcodeproj / .xcworkspace 또는 그 폴
 
 scheme, configuration, bundle ID를 자동으로 찾아 `~/path/to/qa-workspaces/myapp/`을 만듭니다 (`--dir`로 위치 지정 가능). 출력된 값이 맞는지 `qakit.yml`을 열어 확인하세요.
 
+> **처음이라면 연습용 작업공간으로** 해 보세요: `qakit init ~/path/to/MyApp --name myapp-practice`. 작업공간은 git으로 관리하지 않는 일회용 폴더라서, 다 해 본 뒤 지우면 끝입니다 ([8. 정리](#8-정리)). 같은 앱에 작업공간이 여러 개여도 됩니다.
+
 ```yaml
 app:
   project: ~/path/to/MyApp/MyApp.xcodeproj
@@ -86,6 +88,10 @@ qakit dump-ui       # 첫 화면 구조 → results/ui-dump.txt
 ```
 
 `results/ui-dump.txt` 맨 위에 **ID 커버리지**(누를 수 있는 요소 중 ID가 붙은 비율)가 나옵니다.
+
+- `dump-ui`는 앱을 새로 띄워 **처음 보이는 화면**을 덤프합니다. 로그인돼 있으면 로그인 화면이 아니라 홈 화면(또는 그 위의 팝업)이 잡힙니다.
+- 특정 요소가 뜰 때까지 기다리려면 `--wait-id <ID>` (30초 안에 안 뜨면 실패), 테스트로 원하는 화면까지 간 뒤 그 화면을 보려면 `qakit dump-ui --attach`.
+- 화면 위에 팝업이 떠 있으면 **아래 화면 요소가 덤프에서 사라집니다.** 커버리지가 이상하게 낮으면 덤프 맨 아래쪽(최상단 요소)을 보세요.
 
 ```
 # interactive: 8, with auto/app ID: 8 (100%)
@@ -154,6 +160,56 @@ qakit test LoginTests
 ```
 
 새 파일은 자동으로 프로젝트에 포함됩니다. 실패하면 원인·마지막 단계·실패 시점 화면 구조가 바로 출력됩니다.
+
+### 6. 실패를 읽고 고쳐 보기
+
+```bash
+qakit test                 # 전체 실행
+qakit summarize            # 마지막 실패 요약 다시 보기
+```
+
+실패 요약은 이렇게 나옵니다. AI도 이것만 읽고 고칩니다.
+
+```
+❌ LoginTests/test_login()
+   원인: 로그인 후 홈 화면이 뜨지 않음. 화면 안내: 팝업: 이미 다른 기기에서 로그인 중입니다…
+   마지막 단계:
+     - 로그인 입력
+   실패 시점 화면 구조 (ID/라벨 있는 요소):
+     Button, identifier: 'AlertView.confirmButton', label: '로그인'
+   스크린샷: results/test-…-attachments/….png
+```
+
+- 체험: `Pages/`에서 `QAID` 상수 하나를 없는 이름으로 바꿔 보세요. 실행 전에 **컴파일 에러**로 막히고 위치가 출력됩니다.
+- 새 작업공간의 `NOTES.md`는 비어 있습니다. 로그인 후 공지·권한 팝업처럼 앱마다 다른 것은 AI가 실패를 통해 찾아 고치고 `NOTES.md`에 적습니다. 다음 세션의 AI는 그걸 먼저 읽습니다.
+- 로그아웃 상태부터 확인하는 테스트는 `qakit test --reset <테스트>` (앱 재설치 + 키체인 초기화).
+
+### 7. 앱이 바뀌었을 때 체험 (선택)
+
+```bash
+qakit --app ~/path/to/MyApp-other-branch test    # 다른 브랜치 폴더(git worktree)로 테스트 → 자동 재빌드
+qakit test                                       # 원래 앱으로 돌아오면 다시 자동 재빌드
+```
+
+자세한 내용: [앱이 바뀌었을 때](#앱이-바뀌었을-때)
+
+### 8. 정리
+
+```bash
+rm -rf ~/path/to/qa-workspaces/myapp-practice
+```
+
+시뮬레이터에 설치된 앱은 그대로 둬도 됩니다. 다른 작업공간에서 다음 `qakit test`를 하면 그 작업공간 기준으로 다시 맞춥니다.
+
+### 처음 쓸 때 알아 둘 것
+
+| 상황 | 알아 둘 것 |
+|---|---|
+| qakit을 동시에 두 개 실행 | **한 시뮬레이터에서 테스트를 동시에 돌리지 마세요.** 서로 앱을 껐다 켜서 실패합니다. 다른 작업공간·AI 세션이 돌고 있으면 끝난 뒤에 |
+| 새 작업공간의 첫 `build-app` | 작업공간마다 빌드 폴더가 따로라서 처음엔 몇 분 걸립니다. 이후는 바뀐 부분만 |
+| 로그인 테스트가 다른 기기를 로그아웃시킴 | 동시 로그인 기기 수 제한이 있는 앱이면 테스트 로그인이 다른 기기 세션을 끊을 수 있습니다. QA 전용 계정을 쓰고, 이런 동작은 사람이 승인한 뒤 `NOTES.md`에 기록합니다 |
+| 권한 팝업(위치·사진 등)이 테스트를 막음 | `qakit.yml`의 `permissions`에 넣고 `qakit build-app`을 다시 실행 |
+| 내가 쓰는 qakit 버전 | `qakit --version` (버전과 도구 폴더의 브랜치) |
 
 ---
 

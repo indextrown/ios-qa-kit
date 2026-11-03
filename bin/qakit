@@ -1079,6 +1079,10 @@ def cmd_install_skill(args):
 
 def main():
     parser = argparse.ArgumentParser(prog="qakit", description="AI용 XCUITest 도구")
+    version = (KIT_DIR / "VERSION").read_text().strip() if (KIT_DIR / "VERSION").exists() else "dev"
+    branch = run(["git", "-C", str(KIT_DIR), "rev-parse", "--abbrev-ref", "HEAD"], check=False).stdout.strip()
+    parser.add_argument("--version", action="version",
+                        version=f"qakit {version}" + (f" ({branch})" if branch and branch != "HEAD" else ""))
     parser.add_argument("-w", "--workspace", help="작업공간 경로 (기본: 현재 폴더에서 qakit.yml 탐색)")
     parser.add_argument("--app", help="앱 경로 일시 지정 (다른 워크트리/브랜치 폴더 검증용)")
     parser.add_argument("--secrets", help="비밀값 파일 직접 지정 (기본: qakit.yml의 secrets). 계정을 바꿔 돌릴 때")
