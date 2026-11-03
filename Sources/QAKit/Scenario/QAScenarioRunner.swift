@@ -149,8 +149,12 @@ public final class QAScenarioRunner {
         } else if let spec = step["pinch"] as? [String: Any] {
             let element = resolve(spec["on"] as Any)
             try waitFor(element, timeout: 5, what: spec["on"] as Any)
-            element.pinch(withScale: CGFloat(number(spec["scale"]) ?? 2), velocity: CGFloat(number(spec["velocity"]) ?? 2))
-            RunLoop.current.run(until: Date().addingTimeInterval(number(spec["settle"]) ?? 1.5))
+            let scale = CGFloat(number(spec["scale"]) ?? 2)
+            // XCUITest 규칙: 확대(scale > 1)는 양수 속도, 축소(scale < 1)는 음수 속도.
+            // velocity는 "초당 배율"이라 기본값 2로 scale 10을 하면 동작에만 5초 넘게 걸린다 → 기본은 1초 안팎이 되게
+            let speed = abs(CGFloat(number(spec["velocity"]) ?? Double(max(4, scale >= 1 ? scale : 1 / scale))))
+            element.pinch(withScale: scale, velocity: scale < 1 ? -speed : speed)
+            RunLoop.current.run(until: Date().addingTimeInterval(number(spec["settle"]) ?? 0.5))
 
         } else if let spec = step["snapshot"] as? [String: Any] {
             let element = resolve(spec["of"] as Any)
@@ -350,6 +354,7 @@ public final class QAScenarioRunner {
     // MARK: - Helpers
 
     private func waitFor(_ element: XCUIElement, timeout: TimeInterval, what: Any) throws {
+        if element.exists { return }   // 이미 있으면 기다리지 않는다 (waitForExistence는 최소 1초 쉰다)
         guard element.waitForExistence(timeout: timeout) else {
             throw fail("\(Int(timeout))초 안에 나타나지 않음: \(compact(what))")
         }
