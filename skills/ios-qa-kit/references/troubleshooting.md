@@ -18,3 +18,8 @@
 | 로그인 상태가 테스트마다 다름 | 테스트끼리 상태 공유 | 시작을 공통 단계(예: `ensureLoggedIn`)로 통일, 로그아웃 상태가 필요하면 `--reset` |
 | 테스트가 매우 느림 | 앱 애니메이션·긴 timeout | timeout을 필요한 만큼만, `QAWait.forAny`로 분기 |
 | 빌드 중 앱 레포 파일이 바뀌었다는 경고 | 패키지 해석이 앱 레포를 수정 | 사용자에게 알리고 `git -C <앱> checkout -- <파일>` 여부를 묻는다 |
+| SwiftUI 화면인데 덤프에 ID가 없음 | 앱 폴더가 QA 워크트리가 아니거나 `swiftui: off`, 또는 `qakit swiftui-ids --list`에 그 뷰가 없음 (`ids.sources` 밖, 레포 밖 패키지, 동적 라벨은 `Button.N`) | `qakit doctor` → 워크트리 확인. `qakit swiftui-ids --list`로 뷰 이름 확인 |
+| "이전 SwiftUI ID 삽입이 복원되지 않았습니다" | 빌드 중 강제 종료 | `qakit swiftui-ids --restore` (manifest의 원본으로 되돌림) |
+| "워크트리의 Swift 소스에 커밋되지 않은 변경" | 워크트리에서 소스를 직접 고침 | 워크트리는 개발 브랜치와 같아야 한다. `git -C <워크트리> checkout -- .` 또는 커밋 |
+| 같은 SwiftUI ID가 여러 요소에 | 동적 라벨 버튼(`X.Button.0`)이 반복 컴포넌트 안에, 또는 행(`X.row`) | 라벨·index로 고른다 (`{ id, label }`, `.element(boundBy:)`) |
+| 빌드 에러가 `.accessibilityIdentifier(` 줄을 가리킴 | 삽입 도구가 수식어를 붙일 수 없는 자리에 붙임 | `qakit swiftui-ids --insert` 뒤 `git diff`로 위치 확인 → 도구 버그로 보고. 임시로 `swiftui: off` |

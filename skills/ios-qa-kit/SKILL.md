@@ -37,8 +37,10 @@ qakit doctor           # ❌가 있으면 → 안내대로 해결
 1. **ID 상수 검색** — `Runner/UITests/Generated/QAIDs.swift`는 크다. 통째로 읽지 말고 화면 enum만 찾는다.
    ```bash
    grep -n "enum .*ViewController " Runner/UITests/Generated/QAIDs.swift      # 화면(VC) 목록
+   grep -n "// SwiftUI" Runner/UITests/Generated/QAIDs.swift | grep -v "        "   # SwiftUI 화면 목록
    grep -n "enum SearchView " -A40 Runner/UITests/Generated/QAIDs.swift       # 한 화면의 ID
    ```
+   SwiftUI 화면의 ID는 `뷰타입.Button.라벨`, `뷰타입.바인딩변수`, `뷰타입.row`(행) 꼴이다. 순서 번호 ID(`X.Button.0`)의 상수는 `QAID.X.Button._0`. 동적 라벨 버튼이 여러 개면 같은 ID가 반복되므로 라벨·index로 고른다. 앱 소스에서 `View` struct 이름으로 찾는다.
    VC 이름을 모르면 앱 소스에서 키워드로 찾는다: `grep -rl "검색" <앱>/ --include='*.swift' | head` (zsh에서는 글롭을 따옴표로 감싼다)
 2. **앱 소스 읽기** — 화면 전환 구조를 확인한다. ID 상수만으로는 알 수 없다.
    - 버튼 → 액션: VC의 `bind`/`rx.tap`/`addTarget` → ViewModel → Coordinator/Router 순으로 따라간다.

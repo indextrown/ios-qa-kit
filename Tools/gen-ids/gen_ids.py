@@ -403,7 +403,31 @@ def render_swift(trees, header_note):
 
 
 def ident(name):
+    if name[:1].isdigit():
+        return "_" + name       # SwiftUI 순서 번호 ID (LoginView.Button.0) → 상수 이름은 QAID.LoginView.Button._0
     return f"`{name}`" if name in SWIFT_KEYWORDS else name
+
+
+def merge_ids(trees, ids, kind="swiftui"):
+    """점으로 나뉜 ID 문자열들을 트리에 합친다 (SwiftUI ID용). 같은 루트 이름이 있으면 그 밑에 넣는다."""
+    roots = {t["name"]: t for t in trees}
+    for full in sorted(set(ids)):
+        parts = full.split(".")
+        node = roots.get(parts[0])
+        if node is None:
+            node = {"name": parts[0], "id": None, "kind": kind, "children": []}
+            roots[parts[0]] = node
+            trees.append(node)
+        path = parts[0]
+        for i, seg in enumerate(parts[1:], 1):
+            path += "." + seg
+            child = next((c for c in node["children"] if c["name"] == seg), None)
+            if child is None:
+                child = {"name": seg, "id": None, "kind": kind, "children": []}
+                node["children"].append(child)
+            if i == len(parts) - 1:
+                child["id"] = full
+            node = child
 
 
 def render_node(node, level, root=False):
@@ -412,7 +436,7 @@ def render_node(node, level, root=False):
     if not node["children"] and not root:
         out.append(f'{pad}static let {ident(node["name"])} = "{node["id"]}"')
         return out
-    comment = {"vc": "  // ViewController", "cell": "  // 셀", "view": ""}.get(node.get("kind"), "")
+    comment = {"vc": "  // ViewController", "cell": "  // 셀", "view": "", "swiftui": "  // SwiftUI"}.get(node.get("kind"), "")
     out.append(f'{pad}enum {ident(node["name"])} {{{comment}')
     if node.get("id"):
         out.append(f'{pad}    static let id = "{node["id"]}"')
@@ -451,12 +475,12 @@ def verify(generated, model, dump_files, types=None):
     matched, missing, external = [], [], []
     for rid in sorted(runtime):
         root = rid.split(".")[0]
-        if RULE_ID.search(rid):
+        if rid in generated:
+            matched.append(rid)   # SwiftUI ID는 struct라 model(class 목록)에 없으므로 먼저 본다
+        elif RULE_ID.search(rid):
             external.append(rid)  # 실행 중 위치로 정해지는 규칙 ID (Tab., .cell, .nav.right.0 …)
         elif not model.is_app(root):
             external.append(rid)  # 외부 SDK 클래스 또는 에셋 이름
-        elif rid in generated:
-            matched.append(rid)
         elif types and inherits_external(model, types.get(rid.rsplit(".", 1)[0])):
             external.append(rid)  # 외부 SDK 부모 클래스의 프로퍼티 (소스 없음)
         elif types and declared_as_uikit(model, types.get(rid.rsplit(".", 1)[0])):

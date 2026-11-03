@@ -54,7 +54,7 @@ struct Candidate {
     let insertOffset: Int              // UTF-8 바이트 오프셋. 이 자리에 수식어를 끼워 넣는다
     let bindingPath: String?           // "$email" → "email", "$vm.email" → "vm.email"
     let label: String?                 // 리터럴 라벨 (정리 전)
-    let argLiteral: String?            // 커스텀 뷰 첫 인자 리터럴 (.kakao, "x")
+    let argLiteral: String?            // 커스텀 뷰 첫 인자 리터럴 (.close, "x")
     let hasOwnID: Bool                 // 앱이 이미 .accessibilityIdentifier / .accessibilityHidden을 붙임
 }
 
@@ -63,7 +63,7 @@ struct Assigned: Codable {
     let id: String
     let file: String
     let line: Int
-    let kind: String                   // Button, TextField, custom:SocialLoginButton, row
+    let kind: String                   // Button, TextField, custom:IconButton, row
     let view: String
     let modifier: String               // 삽입할 수식어 텍스트
     let offset: Int
