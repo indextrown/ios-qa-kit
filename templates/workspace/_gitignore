@@ -1,6 +1,12 @@
+# qakit이 다시 만드는 것 (커밋하지 않음)
 .build/
 results/
-secrets.txt
-Runner/*.xcodeproj/
-.DS_Store
 .qakit/
+Runner/*.xcodeproj/
+Runner/project.yml
+Runner/Host/
+Runner/UITests/QAKit/
+Runner/UITests/Generated/
+# 비밀값
+secrets.txt
+.DS_Store

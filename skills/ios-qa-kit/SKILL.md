@@ -9,6 +9,7 @@ description: iOS 앱의 QA 시나리오를 XCUITest로 만들고, 돌리고, 고
 
 - CLI: `qakit` (PATH에 없으면 `<skill-dir>/../../bin/qakit`). 모든 명령은 작업공간 폴더(`qakit.yml`이 있는 곳)에서 실행한다.
 - API·명령 상세: [references/qakit-api.md](references/qakit-api.md), [references/cli.md](references/cli.md)
+- **시나리오 언어(.qa.yml)**: [references/scenario-language.md](references/scenario-language.md)
 - 문제 해결: [references/troubleshooting.md](references/troubleshooting.md)
 
 ## 절대 규칙
@@ -50,6 +51,11 @@ qakit doctor           # ❌가 있으면 → 안내대로 해결
 4. 스크린샷은 덤프로 판단이 안 될 때만 본다 (실패 요약에 경로가 있다).
 
 ## 3. 작성
+
+**먼저 시나리오 파일(`scenarios/<이름>.qa.yml`)로 쓸 수 있는지 본다** — 컴파일·프로젝트 없이 실행되고, 저장·복구가 파일만으로 된다.
+여러 시나리오가 쓰는 단계는 `steps/<이름>.qa.yml`로 빼고 `- use: <이름>`으로 부른다 (기존 steps를 먼저 확인).
+`qakit check <이름>` → `qakit run <이름>` 순서로 돌린다. 문법: [references/scenario-language.md](references/scenario-language.md).
+조건·계산이 언어로 표현이 안 될 때만 아래 Swift 방식으로 쓴다.
 
 파일 위치와 역할:
 
@@ -142,6 +148,8 @@ qakit test --reset FreshLoginTests            # 앱 재설치+키체인 초기�
 - 테스트가 지나치게 느리면(시나리오당 60초 이상) 기다림 시간·불필요한 재실행을 줄인다.
 
 ## 5. 마무리
+
+- `qakit save -m "무엇을 만들었나"` — 결과물 목록·해시(qa.lock.json)와 보관소 복사. 이후 복구는 AI 없이 `qakit restore`.
 
 - 새로 알게 된 것을 `NOTES.md`에 적는다: 진입 흐름, 상태 판별 anchor, 새 팝업과 처리법, ID 없는 영역, 사용자 결정.
 - 사용자에게 보고: 만든/고친 테스트, 통과 여부(`qakit test` 출력 근거), 실행 횟수, 남은 문제.

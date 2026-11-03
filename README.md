@@ -16,7 +16,7 @@
 
 | 시작하기 | 이해하기 | 참고 |
 |---|---|---|
-| [준비물](#준비물)<br>[빠른 시작](#빠른-시작) | [전체 흐름 한눈에](#전체-흐름-한눈에)<br>[자동으로 붙는 ID 규칙](#자동으로-붙는-id-규칙)<br>[UI 요소를 찾는 우선순위](#ui-요소를-찾는-우선순위)<br>[앱이 바뀌었을 때](#앱이-바뀌었을-때) | [명령 요약](#명령-요약) · [원칙](#원칙) · [한계](#한계)<br>[레포 구조](#레포-구조) · [기여하기](#기여하기) · [검증 현황](#검증-현황) |
+| [준비물](#준비물)<br>[빠른 시작](#빠른-시작)<br>[시나리오 파일로 QA](#시나리오-파일로-qa-swift-없이)<br>[저장과 복구](#저장과-복구-ai-없이) | [전체 흐름 한눈에](#전체-흐름-한눈에)<br>[자동으로 붙는 ID 규칙](#자동으로-붙는-id-규칙)<br>[UI 요소를 찾는 우선순위](#ui-요소를-찾는-우선순위)<br>[앱이 바뀌었을 때](#앱이-바뀌었을-때) | [명령 요약](#명령-요약) · [원칙](#원칙) · [한계](#한계)<br>[레포 구조](#레포-구조) · [기여하기](#기여하기) · [검증 현황](#검증-현황) |
 
 ---
 
@@ -49,25 +49,27 @@ git clone -b main https://github.com/indextrown/ios-qa-kit.git ~/ios-qa-kit   # 
 - Claude Code 스킬 → `~/.claude/skills/ios-qa-kit` (`/ios-qa-kit`)
 - Codex 스킬 → `~/.agents/skills/ios-qa-kit` (`$ios-qa-kit`)
 
-### 2. 앱에 작업공간 만들기
+### 2. 앱에 QA 워크트리 만들기 (권장)
 
 ```bash
-qakit init ~/path/to/MyApp            # .xcodeproj / .xcworkspace 또는 그 폴더
+qakit init ~/path/to/MyApp --worktree
+cd ~/path/to/MyApp-qa/QA
 ```
 
-scheme, configuration, bundle ID를 자동으로 찾아 `~/path/to/qa-workspaces/myapp/`을 만듭니다 (`--dir`로 위치 지정 가능). 출력된 값이 맞는지 `qakit.yml`을 열어 확인하세요.
-
-> **처음이라면 연습용 작업공간으로** 해 보세요: `qakit init ~/path/to/MyApp --name myapp-practice`. 작업공간은 git으로 관리하지 않는 일회용 폴더라서, 다 해 본 뒤 지우면 끝입니다 ([8. 정리](#8-정리)). 같은 앱에 작업공간이 여러 개여도 됩니다.
+- 앱 레포에 **QA 전용 git 워크트리** `MyApp-qa`(브랜치 `qa/workspace`, `develop`에서 생성)를 만들고, 그 안 `QA/` 폴더에 작업공간을 만듭니다. 원래 개발 폴더와 섞이지 않고, 이름이 `-qa`라 다른 워크트리와 헷갈리지 않습니다.
+- 키가 든 xcconfig처럼 **git에 없는 작은 로컬 설정 파일**은 원래 폴더에서 워크트리로 복사합니다 (없으면 빌드가 실패하므로).
+- `QA/`는 이 PC의 git 무시 목록(`.git/info/exclude`)에 들어갑니다. 팀이 커밋하기로 하면 `QA/.gitignore`가 생성물·비밀값을 이미 제외하고 있으니 그대로 커밋하면 됩니다.
+- scheme·configuration·bundle ID는 자동으로 찾아 `qakit.yml`에 적습니다. 확인하고 필요한 권한을 넣으세요:
 
 ```yaml
 app:
-  project: ~/path/to/MyApp/MyApp.xcodeproj
+  project: ../MyApp.xcodeproj        # 워크트리의 앱 (상대 경로)
   scheme: MyApp-Dev
-  configuration: Debug
   bundleId: com.example.myapp.dev
-simulator: iPhone 17
-permissions: [location-always]     # 테스트 전에 미리 허용할 권한 (위치·사진 등)
+permissions: [location-always]       # 테스트 전에 미리 허용할 권한
 ```
+
+> 워크트리를 쓰지 않으려면: `qakit init <앱>`(앱 옆 `qa-workspaces/<이름>`) 또는 `--in-project`(앱 폴더 안 `QA/`).
 
 ### 3. 점검 → 빌드 → 첫 화면 보기
 
@@ -201,6 +203,60 @@ rm -rf ~/path/to/qa-workspaces/myapp-practice
 | 로그인 테스트가 다른 기기를 로그아웃시킴 | 동시 로그인 기기 수 제한이 있는 앱이면 테스트 로그인이 다른 기기 세션을 끊을 수 있습니다. QA 전용 계정을 쓰고, 이런 동작은 사람이 승인한 뒤 `NOTES.md`에 기록합니다 |
 | 권한 팝업(위치·사진 등)이 테스트를 막음 | `qakit.yml`의 `permissions`에 넣고 `qakit build-app`을 다시 실행 |
 | 내가 쓰는 qakit 버전 | `qakit --version` (버전과 도구 폴더의 브랜치) |
+
+---
+
+## 시나리오 파일로 QA (Swift 없이)
+
+AI가 Swift 대신 **시나리오 파일**(`QA/scenarios/<이름>.qa.yml`)을 쓰면, 도구 안의 범용 실행기가 그 파일을 읽어 그대로 실행합니다. 앱마다 QA용 Xcode 프로젝트를 만들거나 컴파일하지 않습니다.
+
+```yaml
+name: 검색한 상품을 즐겨찾기에 넣고 지도 모드로 보기
+reset: true                               # 앱 초기화부터
+vars: { item: 커피 }
+steps:
+  - use: login                            # steps/login.qa.yml (공통 단계)
+  - tap: HomeView.menuButton
+  - tap: { cell: MenuCell, has: { id: MenuCell.titleLabel, label: 검색 } }
+  - input: { tap: SearchView.searchField, alert: "{item}", confirm: 완료 }
+  - read: { from: { id: ResultCell.infoLabel }, pattern: '/(\d+)$', as: code }
+  - unless: { exists: { id: ResultCell.favoriteBadge } }           # 이미 즐겨찾기면 누르지 않음
+    then: [ tap: { id: ResultCell.nameLabel, contains: "{item}" } ]
+  - expect: { selected: { segment: SettingView.modeControl, label: 지도 } }
+    hold: 5
+  - pinch: { on: HomeView.mapView, scale: 2.5 }
+```
+
+```bash
+qakit check search-favorite      # 형식 + 적힌 ID가 앱에 있는지 (실행 없이, Swift의 컴파일 에러 역할)
+qakit run search-favorite        # 실행 (reset: true면 앱 초기화부터)
+```
+
+- 단계·대상·조건 전체 문법: [scenario-language.md](skills/ios-qa-kit/references/scenario-language.md)
+- 분기(`if`/`unless`), 값 읽기(`read`), 여러 후보 대기(`wait-any`), 위치 비교(`right-of`), 화면 변화(`changed`)까지 표현합니다.
+- 언어로 표현이 안 되는 계산·판정만 Swift(`QA/Runner/UITests/Flows`)로 씁니다. 두 방식은 같은 작업공간에서 함께 씁니다.
+
+---
+
+## 저장과 복구 (AI 없이)
+
+**AI는 QA를 만들 때만** 씁니다. 만들어진 결과물을 저장해 두면, 작업공간을 지워도 **AI 없이 그대로 복구**됩니다.
+
+```bash
+qakit save -m "즐겨찾기 시나리오 추가"    # qa.lock.json(파일 목록·해시) + 보관소 ~/.qakit/archive/<이름>/
+rm -rf QA                                     # 지워도
+qakit restore --from myapp --to QA           # 보관소에서 복사 → ID 재생성 → 앱 빌드·설치 → 해시 확인
+qakit run search-favorite                     # 바로 실행
+qakit history                                 # 실행 기록: 언제·어느 앱 커밋에서·무엇이 통과/실패
+```
+
+| 저장되는 결과물 (save·restore 대상) | 저장 안 함 (restore가 다시 만듦) |
+|---|---|
+| `scenarios/`, `steps/`, `Runner/UITests/Pages·Flows`, `NOTES.md`, `qakit.yml`, `history.jsonl`, `qa.lock.json` | `QAIDs.swift`, Runner 프로젝트, `.build/`, `results/` |
+| | `secrets.txt` (보안상 제외 → 복구 후 다시 넣기) |
+
+- `QA/`를 git에 커밋하는 팀은 보관소 없이 커밋된 파일만으로 같은 복구가 됩니다 (`qakit restore`).
+- `qa.lock.json`에 저장 시점의 도구 버전·앱 브랜치/커밋·파일 해시가 남아, 복구한 파일이 저장 때와 같은지 확인합니다.
 
 ---
 
@@ -412,6 +468,10 @@ ID는 **"누가 이 뷰를 프로퍼티로 갖고 있나"** 로 정해집니다.
 | `qakit sync` | 앱 변경 반영 (재빌드 + ID 재생성 + 테스트 코드 컴파일 확인) |
 | `qakit gen-ids [--verify]` | ID 상수 생성 (`--verify`: 실제 화면 ID와 비교) |
 | `qakit install-skill [--uninstall]` | 스킬·명령 설치/제거 |
+| `qakit init <앱> --worktree` | QA 전용 워크트리(`<앱>-qa`) + 그 안 `QA/` 작업공간 |
+| `qakit run <시나리오> [--reset]` / `qakit check` | 시나리오 파일 실행 / 형식·ID 정적 검사 |
+| `qakit save -m "…"` / `qakit restore [--from 이름 --to QA]` | 결과물 저장 / AI 없이 복구 |
+| `qakit history [-n 20]` | 실행 기록 |
 
 전역 옵션: `--app <다른 앱 폴더>` (다른 브랜치 워크트리 검증), `--secrets <파일>` (다른 계정), `-w <작업공간>`.
 

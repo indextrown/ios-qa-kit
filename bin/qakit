@@ -12,6 +12,10 @@ qakit — AI가 XCUITest를 만들고 돌리기 쉽게 해 주는 CLI.
   qakit dump-ui                현재 화면 구조를 텍스트로 저장
   qakit test [필터...]         UI 테스트 실행
   qakit summarize [xcresult]   실패 원인 요약
+  qakit run <시나리오>          시나리오 파일(.qa.yml) 실행 (Swift·프로젝트 없이)
+  qakit check [시나리오]        시나리오 형식·ID 정적 검사
+  qakit save / restore         결과물 저장(qa.lock.json+보관소) / AI 없이 복구
+  qakit history                실행 기록
   qakit install-skill          AI 스킬과 qakit 명령 설치
 
 작업공간은 현재 폴더에서 위로 올라가며 qakit.yml을 찾거나, -w로 지정한다.
@@ -34,6 +38,15 @@ from pathlib import Path
 KIT_DIR = Path(os.path.realpath(__file__)).parent.parent
 sys.path.insert(0, str(KIT_DIR / "Tools" / "gen-ids"))
 import gen_ids  # noqa: E402
+sys.path.insert(0, str(KIT_DIR / "Tools" / "scenario"))
+import scenario_tools  # noqa: E402
+
+ARCHIVE_DIR = Path.home() / ".qakit" / "archive"
+SCENARIO_PROJECT = KIT_DIR / "ScenarioRunner" / "QAScenarioRunner.xcodeproj"
+SCENARIO_BUILD = KIT_DIR / ".build" / "scenario-runner"
+# 사람/AI가 만든 결과물 (save·restore 대상). 나머지는 qakit이 다시 만든다.
+USER_FILES = ["qakit.yml", "NOTES.md", "AGENTS.md", "CLAUDE.md", "secrets.example.txt", ".gitignore",
+              "history.jsonl", "scenarios", "steps", "Runner/UITests/Pages", "Runner/UITests/Flows"]
 TEMPLATE_DIR = KIT_DIR / "templates" / "workspace"
 RUNNER_SCHEME = "UITests"
 DUMP_TEST = "UITests/QAKitDumpTests/test_dump"
@@ -291,10 +304,32 @@ def ensure_autoid(ws):
         run([str(KIT_DIR / "scripts" / "build-autoid.sh")])
 
 
+RUNNER_MANAGED = ["Runner/project.yml", "Runner/Host/HostApp.swift", "Runner/UITests/QAKit/QAKitDumpTests.swift"]
+
+
+def refresh_runner_template(ws):
+    """템플릿이 관리하는 Runner 파일을 이 PC의 도구 경로로 다시 쓴다 (커밋해도 PC마다 경로가 달라 깨지지 않게)."""
+    values = {"KIT_DIR": str(KIT_DIR), "NAME": ws.name}
+    for rel in RUNNER_MANAGED:
+        src = TEMPLATE_DIR / rel
+        text = src.read_text(encoding="utf-8")
+        for k, v in values.items():
+            text = text.replace("{{" + k + "}}", v)
+        dst = ws.root / rel
+        if not dst.exists() or dst.read_text(encoding="utf-8") != text:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(text, encoding="utf-8")
+
+
+def has_swift_runner(ws):
+    return (ws.runner_dir / "UITests").exists()
+
+
 def ensure_runner(ws):
+    if not has_swift_runner(ws):
+        fail("이 작업공간에는 Swift 테스트(Runner/UITests)가 없습니다.", "시나리오 파일은 qakit run <시나리오>로 실행하세요.")
+    refresh_runner_template(ws)
     spec = ws.runner_dir / "project.yml"
-    if not spec.exists():
-        fail("Runner/project.yml이 없습니다.", "qakit init으로 작업공간을 다시 만드세요.")
     proj = ws.runner_project / "project.pbxproj"
     sources = [spec] + list((ws.runner_dir / "UITests").rglob("*.swift"))
     if not proj.exists() or proj.stat().st_mtime < max(p.stat().st_mtime for p in sources):
@@ -357,6 +392,11 @@ def run_tests(ws, only, extra_env=None, label="test", quiet=False):
     if not only:
         cmd += ["-skip-testing", "UITests/QAKitDumpTests"]  # 전체 실행에서 덤프용 테스트 제외
 
+    return execute_xctest(ws, cmd, extra_env, label, ts, xcresult, quiet)
+
+
+def execute_xctest(ws, cmd, extra_env, label, ts, xcresult, quiet, history_name=None):
+    """xcodebuild 테스트 실행 공통: 출력 마스킹·필터, 로그, latest 링크, 실행 기록."""
     mask = masker(ws.secrets())
     log_path = ws.results_dir / f"{label}-{ts}.log"
     proc = subprocess.Popen(cmd, env=test_env(ws, extra_env), text=True, encoding="utf-8", errors="replace",
@@ -377,7 +417,45 @@ def run_tests(ws, only, extra_env=None, label="test", quiet=False):
         latest.unlink()
     if xcresult.exists():
         latest.symlink_to(xcresult.name)
+        if label != "dump":
+            record_history(ws, xcresult, label, history_name)
     return proc.returncode == 0, xcresult, "".join(lines)
+
+
+def record_history(ws, xcresult, kind, scenario=None):
+    """실행 기록 한 줄씩 (history.jsonl): 언제, 어느 앱 상태에서, 무엇이 통과/실패했는지."""
+    try:
+        tree = json.loads(run(["xcrun", "xcresulttool", "get", "test-results", "tests",
+                               "--path", str(xcresult)], check=False).stdout or "{}")
+    except json.JSONDecodeError:
+        return
+    cases = []
+
+    def walk(node):
+        if node.get("nodeType") == "Test Case":
+            cases.append(node)
+        for c in node.get("children", []):
+            walk(c)
+    for n in tree.get("testNodes", []):
+        walk(n)
+    state = app_state(ws)
+    with open(ws.root / "history.jsonl", "a", encoding="utf-8") as f:
+        for c in cases:
+            f.write(json.dumps({
+                "at": datetime.datetime.now().isoformat(timespec="seconds"),
+                "kind": kind,
+                "test": scenario or c.get("nodeIdentifier", c.get("name")),
+                "result": c.get("result"),
+                "seconds": round(c.get("durationInSeconds", 0), 1),
+                "app": {k: state.get(k) for k in ("branch", "commit", "dirtyFiles") if k in state},
+                "kit": kit_version(),
+            }, ensure_ascii=False) + "\n")
+
+
+def kit_version():
+    v = (KIT_DIR / "VERSION").read_text().strip() if (KIT_DIR / "VERSION").exists() else "dev"
+    c = git(KIT_DIR, "rev-parse", "--short", "HEAD")
+    return f"{v}+{c}" if c else v
 
 
 def simplify_line(line):
@@ -395,7 +473,16 @@ def cmd_init(args):
         fail(f"{target}에서 .xcworkspace / .xcodeproj를 찾지 못했습니다.")
 
     name = args.name or slug(project.parent.name)
-    root = Path(args.dir).expanduser().resolve() if args.dir else project.parent.parent / "qa-workspaces" / name
+    if args.worktree:
+        project = make_qa_worktree(project, args)
+        args.in_project = True
+        args.git_exclude = True
+    if args.in_project:
+        root = project.parent / "QA"
+    elif args.dir:
+        root = Path(args.dir).expanduser().resolve()
+    else:
+        root = project.parent.parent / "qa-workspaces" / name
     if (root / "qakit.yml").exists() and not args.force:
         fail(f"이미 작업공간이 있습니다: {root}", "덮어쓰려면 --force")
 
@@ -426,7 +513,8 @@ def cmd_init(args):
     root.mkdir(parents=True, exist_ok=True)
     values = {
         "NAME": name,
-        "PROJECT": str(project).replace(str(Path.home()), "~"),
+        "PROJECT": (os.path.relpath(project, root) if args.in_project
+                    else str(project).replace(str(Path.home()), "~")),
         "SCHEME": scheme,
         "CONFIGURATION": configuration,
         "BUNDLE_ID": bundle_id or "TODO.bundle.id",
@@ -435,11 +523,76 @@ def cmd_init(args):
     }
     copy_template(TEMPLATE_DIR, root, values, force=args.force)
     (root / "results").mkdir(exist_ok=True)
+    if args.in_project and args.git_exclude:
+        add_git_exclude(project.parent, root)
     ok(f"작업공간 생성: {root}")
     info("다음 할 일:")
     info(f"  1. {root}/qakit.yml 확인 (permissions, language)")
     info(f"  2. secrets.example.txt를 참고해 secrets.txt 작성 (로그인이 필요한 앱이면)")
     info(f"  3. cd {root} && qakit doctor && qakit build-app && qakit dump-ui")
+
+
+def make_qa_worktree(project, args):
+    """앱 레포에 QA 전용 워크트리를 만든다 (원래 개발 폴더와 섞이지 않게). 이미 있으면 그대로 쓴다."""
+    repo = project.parent
+    if git(repo, "rev-parse", "--git-dir") is None:
+        fail(f"{repo}는 git 레포가 아닙니다.", "--worktree 없이 --in-project 또는 기본 작업공간을 쓰세요")
+    top = Path(git(repo, "rev-parse", "--show-toplevel"))
+    wt = Path(args.worktree_dir).expanduser().resolve() if args.worktree_dir else top.parent / f"{top.name}-qa"
+    branch = args.branch or "qa/workspace"
+    listing = git(repo, "worktree", "list", "--porcelain") or ""
+    if f"worktree {wt}" in listing:
+        ok(f"기존 QA 워크트리 사용: {wt}")
+    else:
+        if wt.exists():
+            fail(f"{wt}가 이미 있지만 이 레포의 워크트리가 아닙니다.", "--worktree-dir로 다른 위치를 지정하세요")
+        exists = git(repo, "rev-parse", "--verify", "--quiet", branch) is not None
+        if exists:
+            cmd = ["git", "-C", str(repo), "worktree", "add", str(wt), branch]
+        else:
+            base = args.base or ("develop" if git(repo, "rev-parse", "--verify", "--quiet", "develop") else "HEAD")
+            cmd = ["git", "-C", str(repo), "worktree", "add", "-b", branch, str(wt), base]
+        r = run(cmd, check=False)
+        if r.returncode != 0:
+            fail("워크트리 생성 실패", r.stdout[-500:])
+        ok(f"QA 워크트리 생성: {wt} (브랜치 {branch}" + ("" if exists else f", {args.base or 'develop'}에서") + ")")
+    copy_local_files(top, wt)
+    return wt / project.relative_to(top)
+
+
+LOCAL_SKIP = re.compile(r"(^|/)(xcuserdata|\.build|build|DerivedData|\.claude|QA|Pods|node_modules|\.swiftpm|SourcePackages)(/|$)|\.DS_Store$")
+
+
+def copy_local_files(src_repo, wt, max_bytes=1_000_000):
+    """git에 없는 로컬 설정 파일(키가 든 xcconfig, GoogleService-Info.plist 등)을 원래 폴더에서 워크트리로 복사.
+    워크트리는 git에 있는 파일만 가져오므로 이게 없으면 빌드가 실패한다. 내용은 출력하지 않는다."""
+    out = git(src_repo, "ls-files", "--others", "--ignored", "--exclude-standard") or ""
+    copied = []
+    for rel in out.splitlines():
+        if LOCAL_SKIP.search(rel):
+            continue
+        src, dst = Path(src_repo) / rel, Path(wt) / rel
+        if not src.is_file() or src.stat().st_size > max_bytes or dst.exists():
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        copied.append(rel)
+    if copied:
+        ok(f"git에 없는 로컬 설정 파일 {len(copied)}개를 원래 폴더에서 복사: " + ", ".join(copied[:10]))
+
+
+def add_git_exclude(repo_dir, path):
+    """레포의 .gitignore를 건드리지 않고 이 PC에서만 무시 (.git/info/exclude)."""
+    git_dir = git(repo_dir, "rev-parse", "--git-dir")
+    if not git_dir:
+        return
+    exclude = (Path(repo_dir) / git_dir).resolve() / "info" / "exclude"
+    rel = "/" + os.path.relpath(path, repo_dir).rstrip("/") + "/"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    current = exclude.read_text() if exclude.exists() else ""
+    if rel not in current.splitlines():
+        exclude.write_text(current + ("" if current.endswith("\n") or not current else "\n") + rel + "\n")
+        ok(f"{rel}를 이 PC의 git 무시 목록(.git/info/exclude)에 추가")
 
 
 def find_project(path):
@@ -620,14 +773,14 @@ def cmd_build_app_ws(ws):
            "-destination", "generic/platform=iOS Simulator",
            "-derivedDataPath", str(ws.app_build_dir)]
     state = app_state(ws)
-    before = git(ws.app_dir, "status", "--porcelain")
+    before = git(ws.app_dir, "status", "--porcelain", "--", *app_pathspec(ws))
     # 앱 레포의 Package.resolved를 고치지 않는다 (QA는 앱 레포를 수정하지 않음)
     r = run(cmd + ["-onlyUsePackageVersionsFromResolvedFile"], check=False)
     if r.returncode != 0 and "resolved" in (r.stdout or "").lower() and "error:" in (r.stdout or ""):
         warn("Package.resolved 고정 빌드 실패 → 고정 없이 다시 빌드 (앱 레포의 Package.resolved가 바뀔 수 있음)")
         r = run(cmd, check=False)
     log_path.write_text(r.stdout or "", encoding="utf-8")
-    after = git(ws.app_dir, "status", "--porcelain")
+    after = git(ws.app_dir, "status", "--porcelain", "--", *app_pathspec(ws))
     if before is not None and after != before:
         changed = sorted(set((after or "").splitlines()) - set((before or "").splitlines()))
         warn("빌드 중 앱 레포 파일이 바뀌었습니다 (QA가 만든 변경일 수 있음): " + ", ".join(c[3:] for c in changed))
@@ -670,7 +823,10 @@ def cmd_dump_ui(args):
     dump = ws.results_dir / "ui-dump.txt"
     if dump.exists():
         dump.unlink()
-    success, xcresult, output = run_tests(ws, [DUMP_TEST], extra, label="dump", quiet=True)
+    if has_swift_runner(ws):
+        success, xcresult, output = run_tests(ws, [DUMP_TEST], extra, label="dump", quiet=True)
+    else:
+        success, xcresult, output = run_scenario_runner(ws, "test_dump", extra, label="dump", quiet=True)
     if not dump.exists():
         print(summarize(xcresult, masker(ws.secrets())))
         fail("화면 덤프 실패")
@@ -706,6 +862,8 @@ def reset_app(ws, udid):
 
 def cmd_test(args):
     ws = find_workspace(args.workspace)
+    if not has_swift_runner(ws):
+        fail("Swift 테스트가 없는 작업공간입니다.", "시나리오는 qakit run <시나리오>, 목록은 ls scenarios/")
     only = args.filters or []
     extra = {}
     auto_sync(ws)
@@ -856,8 +1014,9 @@ def app_state(ws):
     if branch is not None:
         state["branch"] = branch
         state["commit"] = git(d, "rev-parse", "--short", "HEAD")
-        status = git(d, "status", "--porcelain", "--untracked-files=normal") or ""
-        diff = git(d, "diff", "HEAD") or ""
+        spec = app_pathspec(ws)
+        status = git(d, "status", "--porcelain", "--untracked-files=normal", "--", *spec) or ""
+        diff = git(d, "diff", "HEAD", "--", *spec) or ""
         state["dirty"] = hashlib.sha1((status + diff).encode()).hexdigest()[:12] if status else ""
         state["dirtyFiles"] = len(status.splitlines()) if status else 0
     else:
@@ -867,6 +1026,15 @@ def app_state(ws):
             h.update(f"{f}:{f.stat().st_mtime}".encode())
         state["sourceHash"] = h.hexdigest()[:12]
     return state
+
+
+def app_pathspec(ws):
+    """작업공간이 앱 레포 안(QA 폴더)이면 앱 변경 감지에서 제외한다."""
+    try:
+        rel = ws.root.relative_to(ws.app_dir)
+        return [".", f":(exclude){rel}"]
+    except ValueError:
+        return ["."]
 
 
 SAME_KEYS = ("appPath", "scheme", "configuration", "commit", "dirty", "sourceHash")
@@ -986,7 +1154,7 @@ def cmd_gen_ids(args):
 
 def generate_ids(ws, quiet=True):
     sources = ws.id_sources or [ws.app_dir]
-    trees, model, nfiles = gen_ids.build(sources)
+    trees, model, nfiles = gen_ids.build(sources, exclude=[ws.root])
     ids = sorted(gen_ids.all_ids(trees))
     state = app_state(ws)
     note = f"앱: {ws.project.parent.name}" + (f" [{state.get('branch')} @ {state.get('commit')}]" if state.get("branch") else "")
@@ -1022,7 +1190,7 @@ def generate_ids(ws, quiet=True):
 def used_ids(ws):
     """테스트 코드에 문자열로 직접 쓴 ID (QAID 상수로 바꾸지 않은 것)."""
     found = set()
-    for f in (ws.runner_dir / "UITests").rglob("*.swift"):
+    for f in (ws.runner_dir / "UITests").rglob("*.swift") if has_swift_runner(ws) else []:
         if "Generated" in f.parts:
             continue
         found |= set(re.findall(r'"([A-Z]\w*(?:\.\w+)+)"', f.read_text(encoding="utf-8", errors="replace")))
@@ -1042,6 +1210,224 @@ def verify_ids(ws, trees, model):
     if missing:
         fail("생성 ID와 런타임 ID가 다릅니다.", "AutoID 규칙과 gen_ids.py 규칙 차이 — 도구 버그로 보고하세요.")
     ok("생성 ID가 런타임 ID와 일치")
+
+
+# ─────────────────────────────── 시나리오 실행 (파일만으로) ───────────────────────────────
+
+def ensure_scenario_runner(udid):
+    """도구의 범용 시나리오 실행기를 필요할 때만 빌드한다 (앱마다 프로젝트를 만들지 않음)."""
+    h = hashlib.sha1()
+    for base in (KIT_DIR / "Sources" / "QAKit", KIT_DIR / "ScenarioRunner"):
+        for f in sorted(base.rglob("*")):
+            if f.is_file() and ".xcodeproj" not in str(f):
+                h.update(str(f.relative_to(KIT_DIR)).encode())
+                h.update(f.read_bytes())
+    h.update(run(["xcodebuild", "-version"], check=False).stdout.encode())
+    stamp = SCENARIO_BUILD / ".stamp"
+    xctestruns = list((SCENARIO_BUILD / "Build" / "Products").glob("*.xctestrun"))
+    if xctestruns and stamp.exists() and stamp.read_text() == h.hexdigest():
+        return xctestruns[0]
+    info("시나리오 실행기 빌드 중 (도구가 바뀌었을 때 한 번)...")
+    run(["xcodegen", "generate", "--quiet", "--spec", str(KIT_DIR / "ScenarioRunner" / "project.yml"),
+         "--project", str(KIT_DIR / "ScenarioRunner")])
+    r = run(["xcodebuild", "build-for-testing", "-project", str(SCENARIO_PROJECT), "-scheme", "ScenarioTests",
+             "-destination", f"id={udid}", "-derivedDataPath", str(SCENARIO_BUILD)], check=False)
+    if r.returncode != 0:
+        errors = [l for l in (r.stdout or "").splitlines() if "error:" in l]
+        fail("시나리오 실행기 빌드 실패", "\n   ".join(dict.fromkeys(errors[:10])))
+    stamp.write_text(h.hexdigest())
+    return list((SCENARIO_BUILD / "Build" / "Products").glob("*.xctestrun"))[0]
+
+
+def run_scenario_runner(ws, method, extra_env, label, quiet=False, history_name=None):
+    ws.results_dir.mkdir(exist_ok=True)
+    ensure_autoid(ws)
+    udid = ensure_booted(ws)
+    if not app_installed(udid, ws.bundle_id):
+        fail(f"시뮬레이터에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app")
+    xctestrun = ensure_scenario_runner(udid)
+    ts = timestamp()
+    xcresult = ws.results_dir / f"{label}-{ts}.xcresult"
+    cmd = ["xcodebuild", "test-without-building", "-xctestrun", str(xctestrun),
+           "-destination", f"id={udid}", "-resultBundlePath", str(xcresult),
+           "-only-testing", f"ScenarioTests/ScenarioTests/{method}"]
+    return execute_xctest(ws, cmd, extra_env, label, ts, xcresult, quiet, history_name)
+
+
+def load_checked_scenario(ws, name, strict=True):
+    path = scenario_tools.find_scenario(ws.root, name)
+    if not path:
+        listing = ", ".join(p.name for p in sorted((ws.root / "scenarios").glob("*.qa.yml"))) or "(없음)"
+        fail(f"시나리오 '{name}'을(를) 찾지 못했습니다.", f"scenarios/ 목록: {listing}")
+    try:
+        scenario = scenario_tools.load_scenario(path, ws.root)
+    except scenario_tools.YamlError as e:
+        fail(f"시나리오 형식 오류: {e}")
+    trees, model = generate_ids(ws, quiet=True)
+    unknown = scenario_tools.check_ids(scenario, set(gen_ids.all_ids(trees)), extra_ok=("Mapbox",))
+    if unknown:
+        msg = "앱에 없는 ID: " + ", ".join(unknown)
+        if strict:
+            fail(msg, "앱에서 이름이 바뀌었는지 Generated/QAIDs.swift 또는 qakit dump-ui로 확인하세요")
+        warn(msg)
+    return path, scenario
+
+
+def cmd_check(args):
+    ws = find_workspace(args.workspace)
+    names = args.scenarios or [p.name for p in sorted((ws.root / "scenarios").glob("*.qa.yml"))]
+    for n in names:
+        path, scenario = load_checked_scenario(ws, n)
+        ok(f"{path.name}: 단계 {count_steps(scenario['steps'])}개, ID 확인 완료")
+
+
+def count_steps(steps):
+    n = 0
+    for s in steps:
+        n += 1
+        if isinstance(s, dict):
+            for k in ("steps", "then", "else"):
+                if isinstance(s.get(k), list):
+                    n += count_steps(s[k])
+    return n
+
+
+def cmd_run(args):
+    ws = find_workspace(args.workspace)
+    path, scenario = load_checked_scenario(ws, args.scenario, strict=not args.no_check)
+    out = ws.root / ".qakit" / "scenarios" / (path.name.replace(".qa.yml", "") + ".json")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(scenario_tools.to_json(scenario), encoding="utf-8")
+    auto_sync(ws)
+    extra = {"SCENARIO_JSON": str(out)}
+    if args.reset or scenario.get("reset") is True:
+        reset_app(ws, ensure_booted(ws))
+        extra["RESET"] = "1"
+    info(f"시나리오 실행: {scenario.get('name')} ({path.name})")
+    success, xcresult, _ = run_scenario_runner(ws, "test_run", extra, label="run",
+                                               history_name=path.name.replace(".qa.yml", ""))
+    print()
+    if success:
+        ok(f"통과 — 결과: {xcresult}")
+        return
+    print(summarize(xcresult, masker(ws.secrets())))
+    fail("실패", f"자세한 결과: {xcresult}")
+
+
+# ─────────────────────────────── 저장 · 복구 · 기록 ───────────────────────────────
+
+def user_files(root):
+    for entry in USER_FILES:
+        p = root / entry
+        if p.is_file():
+            yield p
+        elif p.is_dir():
+            for f in sorted(p.rglob("*")):
+                if f.is_file() and f.name != ".DS_Store":
+                    yield f
+
+
+def file_hash(path):
+    return hashlib.sha1(path.read_bytes()).hexdigest()[:12]
+
+
+def cmd_save(args):
+    """결과물(시나리오·Swift·노트·설정)의 목록과 해시를 qa.lock.json에 남기고 보관소에 복사한다."""
+    ws = find_workspace(args.workspace)
+    files = {str(f.relative_to(ws.root)): file_hash(f) for f in user_files(ws.root)}
+    state = app_state(ws)
+    lock = {
+        "name": ws.name,
+        "savedAt": datetime.datetime.now().isoformat(timespec="seconds"),
+        "message": args.message or "",
+        "kit": kit_version(),
+        "app": {k: state.get(k) for k in ("branch", "commit") if k in state},
+        "files": files,
+    }
+    (ws.root / "qa.lock.json").write_text(json.dumps(lock, ensure_ascii=False, indent=2), encoding="utf-8")
+    dest_root = ARCHIVE_DIR / ws.name
+    snap = dest_root / lock["savedAt"].replace(":", "")
+    for target in (snap, dest_root / "latest"):
+        if target.exists():
+            shutil.rmtree(target)
+        for rel in list(files) + ["qa.lock.json"]:
+            (target / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ws.root / rel, target / rel)
+    snaps = sorted(p for p in dest_root.iterdir() if p.is_dir() and p.name != "latest")
+    for old in snaps[:-20]:
+        shutil.rmtree(old)
+    ok(f"저장: 파일 {len(files)}개 → qa.lock.json, 보관소 {dest_root}/latest")
+    tracked = git(ws.root, "ls-files", "--error-unmatch", "qa.lock.json")
+    if tracked is not None:
+        info("ℹ️  이 폴더는 git으로 관리 중입니다. 커밋은 평소처럼: git add QA && git commit")
+
+
+def cmd_restore(args):
+    """AI 없이 복구: (보관소에서 파일 복사) → 생성물 다시 만들기 → 해시 확인 → 앱 설치 확인."""
+    if args.from_name:
+        src = ARCHIVE_DIR / args.from_name / "latest"
+        if not src.exists():
+            names = ", ".join(p.name for p in ARCHIVE_DIR.iterdir()) if ARCHIVE_DIR.exists() else "(없음)"
+            fail(f"보관소에 '{args.from_name}'이(가) 없습니다.", f"보관소 목록: {names}")
+        dest = Path(args.to).expanduser().resolve() if args.to else Path.cwd() / "QA"
+        if (dest / "qakit.yml").exists() and not args.force:
+            fail(f"이미 작업공간이 있습니다: {dest}", "덮어쓰려면 --force")
+        for f in src.rglob("*"):
+            if f.is_file():
+                (dest / f.relative_to(src)).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, dest / f.relative_to(src))
+        ok(f"보관소 → {dest}")
+        args.workspace = str(dest)
+    ws = find_workspace(args.workspace)
+    lock_path = ws.root / "qa.lock.json"
+    if lock_path.exists():
+        lock = json.loads(lock_path.read_text())
+        missing, changed = [], []
+        for rel, h in lock.get("files", {}).items():
+            f = ws.root / rel
+            if not f.exists():
+                missing.append(rel)
+            elif file_hash(f) != h:
+                changed.append(rel)
+        if missing:
+            warn(f"저장 기록에 있는데 없는 파일 {len(missing)}개: " + ", ".join(missing[:10]))
+        if changed:
+            info(f"ℹ️  저장 이후 바뀐 파일 {len(changed)}개: " + ", ".join(changed[:10]))
+        if not missing:
+            ok(f"결과물 {len(lock.get('files', {}))}개 확인 (저장: {lock.get('savedAt')}, 앱 {lock.get('app', {}).get('branch')}@{lock.get('app', {}).get('commit')})")
+    else:
+        warn("qa.lock.json이 없습니다 (qakit save로 만든 적 없음). 있는 파일로 복구합니다.")
+    if has_swift_runner(ws):
+        refresh_runner_template(ws)
+    generate_ids(ws, quiet=False)
+    udid = ensure_booted(ws)
+    changed_app, why, _ = app_changed(ws)
+    if changed_app or not app_installed(udid, ws.bundle_id):
+        info(f"앱 빌드·설치: {why or '설치 안 됨'}")
+        cmd_build_app_ws(ws)
+    if not ws.secrets_path.exists() and (ws.root / "secrets.example.txt").exists():
+        warn(f"secrets.txt가 없습니다 (보안상 저장·복구하지 않음). {ws.secrets_path}에 다시 넣으세요.")
+    scen = sorted((ws.root / "scenarios").glob("*.qa.yml"))
+    ok("복구 완료 — AI 없이 바로 실행할 수 있습니다:")
+    for p in scen[:10]:
+        info(f"   qakit run {p.name.replace('.qa.yml', '')}")
+    if has_swift_runner(ws):
+        info("   qakit test   (Swift 테스트)")
+
+
+def cmd_history(args):
+    ws = find_workspace(args.workspace)
+    f = ws.root / "history.jsonl"
+    if not f.exists():
+        fail("실행 기록이 없습니다.", "qakit run / qakit test를 실행하면 쌓입니다.")
+    rows = [json.loads(l) for l in f.read_text(encoding="utf-8").splitlines() if l.strip()]
+    if args.test:
+        rows = [r for r in rows if args.test in r.get("test", "")]
+    for r in rows[-args.n:]:
+        mark = {"Passed": "✅", "Failed": "❌", "Skipped": "⏭"}.get(r.get("result"), "•")
+        app = r.get("app", {})
+        print(f"{r.get('at','')}  {mark} {r.get('test',''):<45} {r.get('seconds',0):>6}s  "
+              f"앱 {app.get('branch','-')}@{app.get('commit','-')}  [{r.get('kind')}]")
 
 
 # ─────────────────────────────── 명령: install-skill ───────────────────────────────
@@ -1095,6 +1481,13 @@ def main():
     p.add_argument("--scheme", help="scheme 직접 지정")
     p.add_argument("--simulator", help="시뮬레이터 이름")
     p.add_argument("--force", action="store_true", help="템플릿 파일 덮어쓰기 (Flows/ 테스트는 유지)")
+    p.add_argument("--in-project", action="store_true", help="앱 프로젝트 안 QA/ 폴더에 만들기")
+    p.add_argument("--git-exclude", action="store_true", help="QA/를 이 PC에서만 git 무시 (.git/info/exclude)")
+    p.add_argument("--worktree", action="store_true",
+                   help="QA 전용 워크트리(<레포>-qa, 브랜치 qa/workspace)를 만들고 그 안 QA/에 작업공간 생성 (권장)")
+    p.add_argument("--worktree-dir", help="워크트리 위치 직접 지정")
+    p.add_argument("--branch", help="워크트리 브랜치 (기본 qa/workspace)")
+    p.add_argument("--base", help="새 브랜치를 딸 기준 (기본 develop, 없으면 HEAD)")
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("install-skill", help="AI 스킬(Claude Code·Codex)과 qakit 명령 설치")
@@ -1127,6 +1520,31 @@ def main():
     p.add_argument("filters", nargs="*", help="예) LoginFlowTests 또는 LoginFlowTests/test_ensureLoggedIn")
     p.add_argument("--reset", action="store_true", help="실행 전 앱 재설치 + 키체인 초기화 (로그아웃 상태)")
     p.set_defaults(func=cmd_test)
+
+    p = sub.add_parser("run", help="시나리오 파일(.qa.yml) 실행 — Swift 테스트 없이")
+    p.add_argument("scenario", help="scenarios/<이름>.qa.yml의 이름 또는 파일 경로")
+    p.add_argument("--reset", action="store_true", help="실행 전 앱 재설치 + 키체인 초기화")
+    p.add_argument("--no-check", action="store_true", help="ID 정적 검사 실패해도 실행")
+    p.set_defaults(func=cmd_run)
+
+    p = sub.add_parser("check", help="시나리오 형식·ID 정적 검사 (실행 없이)")
+    p.add_argument("scenarios", nargs="*")
+    p.set_defaults(func=cmd_check)
+
+    p = sub.add_parser("save", help="결과물 목록·해시 기록(qa.lock.json) + 보관소 복사")
+    p.add_argument("-m", "--message", help="저장 메모")
+    p.set_defaults(func=cmd_save)
+
+    p = sub.add_parser("restore", help="AI 없이 복구 (생성물 재생성·앱 설치·해시 확인)")
+    p.add_argument("--from", dest="from_name", help="보관소(~/.qakit/archive)의 작업공간 이름에서 복사")
+    p.add_argument("--to", help="--from으로 복사할 위치 (기본: ./QA)")
+    p.add_argument("--force", action="store_true")
+    p.set_defaults(func=cmd_restore)
+
+    p = sub.add_parser("history", help="실행 기록 보기")
+    p.add_argument("-n", type=int, default=20)
+    p.add_argument("--test", help="이름에 이 글자가 들어간 것만")
+    p.set_defaults(func=cmd_history)
 
     p = sub.add_parser("summarize", help="실패 원인 요약")
     p.add_argument("xcresult", nargs="?", help="기본: results/latest.xcresult")
