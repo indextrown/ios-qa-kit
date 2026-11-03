@@ -16,6 +16,7 @@ qakit — AI가 XCUITest를 만들고 돌리기 쉽게 해 주는 CLI.
   qakit check [시나리오]        시나리오 형식·ID 정적 검사
   qakit save / restore         결과물 저장(qa.lock.json+보관소) / AI 없이 복구
   qakit history                실행 기록
+  qakit readme                 QA 폴더 README.md의 QA 목록 갱신 (run·test·check·save 때 자동)
   qakit install-skill          AI 스킬과 qakit 명령 설치
 
 작업공간은 현재 폴더에서 위로 올라가며 qakit.yml을 찾거나, -w로 지정한다.
@@ -42,12 +43,13 @@ sys.path.insert(0, str(KIT_DIR / "Tools" / "gen-ids"))
 import gen_ids  # noqa: E402
 sys.path.insert(0, str(KIT_DIR / "Tools" / "scenario"))
 import scenario_tools  # noqa: E402
+import qa_readme  # noqa: E402
 
 ARCHIVE_DIR = Path.home() / ".qakit" / "archive"
 SCENARIO_PROJECT = KIT_DIR / "ScenarioRunner" / "QAScenarioRunner.xcodeproj"
 SCENARIO_BUILD = KIT_DIR / ".build" / "scenario-runner"
 # 사람/AI가 만든 결과물 (save·restore 대상). 나머지는 qakit이 다시 만든다.
-USER_FILES = ["qakit.yml", "NOTES.md", "AGENTS.md", "CLAUDE.md", "secrets.example.txt", ".gitignore",
+USER_FILES = ["README.md", "qakit.yml", "NOTES.md", "AGENTS.md", "CLAUDE.md", "secrets.example.txt", ".gitignore",
               "history.jsonl", "scenarios", "steps", "Runner/UITests/Pages", "Runner/UITests/Flows"]
 TEMPLATE_DIR = KIT_DIR / "templates" / "workspace"
 RUNNER_SCHEME = "UITests"
@@ -482,6 +484,24 @@ def record_history(ws, xcresult, kind, scenario=None):
             }, ensure_ascii=False) + "\n")
 
 
+def update_readme(ws, quiet=True):
+    """QA 폴더 README.md의 자동 목록(시나리오·공통 단계·Swift 테스트·마지막 실행)을 갱신."""
+    try:
+        raw = (ws.cfg.get("app") or {}).get("project", "")   # 커밋해도 PC마다 맞도록 설정 값 그대로 (상대 경로)
+        changed = qa_readme.write(ws.root, ws.name, f"테스트 대상 앱: `{raw}`")
+    except Exception as e:  # README 때문에 본 작업이 실패하지 않게
+        warn(f"README 갱신 실패: {e}")
+        return
+    if changed and not quiet:
+        ok(f"README 갱신: {ws.root / 'README.md'}")
+
+
+def cmd_readme(args):
+    ws = find_workspace(args.workspace)
+    update_readme(ws, quiet=False)
+    ok(f"{ws.root / 'README.md'}")
+
+
 def kit_version():
     v = (KIT_DIR / "VERSION").read_text().strip() if (KIT_DIR / "VERSION").exists() else "dev"
     c = git(KIT_DIR, "rev-parse", "--short", "HEAD")
@@ -555,6 +575,7 @@ def cmd_init(args):
     (root / "results").mkdir(exist_ok=True)
     if args.in_project and args.git_exclude:
         add_git_exclude(project.parent, root)
+    update_readme(Workspace(root))
     ok(f"작업공간 생성: {root}")
     info("다음 할 일:")
     info(f"  1. {root}/qakit.yml 확인 (permissions, language)")
@@ -899,8 +920,11 @@ def reset_app(ws, udid):
 
 def cmd_test(args):
     ws = find_workspace(args.workspace)
-    with sim_lock(ws, "qakit test " + " ".join(args.filters or [])):
-        _cmd_test(ws, args)
+    try:
+        with sim_lock(ws, "qakit test " + " ".join(args.filters or [])):
+            _cmd_test(ws, args)
+    finally:
+        update_readme(ws)
 
 
 def _cmd_test(ws, args):
@@ -1333,6 +1357,7 @@ def cmd_check(args):
     for n in names:
         path, scenario = load_checked_scenario(ws, n)
         ok(f"{path.name}: 단계 {count_steps(scenario['steps'])}개, ID 확인 완료")
+    update_readme(ws, quiet=False)
 
 
 def count_steps(steps):
@@ -1348,8 +1373,11 @@ def count_steps(steps):
 
 def cmd_run(args):
     ws = find_workspace(args.workspace)
-    with sim_lock(ws, f"qakit run {args.scenario}"):
-        _cmd_run(ws, args)
+    try:
+        with sim_lock(ws, f"qakit run {args.scenario}"):
+            _cmd_run(ws, args)
+    finally:
+        update_readme(ws)
 
 
 def _cmd_run(ws, args):
@@ -1393,6 +1421,7 @@ def file_hash(path):
 def cmd_save(args):
     """결과물(시나리오·Swift·노트·설정)의 목록과 해시를 qa.lock.json에 남기고 보관소에 복사한다."""
     ws = find_workspace(args.workspace)
+    update_readme(ws, quiet=False)
     files = {str(f.relative_to(ws.root)): file_hash(f) for f in user_files(ws.root)}
     state = app_state(ws)
     lock = {
@@ -1466,6 +1495,7 @@ def cmd_restore(args):
         cmd_build_app_ws(ws)
     if not ws.secrets_path.exists() and (ws.root / "secrets.example.txt").exists():
         warn(f"secrets.txt가 없습니다 (보안상 저장·복구하지 않음). {ws.secrets_path}에 다시 넣으세요.")
+    update_readme(ws)
     scen = sorted((ws.root / "scenarios").glob("*.qa.yml"))
     ok("복구 완료 — AI 없이 바로 실행할 수 있습니다:")
     for p in scen[:10]:
@@ -1599,6 +1629,9 @@ def main():
     p.add_argument("--to", help="--from으로 복사할 위치 (기본: ./QA)")
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=cmd_restore)
+
+    p = sub.add_parser("readme", help="QA 폴더 README.md의 QA 목록을 지금 상태로 갱신")
+    p.set_defaults(func=cmd_readme)
 
     p = sub.add_parser("history", help="실행 기록 보기")
     p.add_argument("-n", type=int, default=20)

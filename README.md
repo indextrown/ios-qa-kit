@@ -251,9 +251,11 @@ qakit run search-favorite                     # 바로 실행
 qakit history                                 # 실행 기록: 언제·어느 앱 커밋에서·무엇이 통과/실패
 ```
 
+QA 폴더의 **`README.md`는 qakit이 자동으로 만든다**: 시나리오·공통 단계·Swift 테스트 목록, 각각 무엇을 확인하는지(시나리오 `name:`·맨 위 주석, Swift `///`), 앱 초기화 여부, 마지막 실행 결과. `run`·`test`·`check`·`save`·`restore` 때 갱신되고(`qakit readme`로 수동 갱신), 자동 부분 밖에 직접 쓴 글은 보존된다.
+
 | 저장되는 결과물 (save·restore 대상) | 저장 안 함 (restore가 다시 만듦) |
 |---|---|
-| `scenarios/`, `steps/`, `Runner/UITests/Pages·Flows`, `NOTES.md`, `qakit.yml`, `history.jsonl`, `qa.lock.json` | `QAIDs.swift`, Runner 프로젝트, `.build/`, `results/` |
+| `scenarios/`, `steps/`, `Runner/UITests/Pages·Flows`, `README.md`, `NOTES.md`, `qakit.yml`, `history.jsonl`, `qa.lock.json` | `QAIDs.swift`, Runner 프로젝트, `.build/`, `results/` |
 | | `secrets.txt` (보안상 제외 → 복구 후 다시 넣기) |
 
 - `QA/`를 git에 커밋하는 팀은 보관소 없이 커밋된 파일만으로 같은 복구가 됩니다 (`qakit restore`).
@@ -488,6 +490,7 @@ ID는 **"누가 이 뷰를 프로퍼티로 갖고 있나"** 로 정해집니다.
 | `qakit run <시나리오> [--reset]` / `qakit check` | 시나리오 파일 실행 / 형식·ID 정적 검사 |
 | `qakit save -m "…"` / `qakit restore [--from 이름 --to QA]` | 결과물 저장 / AI 없이 복구 |
 | `qakit history [-n 20]` | 실행 기록 |
+| `qakit readme` | QA 폴더 README.md의 QA 목록 갱신 (run·test·check·save 때 자동) |
 
 전역 옵션: `--app <다른 앱 폴더>` (다른 브랜치 워크트리 검증), `--secrets <파일>` (다른 계정), `-w <작업공간>`.
 
