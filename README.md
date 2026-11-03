@@ -21,21 +21,39 @@
 | **도구** (이 레포) | `~/ios-qa-kit` | qakit CLI, 자동 ID 라이브러리, QAKit, 스킬, 템플릿 | 도구 개발자 ([docs/gitflow.md](docs/gitflow.md)) |
 | **작업공간** (앱별 QA 폴더) | `~/work/qa-workspaces/myapp` | 설정·계정·테스트·빌드 결과. git으로 관리하지 않는 일회용 | 사람(설정·계정) + AI(테스트) + qakit(자동 생성) |
 
+```mermaid
+flowchart LR
+    subgraph APP["앱 프로젝트 (수정 없음)"]
+        SRC["MyApp.xcodeproj<br/>Sources/*.swift"]
+    end
+    subgraph WS["작업공간 qa-workspaces/myapp"]
+        CFG["qakit.yml<br/>앱 경로·scheme·bundleId"]
+        SEC["secrets.txt<br/>테스트 계정 (사람)"]
+        NOTES["NOTES.md<br/>앱 특이사항 (AI 기록)"]
+        IDS["Generated/QAIDs.swift<br/>ID 상수 (자동)"]
+        TESTS["Pages/ · Flows/<br/>Page·시나리오 테스트 (AI)"]
+        BUILD[".build/<br/>앱·테스트 빌드 결과 (자동)"]
+        RES["results/<br/>로그·덤프·실패 요약 (자동)"]
+    end
+    SIM["iOS 시뮬레이터<br/>실행할 때 AutoID 주입 → 화면 요소에 ID 자동 부여"]
+
+    CFG -- "① 경로 참조" --> SRC
+    SRC -- "② 빌드 (xcodebuild)" --> BUILD
+    SRC -- "③ 소스 읽기 (gen-ids)" --> IDS
+    BUILD -- "④ 설치" --> SIM
+    IDS -- "상수로 사용" --> TESTS
+    TESTS -- "⑤ qakit test: ID로 찾아 조작" --> SIM
+    SIM -- "⑥ 결과" --> RES
 ```
- 앱 프로젝트 (수정 없음)                 작업공간 (qa-workspaces/myapp)
- ┌───────────────────┐  ① 경로 참조     ┌──────────────────────────────────┐
- │ MyApp.xcodeproj    │ ◀───────────── │ qakit.yml   앱 경로·scheme·bundleId │
- │ Sources/*.swift    │                 │ secrets.txt 테스트 계정 (사람)       │
- └───────────────────┘                 │ NOTES.md    앱 특이사항 (AI가 기록)  │
-     │ ② 빌드 (xcodebuild)              │ Runner/UITests/                    │
-     │    결과는 작업공간 .build/에 ───▶ │   Pages/      화면별 Page  (AI)     │
-     │ ③ 소스 읽기 (gen-ids)            │   Flows/      시나리오 테스트 (AI)   │
-     │    → ID 상수 ──────────────────▶ │   Generated/  QAIDs.swift (자동)    │
-     ▼                                  │ .build/  앱·테스트 빌드 결과 (자동)   │
- 시뮬레이터                              │ results/ 로그·덤프·실패 요약 (자동)   │
-  ④ 앱 설치 + 실행할 때 AutoID 주입       └──────────────────────────────────┘
-     → 화면 요소에 ID 자동 부여 → 테스트가 ID로 찾아 조작
-```
+
+그림이 안 보이는 환경(터미널 등)이면:
+
+1. `qakit.yml`에 적힌 경로로 앱 프로젝트를 **참조만** 합니다 (복사·수정 없음).
+2. 앱을 빌드하고, 결과는 작업공간의 `.build/`에 저장합니다.
+3. 앱 소스를 읽어 ID 상수 `Generated/QAIDs.swift`를 만듭니다.
+4. 빌드한 앱을 시뮬레이터에 설치합니다. 실행할 때 AutoID를 끼워 넣어 화면 요소에 ID를 자동으로 붙입니다.
+5. AI가 만든 Page·테스트가 ID 상수로 요소를 찾아 조작합니다 (`qakit test`).
+6. 로그·덤프·실패 요약은 작업공간의 `results/`에 남습니다.
 
 ### 기존 프로젝트를 가져오는 방법
 
