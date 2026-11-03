@@ -21,6 +21,10 @@ secrets: ./secrets.txt          # KEY=VALUE 형식, git에 올리지 않음
 # embedded: 앱에 AutoID.swift를 넣은 경우 (실기기용)
 autoid: inject
 
+# SwiftUI 화면 ID: QA 워크트리에서 build-app 할 때 소스에 .accessibilityIdentifier를 끼워 넣고 빌드 뒤 되돌린다
+#   auto: 앱 소스에 import SwiftUI가 있으면 함 / insert: 항상 / off: 안 함  (워크트리가 아니면 실패)
+swiftui: auto
+
 # 앱 변경 동기화: test 실행 전 앱 소스가 마지막 빌드 이후 바뀌었는지 확인
 #   auto: 바뀌었으면 재빌드·설치·ID 재생성 후 테스트 / warn: 알리기만 / off: 확인 안 함
 sync: auto

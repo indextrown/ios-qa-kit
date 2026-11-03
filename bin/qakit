@@ -140,6 +140,7 @@ class Workspace:
         self.permissions = perms if isinstance(perms, list) else [perms]
         self.secrets_path = expand(self.cfg.get("secrets", "./secrets.txt"), self.root)
         self.autoid = self.cfg.get("autoid", "inject")
+        self.swiftui = str(self.cfg.get("swiftui", "auto"))  # auto | insert | off — SwiftUI 소스에 ID 삽입(QA 워크트리 빌드 중)
         self.sync_mode = self.cfg.get("sync", "auto")  # auto | warn | off
         ids = self.cfg.get("ids") or {}
         srcs = ids.get("sources") if isinstance(ids, dict) else None
@@ -175,6 +176,11 @@ class Workspace:
     @property
     def autoid_dylib(self):
         return KIT_DIR / ".build" / "autoid" / "QAAutoID.dylib"
+
+    @property
+    def swiftui_manifest(self):
+        """SwiftUI ID 삽입 중 원본을 보관하는 파일. 남아 있으면 복원이 안 된 것."""
+        return self.state_dir / "swiftui-ids.json"
 
     def secrets(self):
         if not self.secrets_path.exists():
@@ -334,6 +340,105 @@ def ensure_autoid(ws):
     if not dylib.exists() or dylib.stat().st_mtime < newest_src:
         info("AutoID dylib 빌드 중...")
         run([str(KIT_DIR / "scripts" / "build-autoid.sh")])
+
+
+SWIFTUI_IDS_DIR = KIT_DIR / "Tools" / "swiftui-ids"
+SWIFTUI_IDS_BIN = SWIFTUI_IDS_DIR / ".build" / "release" / "swiftui-ids"
+
+
+def ensure_swiftui_ids():
+    """swiftui-ids 도구를 소스가 바뀌었을 때만 빌드한다 (처음엔 SwiftSyntax 컴파일로 몇 분).
+    수정 시각이 아니라 소스 해시로 판단한다 (git checkout·복사로 시각이 흔들려도 다시 빌드하지 않게)."""
+    h = hashlib.sha1()
+    for f in sorted([SWIFTUI_IDS_DIR / "Package.swift"] + list((SWIFTUI_IDS_DIR / "Sources").rglob("*.swift"))):
+        h.update(str(f.relative_to(SWIFTUI_IDS_DIR)).encode())
+        h.update(f.read_bytes())
+    digest = h.hexdigest()
+    stamp = SWIFTUI_IDS_BIN.with_suffix(".stamp")
+    if not SWIFTUI_IDS_BIN.exists() or not stamp.exists() or stamp.read_text().strip() != digest:
+        info("swiftui-ids 도구 빌드 중... (처음엔 SwiftSyntax 컴파일로 몇 분 걸립니다)")
+        r = run(["swift", "build", "-c", "release", "--package-path", str(SWIFTUI_IDS_DIR)], check=False)
+        if r.returncode != 0 or not SWIFTUI_IDS_BIN.exists():
+            fail("swiftui-ids 빌드 실패", (r.stdout or "")[-800:])
+        stamp.write_text(digest)
+    return SWIFTUI_IDS_BIN
+
+
+def swiftui_sources(ws):
+    return [str(p) for p in (ws.id_sources or [ws.app_dir])]
+
+
+def swiftui_enabled(ws):
+    """swiftui: off → 안 함 / insert → 함 / auto → 앱 소스에 `import SwiftUI`가 있으면 함."""
+    if ws.swiftui == "off":
+        return False
+    if ws.swiftui == "insert":
+        return True
+    for f in gen_ids.iter_swift_files(swiftui_sources(ws)):
+        try:
+            if ws.root in f.parents:
+                continue
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                if "import SwiftUI" in fh.read(4000):
+                    return True
+        except OSError:
+            pass
+    return False
+
+
+def is_qa_worktree(app_dir):
+    """앱 폴더가 git 연결 워크트리(qakit init --worktree)인가. 개발 폴더에는 소스를 고치지 않는다."""
+    git_dir = git(app_dir, "rev-parse", "--git-dir")
+    common = git(app_dir, "rev-parse", "--git-common-dir")
+    return bool(git_dir and common and Path(app_dir, git_dir).resolve() != Path(app_dir, common).resolve())
+
+
+def swiftui_insert(ws):
+    """QA 워크트리의 SwiftUI 소스에 ID를 끼워 넣는다. 빌드가 끝나면 반드시 swiftui_restore. 반환: manifest 경로 또는 None"""
+    if not swiftui_enabled(ws):
+        return None
+    if not is_qa_worktree(ws.app_dir):
+        # 개발 폴더의 소스는 고치지 않는다. auto면 건너뛰고(UIKit 앱에 SwiftUI 파일이 조금 섞인 경우), insert면 실패.
+        if ws.swiftui == "insert":
+            fail("SwiftUI ID 삽입은 QA 워크트리에서만 합니다 (개발 폴더의 소스는 고치지 않습니다).",
+                 "qakit init <앱> --worktree 로 만든 작업공간을 쓰거나, qakit.yml에 swiftui: off")
+        warn("SwiftUI 소스가 있지만 앱 폴더가 QA 워크트리가 아니라 ID를 삽입하지 않습니다 (qakit init --worktree)")
+        return None
+    tool = ensure_swiftui_ids()
+    manifest = ws.swiftui_manifest
+    if manifest.exists():
+        fail("이전 SwiftUI ID 삽입이 복원되지 않았습니다.", "qakit swiftui-ids --restore")
+    status = git(ws.app_dir, "status", "--porcelain", "--", *app_pathspec(ws)) or ""
+    dirty = [l[3:] for l in status.splitlines() if l[:2].strip() and l[:2] != "??" and l.endswith(".swift")]
+    if dirty:
+        fail("워크트리의 Swift 소스에 커밋되지 않은 변경이 있어 ID를 삽입하지 않습니다: " + ", ".join(dirty[:5]),
+             "워크트리는 개발 브랜치와 같아야 합니다. git -C <워크트리> status 로 확인")
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    r = run([str(tool), "insert", *swiftui_sources(ws), "--exclude", ws.root.name, "--manifest", str(manifest)], check=False)
+    if r.returncode != 0:
+        fail("SwiftUI ID 삽입 실패", (r.stdout or "")[-800:])
+    info("   SwiftUI ID: " + (r.stdout or "").strip().splitlines()[-1])
+    return manifest
+
+
+def swiftui_restore(ws, manifest):
+    if not manifest or not manifest.exists():
+        return
+    r = run([str(ensure_swiftui_ids()), "restore", "--manifest", str(manifest)], check=False)
+    if r.returncode != 0 or manifest.exists():
+        fail("SwiftUI ID 복원 실패 — 워크트리 소스가 바뀐 채 남아 있습니다.",
+             f"qakit swiftui-ids --restore  (manifest: {manifest})")
+
+
+def swiftui_list(ws):
+    """swiftui-ids list --json → [{id, kind, view, file, line, overridable}]"""
+    if not swiftui_enabled(ws):
+        return []
+    r = run([str(ensure_swiftui_ids()), "list", *swiftui_sources(ws), "--exclude", ws.root.name, "--json"], check=False)
+    if r.returncode != 0:
+        fail("swiftui-ids list 실패", (r.stdout or "")[-800:])
+    text = r.stdout or ""
+    return json.loads(text[text.index("["):text.rindex("]") + 1]) if "[" in text else []
 
 
 RUNNER_MANAGED = ["Runner/project.yml", "Runner/Host/HostApp.swift", "Runner/UITests/QAKit/QAKitDumpTests.swift"]
@@ -611,7 +716,7 @@ def make_qa_worktree(project, args):
     return wt / project.relative_to(top)
 
 
-LOCAL_SKIP = re.compile(r"(^|/)(xcuserdata|\.build|build|DerivedData|\.claude|QA|Pods|node_modules|\.swiftpm|SourcePackages)(/|$)|\.DS_Store$")
+LOCAL_SKIP = re.compile(r"(^|/)(xcuserdata|\.build|build|DerivedData|Derived|\.claude|\.codex|\.githooks|\.tuist|\.obsidian|QA|Pods|node_modules|\.swiftpm|SourcePackages|[^/]+\.xcodeproj|[^/]+\.xcworkspace)(/|$)|\.DS_Store$")
 
 
 def copy_local_files(src_repo, wt, max_bytes=1_000_000):
@@ -778,6 +883,19 @@ def cmd_doctor(args):
     else:
         info("ℹ️  autoid: embedded — 앱에 AutoID.swift가 들어가 있어야 합니다.")
 
+    if ws.app_dir and swiftui_enabled(ws):
+        if is_qa_worktree(ws.app_dir):
+            ok("SwiftUI ID 삽입: QA 워크트리 확인됨")
+        elif ws.swiftui == "insert":
+            check(False, "", "swiftui: insert 인데 앱 폴더가 QA 워크트리가 아님 (삽입은 워크트리에서만)",
+                  "qakit init <앱> --worktree 또는 qakit.yml에 swiftui: off")
+        else:
+            warn("SwiftUI 소스가 있지만 앱 폴더가 QA 워크트리가 아니라 SwiftUI ID를 붙이지 않습니다 (qakit init --worktree)")
+        check(not ws.swiftui_manifest.exists(), "SwiftUI ID 삽입 복원 상태 정상",
+              "이전 SwiftUI ID 삽입이 복원되지 않음 (워크트리 소스가 바뀐 채)", "qakit swiftui-ids --restore")
+        if not SWIFTUI_IDS_BIN.exists():
+            info("ℹ️  swiftui-ids 도구는 첫 qakit build-app 때 빌드됩니다 (몇 분)")
+
     if ws.secrets_path.exists():
         keys = sorted(ws.secrets().keys())
         example = ws.root / "secrets.example.txt"
@@ -830,11 +948,16 @@ def cmd_build_app_ws(ws):
            "-derivedDataPath", str(ws.app_build_dir)]
     state = app_state(ws)
     before = git(ws.app_dir, "status", "--porcelain", "--", *app_pathspec(ws))
-    # 앱 레포의 Package.resolved를 고치지 않는다 (QA는 앱 레포를 수정하지 않음)
-    r = run(cmd + ["-onlyUsePackageVersionsFromResolvedFile"], check=False)
-    if r.returncode != 0 and "resolved" in (r.stdout or "").lower() and "error:" in (r.stdout or ""):
-        warn("Package.resolved 고정 빌드 실패 → 고정 없이 다시 빌드 (앱 레포의 Package.resolved가 바뀔 수 있음)")
-        r = run(cmd, check=False)
+    # SwiftUI 소스에 ID를 끼워 넣고 빌드한 뒤, 무슨 일이 있어도(실패·Ctrl-C) 원래대로 되돌린다
+    manifest = swiftui_insert(ws)
+    try:
+        # 앱 레포의 Package.resolved를 고치지 않는다 (QA는 앱 레포를 수정하지 않음)
+        r = run(cmd + ["-onlyUsePackageVersionsFromResolvedFile"], check=False)
+        if r.returncode != 0 and "resolved" in (r.stdout or "").lower() and "error:" in (r.stdout or ""):
+            warn("Package.resolved 고정 빌드 실패 → 고정 없이 다시 빌드 (앱 레포의 Package.resolved가 바뀔 수 있음)")
+            r = run(cmd, check=False)
+    finally:
+        swiftui_restore(ws, manifest)
     log_path.write_text(r.stdout or "", encoding="utf-8")
     after = git(ws.app_dir, "status", "--porcelain", "--", *app_pathspec(ws))
     if before is not None and after != before:
@@ -1214,6 +1337,30 @@ def do_sync(ws, compile_check=True, force_build=False, skip_build=False):
 
 # ─────────────────────────────── 명령: gen-ids ───────────────────────────────
 
+def cmd_swiftui_ids(args):
+    ws = find_workspace(args.workspace)
+    if args.restore:
+        if not ws.swiftui_manifest.exists():
+            ok("복원할 삽입이 없습니다 (manifest 없음)")
+            return
+        swiftui_restore(ws, ws.swiftui_manifest)
+        ok("SwiftUI ID 삽입을 되돌렸습니다")
+    elif args.insert:
+        manifest = swiftui_insert(ws)
+        if manifest is None:
+            warn("SwiftUI 소스가 없거나 swiftui: off 입니다")
+        else:
+            ok(f"삽입한 채 둡니다. 확인 뒤: qakit swiftui-ids --restore  (git -C {ws.app_dir} diff 로 보기)")
+    else:
+        if ws.swiftui == "off":
+            warn("qakit.yml: swiftui: off")
+        items = swiftui_list(ws)
+        for x in items:
+            rel = os.path.relpath(x["file"], ws.app_dir)
+            print(f'{x["id"]}\t{x["kind"]}{"  (호출부 ID가 우선)" if x.get("overridable") else ""}\t{rel}:{x["line"]}')
+        info(f"SwiftUI ID {len(items)}개")
+
+
 def cmd_gen_ids(args):
     ws = find_workspace(args.workspace)
     trees, model = generate_ids(ws, quiet=False)
@@ -1224,6 +1371,9 @@ def cmd_gen_ids(args):
 def generate_ids(ws, quiet=True):
     sources = ws.id_sources or [ws.app_dir]
     trees, model, nfiles = gen_ids.build(sources, exclude=[ws.root])
+    swiftui = swiftui_list(ws)
+    if swiftui:
+        gen_ids.merge_ids(trees, [x["id"] for x in swiftui], kind="swiftui")
     ids = sorted(gen_ids.all_ids(trees))
     state = app_state(ws)
     note = f"앱: {ws.project.parent.name}" + (f" [{state.get('branch')} @ {state.get('commit')}]" if state.get("branch") else "")
@@ -1235,7 +1385,7 @@ def generate_ids(ws, quiet=True):
     save_state(ws, "ids", {"ids": ids, "app": note})
     if quiet:
         return trees, model
-    info(f"   소스 {nfiles}개 → ID {len(ids)}개 → {ws.ids_file.relative_to(ws.root)}")
+    info(f"   소스 {nfiles}개 → ID {len(ids)}개" + (f" (SwiftUI {len(swiftui)}개 포함)" if swiftui else "") + f" → {ws.ids_file.relative_to(ws.root)}")
     if prev_ids is not None:
         added = sorted(set(ids) - prev_ids)
         removed = sorted(prev_ids - set(ids))
@@ -1591,6 +1741,13 @@ def main():
 
     p = sub.add_parser("build-app", help="대상 앱 빌드 + 설치 + 권한 허용")
     p.set_defaults(func=cmd_build_app)
+
+    p = sub.add_parser("swiftui-ids", help="SwiftUI ID 삽입 도구: 목록 보기 / 손으로 삽입 / 복원")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--list", action="store_true", help="삽입될 ID 목록 (소스 수정 없음)")
+    g.add_argument("--insert", action="store_true", help="워크트리 소스에 삽입한 채 둔다 (diff 확인용. 끝나면 --restore)")
+    g.add_argument("--restore", action="store_true", help="삽입을 되돌린다")
+    p.set_defaults(func=cmd_swiftui_ids)
 
     p = sub.add_parser("sync", help="앱 변경 반영: 재빌드·설치 + ID 재생성 + 테스트 코드 컴파일 확인")
     p.add_argument("--rebuild", action="store_true", help="변경이 없어도 앱 재빌드")

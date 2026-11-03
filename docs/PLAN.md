@@ -39,7 +39,7 @@
 
 ## SwiftUI 지원 설계 (다음 단계)
 
-> 상태: S1(PoC)·S2(도구) 완료(2026-11-03, PopPang-iOS). 다음은 S3 CLI 통합. 조사 결과를 바탕으로 방식 ②(QA 빌드 직전 소스 삽입)로 결정.
+> 상태: S1(PoC)·S2(도구)·S3(CLI 통합) 완료(2026-11-03, SwiftUI 시범 앱). 남은 것은 S4 문서·둘째 앱 검증. 조사 결과를 바탕으로 방식 ②(QA 빌드 직전 소스 삽입)로 결정.
 
 ### 왜 UIKit 방식이 안 되나
 
@@ -77,8 +77,8 @@ qakit build-app
 |---|---|
 | `Tools/swiftui-ids` | SwiftSyntax(604) 기반 Swift 패키지. `list`(ID만 계산, `--json`), `insert`(소스 수정 + manifest에 원본 보관), `restore`(manifest로 복원). 첫 빌드는 SwiftSyntax 컴파일로 약 3분, `Tools/swiftui-ids/.build/release/swiftui-ids` |
 | gen-ids | SwiftUI ID는 Python으로 다시 구현하지 않고 `swiftui-ids list`를 호출해 합친다. **삽입과 상수 생성이 같은 코드**라 규칙 불일치 버그가 원천 차단된다 |
-| qakit CLI | `build-app` 훅, `doctor` 검사, `swiftui-ids --restore`. `check`·`gen-ids --verify`·`dump-ui` 커버리지는 ID 목록만 커지므로 그대로 |
-| `qakit.yml` | `swiftui: auto \| off` (기본 auto: `import SwiftUI`가 있는 파일이 있으면 삽입) |
+| qakit CLI | `build-app` 훅(워크트리 확인 → insert → 빌드 → finally restore), `doctor` 검사(워크트리·manifest 잔존), `swiftui-ids --list\|--insert\|--restore`. `gen-ids`가 `list --json`을 트리에 합쳐 `QAID` 상수로 만들고(순서 번호는 `_0`), `check`·`gen-ids --verify`는 그대로 동작 |
+| `qakit.yml` | `swiftui: auto \| insert \| off` (기본 auto: `import SwiftUI`가 있는 파일이 있으면 삽입). `ids.sources`로 빌드되는 모듈 폴더만 지정 |
 | 스킬 | SwiftUI ID 규칙과 함정(아래) 추가 |
 
 ### ID 규칙 (SwiftUI)
@@ -92,7 +92,7 @@ qakit build-app
 | 라벨이 클로저인 Button | 안의 첫 `Text("…")`/`Label("…")`/`Image(systemName:)` 리터럴 | `Button { } label: { Image(systemName: "xmark") }` → `LoginView.Button.xmark` |
 | 라벨을 정적으로 알 수 없음 (보간 문자열, 변수) | `뷰타입.종류.N` (body 안 등장 순서) | `Button(item.title)` → `ListView.Button.0` |
 | 같은 ID가 한 타입 안에 둘 이상 | 두 번째부터 `_2`, `_3` | `LoginView.Button.확인_2` |
-| 컨트롤 하나짜리 커스텀 뷰의 호출부 | `뷰타입.커스텀뷰타입.인자리터럴` (enum `.kakao`, 문자열) / 없으면 `.N` | `SocialLoginButton(type: .kakao)` → `AuthFeatureView.SocialLoginButton.kakao`. 바깥 ID가 안쪽 ID를 덮는다(S1 확인). 도구가 커스텀 뷰 body를 분석해 말단 컨트롤이 정확히 하나일 때만 붙인다 |
+| 컨트롤 하나짜리 커스텀 뷰의 호출부 | `뷰타입.커스텀뷰타입.인자리터럴` (enum `.close`, 문자열) / 없으면 `.N` | `IconButton(icon: .close)` → `HeaderView.IconButton.close`. 바깥 ID가 안쪽 ID를 덮는다(S1 확인). 도구가 커스텀 뷰 body를 분석해 말단 컨트롤이 정확히 하나일 때만 붙인다 |
 | 컨트롤 둘 이상인 커스텀 뷰의 호출부 | 붙이지 않음 | 붙이면 안의 ID가 전부 덮인다(S1 확인). 안쪽 body가 자기 타입 접두사로 받음 |
 | ForEach/List 행 | 행 콘텐츠에 `.accessibilityElement(children: .contain)` + `뷰타입.row` | 행은 여러 개가 같은 ID. 테스트는 index·라벨로 고름 (UIKit 셀과 동일). `.contain` 동작은 S1에서 확인, List 셀 구조는 미확인 |
 | Text, Image, 컨테이너(VStack 등) | 붙이지 않음 | 글자로 찾기. 컨테이너에 ID를 붙이면 자손 요소 ID를 전부 덮는다(S1 확인) |
@@ -110,14 +110,14 @@ qakit build-app
 - **ID는 앱 전체에서 유일하고 정적이어야 한다** (Apple 권고). → 콘텐츠로 ID를 만들지 않는다. 동적 라벨은 순서 번호.
 - **SwiftUI TextField의 ID는 안의 UITextField에 전달되지 않는다.** XCUITest 접근성 트리에는 보이므로 테스트에는 문제없음. AutoID의 UIKit 규칙과 섞이지 않게만 주의.
 
-### S1 결과 (2026-11-03, PopPang-iOS 온보딩·로그인 화면)
+### S1 결과 (2026-11-03, SwiftUI 시범 앱의 온보딩·로그인 화면)
 
 QA 워크트리 소스에 손으로 `.accessibilityIdentifier`를 넣고 두 번 빌드해 `dump`로 확인했다. 베이스라인 커버리지 0% → 67%(온보딩), 75%(로그인).
 
 | 실험 | 결과 |
 |---|---|
-| 리터럴 라벨 Button (`Text("건너뛰기", bundle:)`) | ✅ `OnboardingFeatureView.Button.건너뛰기` |
-| 커스텀 뷰 안 Button, 동적 라벨 → 순서 번호 | ✅ `OnboardingNextButton.Button.0`, 같은 커스텀 뷰 3개면 전부 같은 ID (`SocialLoginButton.Button.0`) |
+| 리터럴 라벨 Button (`Text("건너뛰기", bundle:)`) | ✅ `OnboardingView.Button.건너뛰기` |
+| 커스텀 뷰 안 Button, 동적 라벨 → 순서 번호 | ✅ `NextButton.Button.0`, 같은 커스텀 뷰 3개면 전부 같은 ID (`LoginButton.Button.0`) |
 | Button 안 Text에도 ID | Text가 Button의 자식 요소로 **자기 ID를 유지**. Button이 자식 ID를 지우지 않음 |
 | 커스텀 뷰 호출부 ID (안쪽 ID와 함께) | ✅ 바깥이 이김. `.disabled()` 앞이든 뒤든 같음 |
 | 컨테이너(VStack) ID, `.contain` 없이 | ❌ 직계 자손 요소(Button, CollectionView)의 ID를 전부 덮음. 단, Button 안의 Text(요소의 자식)는 유지 |
@@ -134,26 +134,36 @@ QA 워크트리 소스에 손으로 `.accessibilityIdentifier`를 넣고 두 번
 
 ### S2 결과 (2026-11-03)
 
-`Tools/swiftui-ids`를 만들어 PopPang-iOS `Projects/`(Legacy 제외, 92개 파일)에 돌렸다. ID 139개를 40개 파일에 삽입한 소스가 **컴파일 에러 없이 빌드**됐고, 온보딩·로그인 화면 덤프에 나온 앱 ID 7개가 **모두 `list` 결과와 일치**했다 (로그인 화면 커버리지 100%). `restore` 뒤 `git status` 깨끗.
+`Tools/swiftui-ids`를 만들어 시범 앱(Tuist·TCA, SwiftUI 위주)의 `Projects/`(보관용 복사본 제외, 92개 파일)에 돌렸다. ID 139개를 40개 파일에 삽입한 소스가 **컴파일 에러 없이 빌드**됐고, 온보딩·로그인 화면 덤프에 나온 앱 ID 7개가 **모두 `list` 결과와 일치**했다 (로그인 화면 커버리지 100%). `restore` 뒤 `git status` 깨끗.
 
 구현하면서 규칙에 더한 것:
-- **모듈 키**: 같은 타입 이름이 다른 모듈에 있을 수 있다 (`OnboardingFeatureView`가 V1·V2 모듈에 각각). 경로의 `Sources` 바로 위까지를 모듈 키로 삼아 (모듈, 타입)별로 번호·중복을 매긴다. ID 문자열에는 모듈이 들어가지 않으므로 두 모듈이 같은 ID를 낼 수 있다 → 상수 생성 때 중복 제거 필요 (S3).
-- **컨트롤 하나짜리 판정**에 "컨트롤 밖에 Text/Image/Label이 없다"를 추가. 버튼 하나와 설명 글자가 있는 화면 뷰(`MaintenanceFeatureView`)를 래퍼로 오인해 호출부 ID가 글자에도 붙는 것을 막는다.
+- **모듈 키**: 같은 타입 이름이 다른 모듈에 있을 수 있다 (같은 화면 이름이 V1·V2 모듈에 각각). 경로의 `Sources` 바로 위까지를 모듈 키로 삼아 (모듈, 타입)별로 번호·중복을 매긴다. ID 문자열에는 모듈이 들어가지 않으므로 두 모듈이 같은 ID를 낼 수 있다 → 상수 생성 때 중복 제거 필요 (S3).
+- **컨트롤 하나짜리 판정**에 "컨트롤 밖에 Text/Image/Label이 없다"를 추가. 버튼 하나와 설명 글자가 있는 화면 뷰(점검 안내 화면)를 래퍼로 오인해 호출부 ID가 글자에도 붙는 것을 막는다.
 - **행 규칙 제한**: 행 콘텐츠에 XCUITest가 보는 것(컨트롤·글자·그림·커스텀 뷰)이 있을 때만, 그리고 콘텐츠가 호출식일 때만 붙인다. 점(Capsule)만 있는 ForEach, `if`/`switch`로 시작하는 행은 제외 (if 식 뒤에는 수식어를 못 붙인다).
 - 라벨 추출은 `Text("x", bundle:, comment:)`, `String(localized: "x", …)`, `LocalizedStringKey`, `Label`, `Image(systemName:)`까지.
 - `#Preview`, `PreviewProvider`, `*Tests`·`*Demo` 폴더는 건너뛴다.
-- S1 미결이던 "backButton"은 앱의 커스텀 뷰 `BackNavigationButton`이어서 `BackNavigationButton.Button.0`으로 잡혔다. 시스템 기본 뒤로가기는 여전히 미결.
+- S1 미결이던 "backButton"은 앱의 커스텀 뒤로가기 뷰여서 `<그 뷰>.Button.0`으로 잡혔다. 시스템 기본 뒤로가기는 여전히 미결.
+
+### S3 결과 (2026-11-03)
+
+- `qakit build-app`: 삽입 → 빌드 → `finally` 복원. 시범 앱에서 139개 삽입 빌드 뒤 manifest 삭제·`git status` 깨끗 확인. `sync`·`restore`·`test`의 자동 재빌드도 같은 함수를 지나므로 함께 적용된다.
+- 삽입 전 확인: QA 워크트리(`--git-dir` ≠ `--git-common-dir`)가 아니면 실패, manifest가 남아 있으면 실패, 워크트리의 추적 Swift 파일에 미커밋 변경이 있으면 실패.
+- `gen-ids`: `swiftui-ids list --json`을 UIKit 트리에 합친다. 시범 앱 `Projects/` 기준 ID 150개(SwiftUI 139). `gen-ids --verify` 덤프 6개 불일치 0. `QAIDs.swift`는 `swiftc -parse` 통과. 시나리오를 `tap: OnboardingView.Button.건너뛰기` 같은 ID로 고쳐 `check`·`run` 통과.
+- 도구 빌드 여부는 소스 해시 스탬프로 판단한다 (수정 시각은 checkout·복사로 흔들려 두 번 빌드했다).
+- `init`의 로컬 파일 복사에서 `*.xcodeproj`·`*.xcworkspace`·`Derived`·`.githooks`·`.tuist`·`.codex`·`.obsidian`을 제외했다.
+- 문서: README(준비물·한계·"SwiftUI 화면의 ID" 절), cli.md, troubleshooting.md, SKILL.md(SwiftUI 화면 찾는 법), 템플릿 `qakit.yml`.
+- 남은 것(S4): 둘째 앱(혼합 UIKit+SwiftUI) 검증, 1MB 넘는 gitignore 폴더 복사 목록(`qakit.yml`), 시스템 기본 뒤로가기 규칙.
 
 ### 단계
 
 | 단계 | 내용 | 완료 조건 |
 |---|---|---|
-| S1. PoC | 손으로 삽입 → `dump` (PopPang-iOS) | ✅ 커버리지 0→67~75%. 컨테이너 덮어쓰기·`.contain`·Button 자식 동작 확인, 호출부 규칙 확정 |
-| S2. 도구 | `Tools/swiftui-ids` (list/insert/restore), 위 규칙 전부 | ✅ PopPang 139개 삽입 빌드 성공, 덤프 ID 7/7 일치, 복원 뒤 git 깨끗 |
-| S3. CLI | build-app 훅, 복원 보장, doctor, gen-ids 통합, `qakit.yml` 항목 | 강제 종료 후에도 워크트리가 깨끗해짐. `gen-ids --verify` 통과 |
+| S1. PoC | 손으로 삽입 → `dump` (시범 앱) | ✅ 커버리지 0→67~75%. 컨테이너 덮어쓰기·`.contain`·Button 자식 동작 확인, 호출부 규칙 확정 |
+| S2. 도구 | `Tools/swiftui-ids` (list/insert/restore), 위 규칙 전부 | ✅ 시범 앱 139개 삽입 빌드 성공, 덤프 ID 7/7 일치, 복원 뒤 git 깨끗 |
+| S3. CLI | build-app 훅, 복원 보장, doctor, gen-ids 통합, `qakit.yml` 항목 | ✅ 시범 앱: 훅 빌드 뒤 git 깨끗, `gen-ids --verify` 불일치 0, ID 시나리오 `check`·`run` 통과 |
 | S4. 문서·검증 | 스킬 규칙, README 한계 갱신, 혼합(UIKit+SwiftUI) 앱 한 개 더 | 새 AI 세션이 스킬만 보고 SwiftUI 화면 테스트를 첫 실행에 통과 |
 
-S1·S2는 PopPang-iOS(QA 워크트리 `PopPang-iOS-qa`)에서 마쳤다. 다음은 S3 CLI 통합: `build-app` 훅(워크트리 확인 → insert → 빌드 → finally restore), `doctor`의 manifest 잔존 검사, `gen-ids`가 `swiftui-ids list --json`을 합치기(모듈 간 같은 ID 중복 제거), `qakit.yml`의 `swiftui:` 항목, `init`의 로컬 파일 복사 제외 목록 보강.
+S1~S3은 SwiftUI 시범 앱의 QA 워크트리에서 마쳤다. 다음은 S4: 혼합(UIKit+SwiftUI) 앱 하나 더, 새 AI 세션이 스킬만 보고 SwiftUI 화면 테스트를 첫 실행에 통과하는지.
 
 ### 미결
 
@@ -175,7 +185,7 @@ S1·S2는 PopPang-iOS(QA 워크트리 `PopPang-iOS-qa`)에서 마쳤다. 다음�
 | 5. 범용성 | 두 번째 앱 | ✅ 도구 버그 수정 후 동작 |
 | 6. 정기 실행 | — | 하지 않음 |
 | 이후 | QA 워크트리, 시나리오 언어, AI 없는 저장·복구, 시뮬레이터 잠금, 앱 설정값 판정(pref/repeat/watch), QA README 자동 생성 | ✅ v0.2.0 ~ v0.4.0 |
-| 7. SwiftUI | QA 빌드 직전 소스에 ID 삽입 ([설계](#swiftui-지원-설계-다음-단계)) | S1 ✅ S2 ✅ (도구 `Tools/swiftui-ids`, PopPang 로그인 화면 100%). 다음 S3 CLI 통합 |
+| 7. SwiftUI | QA 빌드 직전 소스에 ID 삽입 ([설계](#swiftui-지원-설계-다음-단계)) | S1 ✅ S2 ✅ S3 ✅ (시범 앱 로그인 화면 100%, `build-app`이 삽입·복원 자동). 다음 S4 둘째 앱 |
 
 ## 주요 결정과 배운 것
 

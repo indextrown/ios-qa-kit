@@ -28,7 +28,7 @@
 | iOS 시뮬레이터 | `xcrun simctl list devices available` |
 | Python 3 (macOS 기본) | `python3 --version` |
 | XcodeGen | `brew install xcodegen` |
-| UIKit 앱 | SwiftUI 화면은 자동 ID가 붙지 않습니다 (아래 [한계](#한계) 참고) |
+| UIKit 또는 SwiftUI 앱 | SwiftUI 화면은 QA 워크트리에서 빌드할 때 소스에 ID를 끼워 넣습니다 (아래 [SwiftUI 화면의 ID](#swiftui-화면의-id) 참고) |
 
 ---
 
@@ -412,6 +412,23 @@ ID는 **"누가 이 뷰를 프로퍼티로 갖고 있나"** 로 정해집니다.
 - 테스트에서는 문자열 대신 `QAID` 상수를 씁니다: `QAID.LoginView.loginButton`. 하위 요소가 있는 컴포넌트는 `.id` (예: `QAID.LoginView.emailField.id`).
 - 상수 파일(`Runner/UITests/Generated/QAIDs.swift`)은 큽니다. 필요한 화면만 찾으세요: `grep -n "enum LoginView " -A30 Runner/UITests/Generated/QAIDs.swift`
 
+### SwiftUI 화면의 ID
+
+SwiftUI는 실행 중에 읽을 프로퍼티 이름이 없어서, **QA 워크트리에서 `qakit build-app`을 할 때 소스에 `.accessibilityIdentifier(…)`를 끼워 넣고 빌드한 뒤 바로 되돌립니다.** 워크트리 소스는 빌드하는 동안만 바뀌고 레포 이력에는 남지 않습니다. 개발 폴더에는 절대 쓰지 않습니다 (`qakit.yml: swiftui: auto|insert|off`, 기본 auto = `import SwiftUI`가 있으면 함).
+
+| 대상 | ID | 예시 |
+|---|---|---|
+| 바인딩이 있는 컨트롤 (TextField, Toggle, Picker …) | `뷰타입.바인딩경로` | `TextField(text: $email)` → `LoginView.email` |
+| 라벨이 글자인 컨트롤 (Button, NavigationLink …) | `뷰타입.종류.라벨` | `Button("로그인")` → `LoginView.Button.로그인` |
+| 라벨을 소스에서 알 수 없는 컨트롤 | `뷰타입.종류.N` (등장 순서) | `Button(item.title)` → `ListView.Button.0` (상수는 `QAID.ListView.Button._0`) |
+| 컨트롤 하나만 감싼 커스텀 뷰의 호출부 | `뷰타입.커스텀뷰.인자` | `IconButton(icon: .close)` → `HeaderView.IconButton.close` |
+| ForEach/List 행 | `뷰타입.row` (여러 행이 같은 ID, 라벨·index로 구분) | `ItemListView.row` |
+
+- 같은 ID가 한 뷰에 둘 이상이면 `_2`, `_3`. 라벨은 공백·구두점이 `_`로 바뀌고 20자에서 잘립니다.
+- 앱이 직접 붙인 `accessibilityIdentifier`가 있는 요소는 건드리지 않습니다. Text·Image·VStack 같은 컨테이너에는 붙이지 않습니다 (컨테이너 ID는 자식 ID를 덮어씁니다).
+- 삽입될 목록 보기: `qakit swiftui-ids --list`. 삽입된 소스를 직접 보려면 `--insert` 뒤 `git diff`, 끝나면 `--restore`.
+- 앱이 Tuist처럼 프로젝트를 생성하는 구조면 워크트리에서 먼저 생성한 뒤 `qakit init`을 합니다. `ids.sources`로 빌드되는 모듈 폴더만 지정하세요 (보관용 복사본 폴더가 있으면 같은 타입 이름이 섞입니다).
+
 ---
 
 ## UI 요소를 찾는 우선순위
@@ -514,7 +531,7 @@ ID는 **"누가 이 뷰를 프로퍼티로 갖고 있나"** 로 정해집니다.
 | 지역 변수로 만든 뷰 (`let label = UILabel(); addSubview(label)`) | 화면 글자로 찾기: `text("확인")` |
 | 외부 SDK가 내부에서 만든 뷰 (예: 지도 SDK의 버튼) | 화면 글자 또는 좌표 |
 | 지도·차트·캔버스처럼 그려지는 영역 | 좌표로 조작, 결과는 그 위의 UI로 확인 |
-| SwiftUI 화면 | 지원 안 함 (UIKit 전용) |
+| SwiftUI 화면 | `qakit init --worktree`로 만든 QA 워크트리에서만 ID가 붙음 (개발 폴더 소스는 안 건드림). 시스템 기본 뒤로가기·동적 라벨 버튼은 라벨·순서 번호로 |
 | 실기기 | 자동 ID 주입은 시뮬레이터 전용. 실기기는 `AutoID/AutoID.swift`를 앱 Debug 빌드에 넣고 `QAAutoID.start()` 호출 (`qakit.yml: autoid: embedded`) |
 
 문제가 생기면: [troubleshooting.md](skills/ios-qa-kit/references/troubleshooting.md)

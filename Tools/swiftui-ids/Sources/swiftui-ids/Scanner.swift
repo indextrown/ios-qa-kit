@@ -248,7 +248,7 @@ private final class FileVisitor: SyntaxVisitor {
         return nil
     }
 
-    /// 커스텀 뷰 첫 인자 리터럴: `.kakao` → "kakao", `"로그인"` → "로그인"
+    /// 커스텀 뷰 첫 인자 리터럴: `.close` → "close", `"로그인"` → "로그인"
     private func firstArgLiteral(_ node: FunctionCallExprSyntax) -> String? {
         guard let first = node.arguments.first else { return nil }
         if let s = stringLiteral(first.expression) { return s }
