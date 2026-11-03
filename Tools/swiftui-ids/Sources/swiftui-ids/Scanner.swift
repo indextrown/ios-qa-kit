@@ -135,9 +135,12 @@ private final class FileVisitor: SyntaxVisitor {
         } else if repeaters.contains(callee) {
             scanner.declare(module, view).hasRepeater = true
             if let row = rowExpression(node) {
-                // 행 콘텐츠가 그 자체로 컨트롤이면 컨트롤 ID로 충분하다 (둘 다 붙이면 컨테이너가 돼 버린다)
-                if let rowCall = row.as(FunctionCallExprSyntax.self), let n = calleeName(rowCall), controls[n] != nil {
-                    // skip
+                // 행 콘텐츠의 수식어 체인을 벗겨 본다: `Button { }.padding().accessibilityIdentifier("x")`
+                let (base, modifiers) = modifierChain(row)
+                if let base, let n = calleeName(base), controls[n] != nil {
+                    // 행 콘텐츠가 그 자체로 컨트롤이면 컨트롤 ID로 충분하다 (둘 다 붙이면 컨테이너가 돼 버린다)
+                } else if modifiers.contains("accessibilityIdentifier") || modifiers.contains("accessibilityHidden") {
+                    // 앱이 행에 직접 ID를 붙였다 → 덮어쓰지 않는다
                 } else if hasVisibleContent(row) {
                     scanner.add(Candidate(kind: .row, module: module, view: view, file: file, line: line(of: row), order: order,
                                           insertOffset: row.endPositionBeforeTrailingTrivia.utf8Offset,
@@ -154,6 +157,29 @@ private final class FileVisitor: SyntaxVisitor {
             scanner.add(candidate(.custom(callee), node: node, view: view))
         }
         return .visitChildren
+    }
+
+    /// 수식어 체인을 벗겨 맨 안쪽 호출과 수식어 이름들을 돌려준다.
+    /// `Button { }.padding().accessibilityIdentifier("x")` → (Button 호출, ["accessibilityIdentifier", "padding"])
+    private func modifierChain(_ expr: ExprSyntax) -> (FunctionCallExprSyntax?, [String]) {
+        var current = expr
+        var names: [String] = []
+        while true {
+            if let call = current.as(FunctionCallExprSyntax.self) {
+                if let member = call.calledExpression.as(MemberAccessExprSyntax.self), let base = member.base {
+                    names.append(member.declName.baseName.text)
+                    current = base
+                    continue
+                }
+                return (call, names)
+            }
+            if let member = current.as(MemberAccessExprSyntax.self), let base = member.base {
+                names.append(member.declName.baseName.text)
+                current = base
+                continue
+            }
+            return (nil, names)
+        }
     }
 
     /// 행 콘텐츠에 XCUITest가 보는 것(컨트롤·글자·그림·커스텀 뷰)이 있는가. 점(Capsule)만 있는 ForEach는 행이 아니다.
