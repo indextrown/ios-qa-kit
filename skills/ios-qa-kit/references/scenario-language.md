@@ -25,10 +25,10 @@ steps:
 | read | `read: { from: <대상>, pattern: '정규식', as: 변수 }` | 라벨에서 값 추출 (첫 그룹) |
 | scroll-to | `scroll-to: { target: <대상>, in: <대상>, max: 8, dir: up, required: false }` | 화면에 보일 때까지 스크롤 |
 | swipe | `swipe: { on: <대상>, dir: up }` | |
-| pinch | `pinch: { on: <대상>, scale: 2.5, velocity?, settle?: 0.5 }` | 1보다 크면 확대, 작으면 축소 (속도 부호 자동, 기본 속도는 동작이 1초 안팎). settle: 끝난 뒤 쉬는 초 |
+| pinch | `pinch: { on: <대상>, scale: 2.5, velocity?, settle?: 0.5 }` | 1보다 크면 확대, 작으면 축소. 속도 부호 자동, 기본 속도 `max(4, scale 또는 1/scale)` (동작 1초 안팎). settle: 끝난 뒤 쉬는 초 |
 | snapshot | `snapshot: { of: <대상>, as: 이름 }` | 스크린샷 저장·첨부 (changed 조건용) |
 | expect | `expect: <조건>`, `timeout:`, `hold:`, `message:` | 판정. hold는 그 시간 동안 유지돼야 통과 |
-| repeat | `repeat: { until: <조건>, max: 5, wait: 3, watch?: 설정키, steps: [단계] }` | 조건이 맞을 때까지 단계 반복 (wait: 매 반복 뒤 조건을 기다리는 초). 끝까지 안 맞으면 실패 (`required: false`면 통과). **`watch`**: 매 반복 뒤 그 앱 설정 값이 바뀌고 1초간 멈출 때까지(관성 확대 등) 기다렸다 판정 — 설정이 늦게 저장돼 목표를 넘치는 것을 막는다 (pref 조건과 함께) |
+| repeat | `repeat: { until: <조건>, max: 5, wait: 3, watch?: 설정키, steps: [단계] }` | **처음 실행 전에 조건을 먼저 본다** — 이미 맞으면 한 번도 실행하지 않는다("반복 0번"). 맞을 때까지 최대 max번 반복, 끝까지 안 맞으면 실패 (`required: false`면 통과). `wait`: 매 반복 뒤 조건을 기다리는 최대 초. **`watch`**: 매 반복 뒤 그 앱 설정 값이 바뀌고 1초간 멈출 때까지 최대 `wait`초 기다렸다 판정 — 관성 확대·늦은 저장으로 목표를 넘치는 것을 막는다. 값이 안 바뀌면(한계 도달 등) `wait`초를 다 쓴다 |
 | read-pref | `read-pref: { key: 키, as: 변수 }` | 앱 설정(UserDefaults) 값을 변수로 (기록·비교용) |
 | hide-keyboard | `hide-keyboard: true` | 키보드 내리기 |
 | note / relaunch / fail | `note: 글자` / `relaunch: true` / `fail: 글자` | |
@@ -62,8 +62,11 @@ steps:
 어떤 키가 있는지는 앱 소스(UserDefaults 키)나 `plutil -p <경로>`로 확인한다.
 **앱은 설정을 디스크에 늦게 쓴다 (5초 넘게 걸린 적 있음).** `expect`의 pref 판정은 `timeout: 10~15`, 반복에는 `watch`를 쓴다.
 
+- **시작 값이 오래된 값일 수 있다**: 앱이 직전 변경을 아직 디스크에 안 썼을 수 있다. 화면 조작 직후 시작한다면 `expect: { pref: … }`에 `timeout`을 두거나, 첫 `repeat`가 한 번 더 도는 것을 감안한다.
+- **확대와 축소의 효과가 다르다** (지도 앱 측정): 확대는 핀치 한 번에 대략 `log2(scale) × 0.9` 단계(scale 2.5 ≈ +1.1, 10 ≈ +3.2)지만, **축소는 훨씬 작다** (scale 0.25 ≈ −0.7). 축소 반복은 `max`를 넉넉히(8 이상).
+
 ```yaml
-# 예: 지도를 줌 20 근처까지 확대 (핀치 한 번에 대략 log2(scale) × 0.9 단계)
+# 예: 지도를 줌 20 근처까지 확대
 - repeat:
     until: { pref: { key: zoom, gte: 17 } }
     watch: zoom          # 핀치 뒤 zoom 값이 갱신될 때까지 기다렸다 판정 (넘침 방지)
@@ -76,6 +79,16 @@ steps:
     wait: 5
     max: 6
     steps: [ pinch: { on: HomeView.mapView, scale: 2 } ]
+```
+
+```yaml
+# 예: 지금 줌이 크든 작든 12 근처(11.5~12.5)로 — 큰 핀치로 범위 가까이, 작은 핀치로 양쪽에서 맞춘다
+- repeat: { until: { pref: { key: zoom, lte: 13.5 } }, watch: zoom, wait: 8, max: 8, steps: [ pinch: { on: HomeView.mapView, scale: 0.25 } ] }
+- repeat: { until: { pref: { key: zoom, gte: 10.5 } }, watch: zoom, wait: 8, max: 6, steps: [ pinch: { on: HomeView.mapView, scale: 4 } ] }
+- repeat: { until: { pref: { key: zoom, lte: 12.5 } }, watch: zoom, wait: 8, max: 6, steps: [ pinch: { on: HomeView.mapView, scale: 0.7 } ] }
+- repeat: { until: { pref: { key: zoom, gte: 11.5 } }, watch: zoom, wait: 8, max: 6, steps: [ pinch: { on: HomeView.mapView, scale: 1.5 } ] }
+- expect: { all: [ { pref: { key: zoom, gte: 11.5 } }, { pref: { key: zoom, lte: 12.5 } } ] }
+  timeout: 15
 ```
 
 ## 기본 대기 시간
