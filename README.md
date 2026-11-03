@@ -78,7 +78,7 @@ cp secrets.example.txt secrets.txt
 7. [자동으로 붙는 ID 규칙](#자동으로-붙는-id-규칙)
    - [UIKit 화면의 ID](#uikit-화면의-id) · [SwiftUI 화면의 ID](#swiftui-화면의-id)
 8. [UI 요소를 찾는 우선순위](#ui-요소를-찾는-우선순위)
-   - [AI가 요소를 알아내는 순서](#ai가-요소를-알아내는-순서) · [찾은 뒤 상태 판정하기](#찾은-뒤-상태-판정하기)
+   - [화면에 보이는 것은 어떻게 읽나](#화면에-보이는-것은-어떻게-읽나) · [AI가 요소를 알아내는 순서](#ai가-요소를-알아내는-순서) · [찾은 뒤 상태 판정하기](#찾은-뒤-상태-판정하기)
 9. [앱이 바뀌었을 때](#앱이-바뀌었을-때)
 
 **참고**
@@ -551,6 +551,41 @@ ID는 **"누가 이 뷰를 프로퍼티로 갖고 있나"** 로 정해집니다.
 
 ### UIKit 화면의 ID
 
+**어떻게 붙이나** — 앱 코드에는 손대지 않습니다. 시뮬레이터에서 끼워 넣은 `AutoID.dylib`가 UIKit 메서드에 **익스텐션으로 훅을 걸고**, 화면이 뜰 때 **`Mirror`로 저장 프로퍼티 이름을 읽어** ID로 붙입니다.
+
+```swift
+// ① dylib가 로드되면 시작 (Loader.m의 +load → QAAutoID.start)
+//    UIKit 메서드를 익스텐션 메서드와 맞바꾼다 (method swizzling)
+swizzle(UIViewController.self, #selector(viewDidAppear(_:)), #selector(qa_viewDidAppear(_:)))
+swizzle(UIView.self,           #selector(didMoveToWindow),   #selector(qa_didMoveToWindow))
+
+// ② 화면이 뜨면 원래 동작을 먼저 하고, ID 붙이기를 덧붙인다
+extension UIViewController {
+    @objc func qa_viewDidAppear(_ animated: Bool) {
+        qa_viewDidAppear(animated)                 // 맞바꿨으므로 = 원래 viewDidAppear
+        QAAutoID.handle(viewController: self)
+    }
+}
+extension UIView {
+    @objc func qa_didMoveToWindow() {
+        qa_didMoveToWindow()                       // = 원래 didMoveToWindow
+        if window != nil { QAAutoID.handle(view: self) }
+    }
+}
+
+// ③ 저장 프로퍼티를 Mirror로 훑어 "타입.프로퍼티" ID를 붙인다 (하위 커스텀 뷰는 재귀)
+for child in Mirror(reflecting: loginView).children {       // LoginView의 저장 프로퍼티들
+    guard let name = child.label, let view = child.value as? UIView else { continue }
+    if view.accessibilityIdentifier?.isEmpty ?? true {       // 앱이 붙인 ID는 덮어쓰지 않음
+        view.accessibilityIdentifier = "LoginView.\(name)"   // → "LoginView.loginButton"
+    }
+}
+```
+
+<sub>간추린 코드입니다. 실제 구현(부모 클래스 프로퍼티, `[UIView]` 배열, 셀·탭바·검색창 처리 등): [AutoID/AutoID.swift](AutoID/AutoID.swift)</sub>
+
+**규칙**
+
 | 대상 | ID | 예시 |
 |---|---|---|
 | VC의 뷰 프로퍼티 | `VC타입.프로퍼티` | `LoginViewController.rootView` |
@@ -618,6 +653,41 @@ SwiftUI는 실행 중에 읽을 프로퍼티 이름이 없습니다. 그래서:
 
 > [!NOTE]
 > **스크린샷은 찾는 수단이 아닙니다.** 덤프로도 판단이 안 될 때 사람이나 AI가 상황을 이해하는 용도로만 봅니다 (실패 요약에 경로가 나옵니다). 테스트 코드는 항상 위 1~6으로 씁니다.
+
+### 화면에 보이는 것은 어떻게 읽나
+
+픽셀(스크린샷)을 읽는 게 아닙니다. XCUITest는 iOS가 VoiceOver용으로 만드는 **접근성 트리**를 읽습니다. 화면의 요소 하나하나가 트리의 노드이고, 노드마다 아래 값이 있습니다.
+
+| 노드의 값 | 어디서 오나 | 순위 |
+|---|---|---|
+| `identifier` | `accessibilityIdentifier` (앱이 붙였거나 AutoID가 자동으로 붙인 ID) | 1~3 |
+| `label` | `UILabel.text`, 버튼 제목, 텍스트필드 placeholder·값, `accessibilityLabel`처럼 **화면에 보이는 글자** | 3, 4 |
+| `elementType` | UIKit 클래스에서 정해지는 종류 (`Button`, `StaticText`, `Cell`, `TextField` …) | 5 |
+| `frame` | 화면 위 위치·크기 (pt) | 6 |
+| `isSelected`, `value`, `isHittable` 등 | 선택 상태, 스위치·슬라이더 값, 누를 수 있는지 | 판정용 |
+
+테스트는 이 값으로 **조건을 걸어** 요소를 찾습니다.
+
+```swift
+app.descendants(matching: .any).matching(identifier: "LoginView.loginButton")   // 1. identifier로
+app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "확인"))  // 4. label로 = text("확인")
+app.cells.matching(identifier: "ItemCell")                                       // 3. ID + 그 안 label로 한 개 고르기
+    .containing(NSPredicate(format: "identifier == %@ AND label == %@", "ItemCell.titleLabel", "검색"))
+app.cells.element(boundBy: 0)                                                     // 5. 종류 + 순서로
+app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()            // 6. 화면 비율 좌표로
+```
+
+`qakit dump-ui`는 같은 트리를 `app.snapshot()`으로 한 번에 떠서 한 줄씩 텍스트로 보여 줍니다. 그래서 덤프에 나온 값이 곧 테스트에서 쓸 수 있는 값입니다.
+
+```text
+Button #LoginView.loginButton "로그인" @16,682 370x56
+└─종류  └─identifier          └─label  └─frame (x,y 너비x높이)
+```
+
+> [!NOTE]
+> - 지도·차트처럼 **그려지는 영역**은 안쪽이 노드 하나라 글자·요소가 트리에 없습니다 → 좌표(6순위)를 씁니다.
+> - `isHidden` 뷰나 팝업에 가려진 뷰는 트리에서 빠집니다. 덤프에 안 보이면 테스트도 찾을 수 없습니다.
+> - 글자는 언어에 따라 바뀌므로 `qakit.yml`의 `language`·`locale`로 고정합니다.
 
 ### AI가 요소를 알아내는 순서
 
