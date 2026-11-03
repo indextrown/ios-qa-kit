@@ -25,7 +25,7 @@ steps:
 | read | `read: { from: <대상>, pattern: '정규식', as: 변수 }` | 라벨에서 값 추출 (첫 그룹) |
 | scroll-to | `scroll-to: { target: <대상>, in: <대상>, max: 8, dir: up, required: false }` | 화면에 보일 때까지 스크롤 |
 | swipe | `swipe: { on: <대상>, dir: up }` | |
-| pinch | `pinch: { on: <대상>, scale: 2.5 }` | 1보다 크면 확대 |
+| pinch | `pinch: { on: <대상>, scale: 2.5, velocity?, settle?: 0.5 }` | 1보다 크면 확대, 작으면 축소 (속도 부호 자동, 기본 속도는 동작이 1초 안팎). settle: 끝난 뒤 쉬는 초 |
 | snapshot | `snapshot: { of: <대상>, as: 이름 }` | 스크린샷 저장·첨부 (changed 조건용) |
 | expect | `expect: <조건>`, `timeout:`, `hold:`, `message:` | 판정. hold는 그 시간 동안 유지돼야 통과 |
 | repeat | `repeat: { until: <조건>, max: 5, wait: 3, steps: [단계] }` | 조건이 맞을 때까지 단계 반복 (wait: 매 반복 뒤 조건을 기다리는 초). 끝까지 안 맞으면 실패 (`required: false`면 통과) |
