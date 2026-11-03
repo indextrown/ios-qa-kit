@@ -259,6 +259,21 @@ qakit history                                 # 실행 기록: 언제·어느 �
 - `QA/`를 git에 커밋하는 팀은 보관소 없이 커밋된 파일만으로 같은 복구가 됩니다 (`qakit restore`).
 - `qa.lock.json`에 저장 시점의 도구 버전·앱 브랜치/커밋·파일 해시가 남아, 복구한 파일이 저장 때와 같은지 확인합니다.
 
+### QA 워크트리까지 통째로 지워졌을 때
+
+워크트리 폴더(`MyApp-qa/`)가 빌드 결과까지 모두 사라져도 보관소만 있으면 복구됩니다. `qa/workspace` 브랜치는 남아 있다고 가정합니다 (없으면 `develop`에서 새로 만듭니다).
+
+```bash
+qakit init ~/path/to/MyApp --worktree                                  # 워크트리 다시 만들기 + git에 없는 키 설정 파일 복사
+qakit restore --from myapp --to ~/path/to/MyApp-qa/QA --force          # 보관소 내용으로 덮어쓰기 → ID 재생성 → 앱 빌드·설치
+cp <계정 파일> ~/path/to/MyApp-qa/QA/secrets.txt                       # 계정은 보관소에 없음
+cd ~/path/to/MyApp-qa/QA && qakit run <시나리오>
+```
+
+- 결과물(시나리오·공통 단계·Swift·NOTES·설정·실행 기록)은 지우기 전과 **완전히 같게** 돌아옵니다. 앱을 처음부터 빌드하는 몇 분이 대부분입니다.
+- 보관소 말고 필요한 것: 원래 개발 폴더(앱 코드, 키가 든 xcconfig 같은 git에 없는 설정 파일), ios-qa-kit 도구, `secrets.txt`.
+- 보관소(`~/.qakit/archive`)는 **이 컴퓨터에만** 있습니다. 컴퓨터가 바뀌어도 살리려면 `QA/`를 git에 커밋하거나 보관소를 따로 백업합니다.
+
 ---
 
 ## 전체 흐름 한눈에
