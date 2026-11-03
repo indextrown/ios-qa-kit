@@ -1,0 +1,4 @@
+interface:
+  display_name: "iOS QA 자동화"
+  short_description: "앱 수정 없이 XCUITest 시나리오를 만들고 실행·수정"
+  default_prompt: "$ios-qa-kit를 사용해 이 QA 시나리오를 XCUITest로 만들고, qakit test로 통과할 때까지 고쳐 주세요."

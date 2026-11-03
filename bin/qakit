@@ -1,0 +1,1140 @@
+#!/usr/bin/env python3
+"""
+qakit — AI가 XCUITest를 만들고 돌리기 쉽게 해 주는 CLI.
+
+사람과 AI가 같은 명령을 쓴다. 출력은 짧고, 다음에 할 일을 알려 준다.
+
+  qakit init <앱 프로젝트>     작업공간 생성
+  qakit doctor                 환경 점검
+  qakit build-app              대상 앱 빌드 + 시뮬레이터 설치 + 권한 허용
+  qakit sync                   앱 변경 반영 (재빌드 + ID 재생성 + 테스트 코드 컴파일 확인)
+  qakit gen-ids [--verify]     앱 소스에서 ID 상수 생성 (런타임 덤프와 비교)
+  qakit dump-ui                현재 화면 구조를 텍스트로 저장
+  qakit test [필터...]         UI 테스트 실행
+  qakit summarize [xcresult]   실패 원인 요약
+  qakit install-skill          AI 스킬과 qakit 명령 설치
+
+작업공간은 현재 폴더에서 위로 올라가며 qakit.yml을 찾거나, -w로 지정한다.
+Python 3.9 표준 라이브러리만 쓴다.
+"""
+
+import argparse
+import datetime
+import hashlib
+import json
+import os
+import plistlib
+import re
+import shutil
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+KIT_DIR = Path(os.path.realpath(__file__)).parent.parent
+sys.path.insert(0, str(KIT_DIR / "Tools" / "gen-ids"))
+import gen_ids  # noqa: E402
+TEMPLATE_DIR = KIT_DIR / "templates" / "workspace"
+RUNNER_SCHEME = "UITests"
+DUMP_TEST = "UITests/QAKitDumpTests/test_dump"
+
+
+# ─────────────────────────────── 출력 ───────────────────────────────
+
+def info(msg):
+    print(msg, flush=True)
+
+
+def ok(msg):
+    print(f"✅ {msg}", flush=True)
+
+
+def warn(msg):
+    print(f"⚠️  {msg}", flush=True)
+
+
+def fail(msg, hint=None, code=1):
+    print(f"❌ {msg}", file=sys.stderr, flush=True)
+    if hint:
+        print(f"   → {hint}", file=sys.stderr, flush=True)
+    sys.exit(code)
+
+
+# ─────────────────────────────── YAML (부분 집합) ───────────────────────────────
+# qakit.yml에 필요한 만큼만: 들여쓰기 중첩 맵, 스칼라, [a, b] 인라인 리스트, 주석.
+
+def parse_yaml(text):
+    root = {}
+    stack = [(-1, root)]
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        line = re.sub(r"\s+#.*$", "", raw) if not raw.lstrip().startswith("#") else ""
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        m = re.match(r"^\s*([A-Za-z0-9_.-]+)\s*:\s*(.*)$", line)
+        if not m:
+            raise ValueError(f"qakit.yml {lineno}번째 줄을 읽을 수 없음: {raw}")
+        key, value = m.group(1), m.group(2).strip()
+        while stack and indent <= stack[-1][0]:
+            stack.pop()
+        parent = stack[-1][1]
+        if value == "":
+            child = {}
+            parent[key] = child
+            stack.append((indent, child))
+        else:
+            parent[key] = parse_scalar(value)
+    return root
+
+
+def parse_scalar(value):
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1].strip()
+        return [parse_scalar(v.strip()) for v in inner.split(",")] if inner else []
+    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+        return value[1:-1]
+    if value in ("true", "yes"):
+        return True
+    if value in ("false", "no"):
+        return False
+    return value
+
+
+# ─────────────────────────────── 작업공간 ───────────────────────────────
+
+class Workspace:
+    def __init__(self, root):
+        self.root = Path(root).resolve()
+        self.config_path = self.root / "qakit.yml"
+        try:
+            self.cfg = parse_yaml(self.config_path.read_text(encoding="utf-8"))
+        except ValueError as e:
+            fail(str(e))
+        app = self.cfg.get("app") or {}
+        self.name = self.cfg.get("name") or self.root.name
+        self.project = expand(app.get("project", ""), self.root)
+        self.scheme = app.get("scheme", "")
+        self.configuration = app.get("configuration", "Debug")
+        self.bundle_id = app.get("bundleId", "")
+        self.simulator = str(self.cfg.get("simulator", "iPhone 17"))
+        self.language = self.cfg.get("language")
+        self.locale = self.cfg.get("locale")
+        perms = self.cfg.get("permissions") or []
+        self.permissions = perms if isinstance(perms, list) else [perms]
+        self.secrets_path = expand(self.cfg.get("secrets", "./secrets.txt"), self.root)
+        self.autoid = self.cfg.get("autoid", "inject")
+        self.sync_mode = self.cfg.get("sync", "auto")  # auto | warn | off
+        ids = self.cfg.get("ids") or {}
+        srcs = ids.get("sources") if isinstance(ids, dict) else None
+        self.id_sources = [expand(x, self.root) for x in (srcs if isinstance(srcs, list) else [srcs] if srcs else [])]
+        self.app_override = False
+        self.runner_dir = self.root / "Runner"
+        self.build_dir = self.root / ".build"
+        self.results_dir = self.root / "results"
+
+    @property
+    def app_dir(self):
+        return self.project.parent if self.project else None
+
+    @property
+    def app_build_dir(self):
+        # 앱 경로별로 빌드 폴더를 나눈다 (워크트리/브랜치 폴더를 오가도 서로 덮어쓰지 않게)
+        if not self.app_override:
+            return self.build_dir / "app"
+        return self.build_dir / ("app-" + slug(str(self.app_dir.name)))
+
+    @property
+    def state_dir(self):
+        return self.root / ".qakit"
+
+    @property
+    def ids_file(self):
+        return self.runner_dir / "UITests" / "Generated" / "QAIDs.swift"
+
+    @property
+    def runner_project(self):
+        return self.runner_dir / "QARunner.xcodeproj"
+
+    @property
+    def autoid_dylib(self):
+        return KIT_DIR / ".build" / "autoid" / "QAAutoID.dylib"
+
+    def secrets(self):
+        if not self.secrets_path.exists():
+            return {}
+        result = {}
+        for raw in self.secrets_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            value = re.sub(r"\s+#.*$", "", value).strip()
+            result[key.strip()] = value
+        return result
+
+
+def expand(path, base):
+    if not path:
+        return None
+    p = Path(os.path.expanduser(str(path)))
+    return (p if p.is_absolute() else (base / p)).resolve()
+
+
+SECRETS_OVERRIDE = None
+APP_OVERRIDE = None
+
+
+def find_workspace(explicit):
+    ws = _find_workspace(explicit)
+    if SECRETS_OVERRIDE:
+        ws.secrets_path = Path(SECRETS_OVERRIDE).expanduser().resolve()
+    if APP_OVERRIDE:
+        project = find_project(Path(APP_OVERRIDE).expanduser().resolve())
+        if not project:
+            fail(f"--app {APP_OVERRIDE}에서 .xcodeproj/.xcworkspace를 찾지 못했습니다.")
+        if project.resolve() != (ws.project.resolve() if ws.project else None):
+            ws.project = project.resolve()
+            ws.app_override = True
+            info(f"ℹ️  앱 경로 일시 지정: {ws.project}")
+    return ws
+
+
+def _find_workspace(explicit):
+    if explicit:
+        root = Path(explicit).expanduser().resolve()
+        if not (root / "qakit.yml").exists():
+            fail(f"{root}에 qakit.yml이 없습니다.", "qakit init <앱 프로젝트>로 작업공간을 먼저 만드세요.")
+        return Workspace(root)
+    cur = Path.cwd().resolve()
+    for d in [cur, *cur.parents]:
+        if (d / "qakit.yml").exists():
+            return Workspace(d)
+    fail("qakit.yml을 찾지 못했습니다.", "작업공간 폴더에서 실행하거나 -w <작업공간>을 지정하세요.")
+
+
+# ─────────────────────────────── 실행 유틸 ───────────────────────────────
+
+def run(cmd, check=True, capture=True, cwd=None, env=None):
+    result = subprocess.run(cmd, cwd=cwd, env=env, text=True, encoding="utf-8", errors="replace",
+                            stdout=subprocess.PIPE if capture else None,
+                            stderr=subprocess.STDOUT if capture else None)
+    if check and result.returncode != 0:
+        out = (result.stdout or "")[-3000:]
+        fail(f"명령 실패 ({result.returncode}): {' '.join(map(str, cmd[:4]))} ...\n{out}")
+    return result
+
+
+def masker(secrets):
+    values = sorted({v for v in secrets.values() if v and len(v) >= 3}, key=len, reverse=True)
+
+    def mask(text):
+        for v in values:
+            text = text.replace(v, "•••")
+        return text
+    return mask
+
+
+def timestamp():
+    return datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+# ─────────────────────────────── 시뮬레이터 ───────────────────────────────
+
+def simulator_udid(name_or_udid):
+    data = json.loads(run(["xcrun", "simctl", "list", "devices", "available", "-j"]).stdout)
+    candidates = []
+    for runtime, devices in data["devices"].items():
+        if "iOS" not in runtime:
+            continue
+        for d in devices:
+            if d["udid"] == name_or_udid:
+                return d["udid"], d["state"]
+            if d["name"] == name_or_udid:
+                candidates.append((runtime, d))
+    if not candidates:
+        return None, None
+    runtime, d = sorted(candidates, key=lambda c: c[0])[-1]  # 가장 최신 iOS
+    return d["udid"], d["state"]
+
+
+def ensure_booted(ws):
+    udid, state = simulator_udid(ws.simulator)
+    if not udid:
+        fail(f"시뮬레이터 '{ws.simulator}'를 찾지 못했습니다.",
+             "xcrun simctl list devices available 로 이름을 확인하고 qakit.yml의 simulator를 고치세요.")
+    if state != "Booted":
+        info(f"시뮬레이터 부팅 중: {ws.simulator}")
+        run(["xcrun", "simctl", "boot", udid], check=False)
+        run(["xcrun", "simctl", "bootstatus", udid, "-b"])
+    return udid
+
+
+def app_installed(udid, bundle_id):
+    r = run(["xcrun", "simctl", "get_app_container", udid, bundle_id], check=False)
+    return r.returncode == 0
+
+
+# ─────────────────────────────── 빌드 ───────────────────────────────
+
+def project_flag(project):
+    return ["-workspace" if str(project).endswith(".xcworkspace") else "-project", str(project)]
+
+
+def ensure_autoid(ws):
+    if ws.autoid != "inject":
+        return
+    src = KIT_DIR / "AutoID"
+    dylib = ws.autoid_dylib
+    newest_src = max(p.stat().st_mtime for p in src.iterdir())
+    if not dylib.exists() or dylib.stat().st_mtime < newest_src:
+        info("AutoID dylib 빌드 중...")
+        run([str(KIT_DIR / "scripts" / "build-autoid.sh")])
+
+
+def ensure_runner(ws):
+    spec = ws.runner_dir / "project.yml"
+    if not spec.exists():
+        fail("Runner/project.yml이 없습니다.", "qakit init으로 작업공간을 다시 만드세요.")
+    proj = ws.runner_project / "project.pbxproj"
+    sources = [spec] + list((ws.runner_dir / "UITests").rglob("*.swift"))
+    if not proj.exists() or proj.stat().st_mtime < max(p.stat().st_mtime for p in sources):
+        if not shutil.which("xcodegen"):
+            fail("xcodegen이 없습니다.", "brew install xcodegen")
+        run(["xcodegen", "generate", "--quiet"], cwd=ws.runner_dir)
+
+
+def build_runner(ws, udid, log_path):
+    ensure_runner(ws)
+    cmd = ["xcodebuild", "build-for-testing", "-project", str(ws.runner_project),
+           "-scheme", RUNNER_SCHEME, "-destination", f"id={udid}",
+           "-derivedDataPath", str(ws.build_dir / "runner")]
+    r = run(cmd, check=False)
+    log_path.write_text(r.stdout or "", encoding="utf-8")
+    if r.returncode != 0:
+        errors = [l for l in (r.stdout or "").splitlines() if "error:" in l]
+        fail("테스트 코드 빌드 실패", "\n   ".join(dict.fromkeys(errors[:15])) or f"로그: {log_path}")
+
+
+# ─────────────────────────────── 테스트 실행 공통 ───────────────────────────────
+
+def test_env(ws, extra=None):
+    env = os.environ.copy()
+
+    def put(key, value):
+        if value is not None:
+            env[f"TEST_RUNNER_{key}"] = str(value)
+    put("QA_BUNDLE_ID", ws.bundle_id)
+    put("QA_AUTOID_DYLIB", ws.autoid_dylib if ws.autoid == "inject" else None)
+    put("QA_LANGUAGE", ws.language)
+    put("QA_LOCALE", ws.locale)
+    put("QA_RESULTS_DIR", ws.results_dir)
+    put("QA_SECRETS_FILE", ws.secrets_path)
+    for k, v in ws.secrets().items():
+        put(f"QA_SECRET_{k}", v)
+    for k, v in (extra or {}).items():
+        put(f"QA_ARG_{k}", v)
+    return env
+
+
+def run_tests(ws, only, extra_env=None, label="test", quiet=False):
+    """xcodebuild test 실행. (성공 여부, xcresult 경로, 마스킹된 출력)"""
+    ws.results_dir.mkdir(exist_ok=True)
+    ensure_autoid(ws)
+    udid = ensure_booted(ws)
+    if not app_installed(udid, ws.bundle_id):
+        fail(f"시뮬레이터에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app")
+
+    ts = timestamp()
+    build_runner(ws, udid, ws.results_dir / f"{label}-{ts}-build.log")
+
+    xcresult = ws.results_dir / f"{label}-{ts}.xcresult"
+    cmd = ["xcodebuild", "test-without-building", "-project", str(ws.runner_project),
+           "-scheme", RUNNER_SCHEME, "-destination", f"id={udid}",
+           "-derivedDataPath", str(ws.build_dir / "runner"),
+           "-resultBundlePath", str(xcresult)]
+    for o in only:
+        cmd += ["-only-testing", o if o.startswith("UITests/") else f"UITests/{o}"]
+    if not only:
+        cmd += ["-skip-testing", "UITests/QAKitDumpTests"]  # 전체 실행에서 덤프용 테스트 제외
+
+    mask = masker(ws.secrets())
+    log_path = ws.results_dir / f"{label}-{ts}.log"
+    proc = subprocess.Popen(cmd, env=test_env(ws, extra_env), text=True, encoding="utf-8", errors="replace",
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    shown = re.compile(r"Test Case .* (passed|failed|started)|error:|\[qakit-|Executed \d+ test")
+    lines = []
+    with open(log_path, "w", encoding="utf-8") as log:
+        for line in proc.stdout:
+            line = mask(line)
+            log.write(line)
+            lines.append(line)
+            if not quiet and shown.search(line):
+                print("  " + simplify_line(line.rstrip()), flush=True)
+    proc.wait()
+
+    latest = ws.results_dir / "latest.xcresult"
+    if latest.is_symlink() or latest.exists():
+        latest.unlink()
+    if xcresult.exists():
+        latest.symlink_to(xcresult.name)
+    return proc.returncode == 0, xcresult, "".join(lines)
+
+
+def simplify_line(line):
+    line = re.sub(r"^.*Test Case '-\[UITests\.(\S+) (\S+)\]' ", r"\1/\2 ", line)
+    line = line.replace(" started.", " …").replace(" passed ", " ✅ ").replace(" failed ", " ❌ ")
+    return line
+
+
+# ─────────────────────────────── 명령: init ───────────────────────────────
+
+def cmd_init(args):
+    target = Path(args.project).expanduser().resolve()
+    project = find_project(target)
+    if not project:
+        fail(f"{target}에서 .xcworkspace / .xcodeproj를 찾지 못했습니다.")
+
+    name = args.name or slug(project.parent.name)
+    root = Path(args.dir).expanduser().resolve() if args.dir else project.parent.parent / "qa-workspaces" / name
+    if (root / "qakit.yml").exists() and not args.force:
+        fail(f"이미 작업공간이 있습니다: {root}", "덮어쓰려면 --force")
+
+    info(f"프로젝트 분석 중: {project}")
+    listing = json.loads(run(["xcodebuild", "-list", "-json", *project_flag(project)]).stdout)
+    schemes = (listing.get("project") or listing.get("workspace") or {}).get("schemes", [])
+    if not schemes:
+        fail("공유된 scheme이 없습니다.", "Xcode에서 scheme을 Shared로 설정하세요.")
+    scheme, configuration, bundle_id = (args.scheme, None, None)
+    if scheme:
+        configuration = scheme_configuration(project, scheme) or "Debug"
+        bundle_id = app_bundle_id(project, scheme, configuration)
+    else:
+        # 앱(.app)을 빌드하는 scheme만 후보로. 패키지 의존성 scheme(예: SDK 이름)은 앱을 만들지 않는다.
+        for candidate in rank_schemes(schemes, project):
+            conf = scheme_configuration(project, candidate) or "Debug"
+            bid = app_bundle_id(project, candidate, conf)
+            if bid:
+                scheme, configuration, bundle_id = candidate, conf, bid
+                break
+        if not scheme:
+            scheme, configuration = schemes[0], "Debug"
+            warn("앱을 빌드하는 scheme을 찾지 못했습니다. qakit.yml의 scheme/bundleId를 직접 입력하세요.")
+    info(f"  scheme: {scheme} (후보: {', '.join(schemes)})")
+    info(f"  configuration: {configuration}")
+    info(f"  bundleId: {bundle_id or '(찾지 못함 — qakit.yml에 직접 입력)'}")
+
+    root.mkdir(parents=True, exist_ok=True)
+    values = {
+        "NAME": name,
+        "PROJECT": str(project).replace(str(Path.home()), "~"),
+        "SCHEME": scheme,
+        "CONFIGURATION": configuration,
+        "BUNDLE_ID": bundle_id or "TODO.bundle.id",
+        "SIMULATOR": args.simulator or default_simulator(),
+        "KIT_DIR": str(KIT_DIR),
+    }
+    copy_template(TEMPLATE_DIR, root, values, force=args.force)
+    (root / "results").mkdir(exist_ok=True)
+    ok(f"작업공간 생성: {root}")
+    info("다음 할 일:")
+    info(f"  1. {root}/qakit.yml 확인 (permissions, language)")
+    info(f"  2. secrets.example.txt를 참고해 secrets.txt 작성 (로그인이 필요한 앱이면)")
+    info(f"  3. cd {root} && qakit doctor && qakit build-app && qakit dump-ui")
+
+
+def find_project(path):
+    if path.suffix in (".xcworkspace", ".xcodeproj"):
+        return path
+    if not path.is_dir():
+        return None
+    ws = [p for p in path.glob("*.xcworkspace")]
+    if ws:
+        return ws[0]
+    pj = [p for p in path.glob("*.xcodeproj")]
+    return pj[0] if pj else None
+
+
+def slug(text):
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def rank_schemes(schemes, project):
+    """앱 scheme일 가능성 순: 개발용 키워드 > 프로젝트 이름과 같음 > 프로젝트에 공유된 scheme > 나머지."""
+    shared = {p.stem for p in project.parent.glob("*.xcodeproj/xcshareddata/xcschemes/*.xcscheme")}
+    name = project.stem.lower()
+
+    def score(s):
+        low = s.lower()
+        if any(k in low for k in ("develop", "dev", "debug", "staging")):
+            return 0
+        if low == name:
+            return 1
+        if s in shared:
+            return 2
+        return 3
+    return sorted(schemes, key=lambda s: (score(s), schemes.index(s)))
+
+
+def scheme_configuration(project, scheme):
+    container = project if project.suffix == ".xcodeproj" else None
+    candidates = []
+    if container:
+        candidates.append(container / "xcshareddata" / "xcschemes" / f"{scheme}.xcscheme")
+    candidates += list(project.parent.glob(f"*.xcodeproj/xcshareddata/xcschemes/{scheme}.xcscheme"))
+    for c in candidates:
+        if c.exists():
+            node = ET.parse(c).getroot().find("LaunchAction")
+            if node is not None and node.get("buildConfiguration"):
+                return node.get("buildConfiguration")
+    return None
+
+
+def app_bundle_id(project, scheme, configuration):
+    r = run(["xcodebuild", "-showBuildSettings", "-json", *project_flag(project), "-scheme", scheme,
+             "-configuration", configuration, "-sdk", "iphonesimulator"], check=False)
+    # 경고 문구가 섞여 나오므로(예: "Designed for [iPad,iPhone]") 줄 맨 앞의 '['부터 JSON으로 읽는다
+    m = re.search(r"^\[", r.stdout or "", re.M)
+    if not m:
+        return None
+    try:
+        targets, _ = json.JSONDecoder().raw_decode(r.stdout[m.start():])
+    except json.JSONDecodeError:
+        return None
+    for t in targets:
+        s = t.get("buildSettings", {})
+        if s.get("WRAPPER_EXTENSION") == "app" and s.get("PRODUCT_BUNDLE_IDENTIFIER"):
+            return s["PRODUCT_BUNDLE_IDENTIFIER"]
+    return None
+
+
+def default_simulator():
+    data = json.loads(run(["xcrun", "simctl", "list", "devices", "available", "-j"]).stdout)
+    names = [d["name"] for rt, ds in sorted(data["devices"].items()) if "iOS" in rt for d in ds]
+    for preferred in ("iPhone 17", "iPhone 16", "iPhone 15"):
+        if preferred in names:
+            return preferred
+    iphones = [n for n in names if n.startswith("iPhone")]
+    return iphones[-1] if iphones else "iPhone 17"
+
+
+def copy_template(src, dst, values, force):
+    for path in src.rglob("*"):
+        rel = path.relative_to(src)
+        rel = Path(str(rel).replace("_gitignore", ".gitignore"))
+        target = dst / rel
+        if path.is_dir():
+            target.mkdir(parents=True, exist_ok=True)
+            continue
+        if target.exists() and not force:
+            continue
+        # 사용자가 작성한 테스트는 --force여도 덮어쓰지 않는다
+        if target.exists() and "Flows" in rel.parts:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for k, v in values.items():
+            text = text.replace("{{" + k + "}}", v)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+
+
+# ─────────────────────────────── 명령: doctor ───────────────────────────────
+
+def cmd_doctor(args):
+    ws = find_workspace(args.workspace)
+    problems = 0
+
+    def check(cond, good, bad, hint=None):
+        nonlocal problems
+        if cond:
+            ok(good)
+        else:
+            problems += 1
+            print(f"❌ {bad}" + (f"\n   → {hint}" if hint else ""))
+
+    info(f"작업공간: {ws.root}")
+    xc = run(["xcodebuild", "-version"], check=False)
+    check(xc.returncode == 0, (xc.stdout or "").splitlines()[0] if xc.stdout else "", "Xcode 없음",
+          "Xcode 설치 후 sudo xcode-select -s /Applications/Xcode.app")
+    check(shutil.which("xcodegen"), "xcodegen 설치됨", "xcodegen 없음", "brew install xcodegen")
+    check(ws.project and ws.project.exists(), f"앱 프로젝트: {ws.project}", f"앱 프로젝트 없음: {ws.project}",
+          "qakit.yml의 app.project 확인")
+    check(bool(ws.scheme), f"scheme: {ws.scheme}", "app.scheme 비어 있음")
+    check(ws.bundle_id and "TODO" not in ws.bundle_id, f"bundleId: {ws.bundle_id}", "app.bundleId 비어 있음")
+
+    udid, state = simulator_udid(ws.simulator)
+    check(udid, f"시뮬레이터: {ws.simulator} ({state})", f"시뮬레이터 '{ws.simulator}' 없음",
+          "xcrun simctl list devices available")
+    if udid:
+        check(app_installed(udid, ws.bundle_id), "대상 앱 설치됨", "대상 앱이 시뮬레이터에 없음", "qakit build-app")
+
+    if ws.autoid == "inject":
+        check(ws.autoid_dylib.exists(), "AutoID dylib 빌드됨", "AutoID dylib 없음",
+              "qakit build-app (자동으로 빌드됨)")
+    else:
+        info("ℹ️  autoid: embedded — 앱에 AutoID.swift가 들어가 있어야 합니다.")
+
+    if ws.secrets_path.exists():
+        keys = sorted(ws.secrets().keys())
+        example = ws.root / "secrets.example.txt"
+        needed = sorted(Workspace.parse_keys(example)) if example.exists() else []
+        missing = [k for k in needed if k not in keys]
+        check(not missing, f"secrets: {', '.join(keys) or '(비어 있음)'}",
+              f"secrets에 키 누락: {', '.join(missing)}", f"{ws.secrets_path}에 추가")
+    else:
+        warn(f"secrets 파일 없음: {ws.secrets_path} (로그인이 필요 없으면 무시)")
+
+    check(ws.runner_dir.joinpath("project.yml").exists(), "Runner 준비됨", "Runner/project.yml 없음", "qakit init --force")
+    print()
+    if problems:
+        fail(f"문제 {problems}개", "위 → 안내대로 고친 뒤 다시 qakit doctor")
+    ok("모두 정상")
+
+
+def _parse_keys(path):
+    keys = []
+    for raw in Path(path).read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if line and not line.startswith("#") and "=" in line:
+            keys.append(line.split("=", 1)[0].strip())
+    return keys
+
+
+Workspace.parse_keys = staticmethod(_parse_keys)
+
+
+# ─────────────────────────────── 명령: build-app ───────────────────────────────
+
+def cmd_build_app(args):
+    cmd_build_app_ws(find_workspace(args.workspace))
+
+
+def cmd_build_app_ws(ws):
+    ws.results_dir.mkdir(exist_ok=True)
+    ensure_autoid(ws)
+    udid = ensure_booted(ws)
+
+    info(f"앱 빌드 중: {ws.scheme} ({ws.configuration}) — 처음엔 몇 분 걸립니다")
+    log_path = ws.results_dir / "build-app.log"
+    cmd = ["xcodebuild", "build", *project_flag(ws.project), "-scheme", ws.scheme,
+           "-configuration", ws.configuration, "-sdk", "iphonesimulator",
+           "-destination", "generic/platform=iOS Simulator",
+           "-derivedDataPath", str(ws.app_build_dir)]
+    state = app_state(ws)
+    before = git(ws.app_dir, "status", "--porcelain")
+    # 앱 레포의 Package.resolved를 고치지 않는다 (QA는 앱 레포를 수정하지 않음)
+    r = run(cmd + ["-onlyUsePackageVersionsFromResolvedFile"], check=False)
+    if r.returncode != 0 and "resolved" in (r.stdout or "").lower() and "error:" in (r.stdout or ""):
+        warn("Package.resolved 고정 빌드 실패 → 고정 없이 다시 빌드 (앱 레포의 Package.resolved가 바뀔 수 있음)")
+        r = run(cmd, check=False)
+    log_path.write_text(r.stdout or "", encoding="utf-8")
+    after = git(ws.app_dir, "status", "--porcelain")
+    if before is not None and after != before:
+        changed = sorted(set((after or "").splitlines()) - set((before or "").splitlines()))
+        warn("빌드 중 앱 레포 파일이 바뀌었습니다 (QA가 만든 변경일 수 있음): " + ", ".join(c[3:] for c in changed))
+    if r.returncode != 0:
+        errors = [l for l in (r.stdout or "").splitlines() if "error:" in l]
+        fail("앱 빌드 실패", "\n   ".join(dict.fromkeys(errors[:15])) or f"로그: {log_path}")
+
+    app_path = find_built_app(ws)
+    if not app_path:
+        fail(f"빌드 결과에서 {ws.bundle_id} 앱을 찾지 못했습니다.", "qakit.yml의 bundleId/configuration 확인")
+    run(["xcrun", "simctl", "install", udid, str(app_path)])
+    ok(f"설치: {app_path.name} → {ws.simulator}")
+
+    for perm in ws.permissions:
+        r = run(["xcrun", "simctl", "privacy", udid, "grant", str(perm), ws.bundle_id], check=False)
+        (ok if r.returncode == 0 else warn)(f"권한 허용: {perm}" + ("" if r.returncode == 0 else " 실패"))
+    state["installedOn"] = udid
+    save_state(ws, "installed", state)
+
+
+def find_built_app(ws):
+    products = ws.app_build_dir / "Build" / "Products"
+    for app in products.glob("*-iphonesimulator/*.app"):
+        try:
+            with open(app / "Info.plist", "rb") as f:
+                if plistlib.load(f).get("CFBundleIdentifier") == ws.bundle_id:
+                    return app
+        except (OSError, plistlib.InvalidFileException):
+            continue
+    return None
+
+
+# ─────────────────────────────── 명령: dump-ui ───────────────────────────────
+
+def cmd_dump_ui(args):
+    ws = find_workspace(args.workspace)
+    extra = {"DUMP_MODE": "attach" if args.attach else "launch", "DUMP_SETTLE": str(args.settle)}
+    if args.wait_id:
+        extra["DUMP_WAIT_ID"] = args.wait_id
+    dump = ws.results_dir / "ui-dump.txt"
+    if dump.exists():
+        dump.unlink()
+    success, xcresult, output = run_tests(ws, [DUMP_TEST], extra, label="dump", quiet=True)
+    if not dump.exists():
+        print(summarize(xcresult, masker(ws.secrets())))
+        fail("화면 덤프 실패")
+    text = masker(ws.secrets())(dump.read_text(encoding="utf-8"))
+    dump.write_text(text, encoding="utf-8")
+    # gen-ids --verify가 쓰도록 덤프를 모아 둔다
+    archive = ws.results_dir / "dumps"
+    archive.mkdir(exist_ok=True)
+    (archive / f"ui-dump-{timestamp()}.txt").write_text(text, encoding="utf-8")
+    header = [l for l in text.splitlines() if l.startswith("#")]
+    for l in header[2:]:
+        info(l.lstrip("# "))
+    ok(f"저장: {dump}")
+    if args.print:
+        print(text)
+
+
+# ─────────────────────────────── 명령: test ───────────────────────────────
+
+def reset_app(ws, udid):
+    """앱 재설치 + 키체인 초기화 → 처음 설치한 상태 (로그아웃)."""
+    app_path = find_built_app(ws)
+    if not app_path:
+        fail("재설치할 앱 빌드가 없습니다.", "qakit build-app")
+    run(["xcrun", "simctl", "terminate", udid, ws.bundle_id], check=False)
+    run(["xcrun", "simctl", "uninstall", udid, ws.bundle_id], check=False)
+    run(["xcrun", "simctl", "keychain", udid, "reset"], check=False)
+    run(["xcrun", "simctl", "install", udid, str(app_path)])
+    for perm in ws.permissions:
+        run(["xcrun", "simctl", "privacy", udid, "grant", str(perm), ws.bundle_id], check=False)
+    ok("앱 초기화 (재설치 + 키체인 초기화)")
+
+
+def cmd_test(args):
+    ws = find_workspace(args.workspace)
+    only = args.filters or []
+    extra = {}
+    auto_sync(ws)
+    if args.reset:
+        reset_app(ws, ensure_booted(ws))
+        extra["RESET"] = "1"
+    info(f"테스트 실행: {', '.join(only) if only else '전체'}")
+    success, xcresult, _ = run_tests(ws, only, extra, label="test")
+    print()
+    if success:
+        ok(f"통과 — 결과: {xcresult}")
+        return
+    print(summarize(xcresult, masker(ws.secrets())))
+    fail("실패", f"자세한 결과: {xcresult}")
+
+
+# ─────────────────────────────── 명령: summarize ───────────────────────────────
+
+def cmd_summarize(args):
+    ws = find_workspace(args.workspace)
+    path = Path(args.xcresult).resolve() if args.xcresult else (ws.results_dir / "latest.xcresult").resolve()
+    if not path.exists():
+        fail(f"결과 파일 없음: {path}", "qakit test를 먼저 실행하세요.")
+    print(summarize(path, masker(ws.secrets())))
+
+
+def summarize(xcresult, mask):
+    if not Path(xcresult).exists():
+        return "(결과 파일 없음 — 빌드 단계에서 실패했을 수 있음)"
+    tree = json.loads(run(["xcrun", "xcresulttool", "get", "test-results", "tests",
+                           "--path", str(xcresult)]).stdout)
+    cases = []
+
+    def walk(node):
+        if node.get("nodeType") == "Test Case":
+            cases.append(node)
+        for c in node.get("children", []):
+            walk(c)
+    for n in tree.get("testNodes", []):
+        walk(n)
+
+    passed = [c for c in cases if c.get("result") == "Passed"]
+    failed = [c for c in cases if c.get("result") == "Failed"]
+    out = [f"── 결과: 통과 {len(passed)} / 실패 {len(failed)} / 전체 {len(cases)}"]
+    if not failed:
+        return "\n".join(out)
+
+    attachments = export_attachments(xcresult)
+    for c in failed:
+        test_id = c.get("nodeIdentifier", c.get("name"))
+        out.append(f"\n❌ {test_id}")
+        for child in c.get("children", []):
+            if child.get("nodeType") == "Failure Message":
+                out.append(f"   원인: {child.get('name')}")
+        steps = last_steps(xcresult, test_id)
+        if steps:
+            out.append("   마지막 단계:")
+            out += [f"     - {s}" for s in steps]
+        tree_text = attachments.get(test_id, {}).get("qakit-ui-tree")
+        if tree_text:
+            out.append("   실패 시점 화면 구조 (ID/라벨 있는 요소):")
+            compact = compact_tree(tree_text)
+            if len(compact) > 60:  # 팝업 등 최상단 요소는 보통 끝에 있으므로 뒤쪽을 남긴다
+                compact = ["...(앞 %d줄 생략)" % (len(compact) - 60)] + compact[-60:]
+            out += ["     " + l for l in compact]
+        shot = attachments.get(test_id, {}).get("qakit-screenshot-path")
+        if shot:
+            out.append(f"   스크린샷: {shot}")
+    return mask("\n".join(out))
+
+
+def export_attachments(xcresult):
+    dest = Path(xcresult).parent / (Path(xcresult).stem + "-attachments")
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.mkdir()
+    r = run(["xcrun", "xcresulttool", "export", "attachments", "--path", str(xcresult),
+             "--output-path", str(dest)], check=False)
+    manifest = dest / "manifest.json"
+    result = {}
+    if r.returncode != 0 or not manifest.exists():
+        return result
+    for entry in json.loads(manifest.read_text()):
+        tid = entry.get("testIdentifier")
+        for a in entry.get("attachments", []):
+            name = a.get("suggestedHumanReadableName", "")
+            f = dest / a.get("exportedFileName", "")
+            if name.startswith("qakit-ui-tree"):
+                result.setdefault(tid, {})["qakit-ui-tree"] = f.read_text(encoding="utf-8", errors="replace")
+            elif name.startswith("qakit-screenshot"):
+                result.setdefault(tid, {})["qakit-screenshot-path"] = str(f)
+    return result
+
+
+def last_steps(xcresult, test_id, limit=8):
+    r = run(["xcrun", "xcresulttool", "get", "test-results", "activities", "--path", str(xcresult),
+             "--test-id", test_id, "--compact"], check=False)
+    if r.returncode != 0:
+        return []
+    titles = []
+
+    def walk(acts, depth):
+        for a in acts:
+            t = (a.get("title") or "").strip()
+            noise = re.match(r"^(Find|Check|Wait for|Synthesize|Requesting|Get |Snapshot|Collecting|Added attachment|"
+                             r"kXCT|qakit-|Capturing|Start Test|Set Up|Tear Down|Debug description|App UI hierarchy|UI Snapshot)", t)
+            if t and not noise:
+                titles.append(("  " * min(depth, 3)) + t)
+            walk(a.get("childActivities", []), depth + 1)
+    try:
+        for run_ in json.loads(r.stdout).get("testRuns", []):
+            walk(run_.get("activities", []), 0)
+    except json.JSONDecodeError:
+        return []
+    return titles[-limit:]
+
+
+def compact_tree(text):
+    """XCUITest debugDescription → ID/라벨이 있는 줄만, 좌표 축약."""
+    lines = []
+    for raw in text.splitlines():
+        m = re.match(r"^(\s*)(\w[\w ]*?), 0x[0-9a-f]+, \{\{([-\d.]+), ([-\d.]+)\}, \{([-\d.]+), ([-\d.]+)\}\}(.*)$", raw)
+        if not m:
+            continue
+        indent, kind, x, y, w, h, rest = m.groups()
+        if "identifier:" not in rest and "label:" not in rest:
+            continue
+        # 라벨 없는 컨테이너/이미지는 생략 (덤프가 필요하면 qakit dump-ui)
+        if kind.strip() in ("Other", "Image", "ScrollView", "Window") and "label:" not in rest:
+            continue
+        rest = re.sub(r", (Selected|Disabled|Enabled)", r" \1", rest)
+        lines.append(f"{indent}{kind}{rest} @{int(float(x))},{int(float(y))} {int(float(w))}x{int(float(h))}")
+    return lines
+
+
+# ─────────────────────────────── 앱 상태 / 동기화 ───────────────────────────────
+
+def git(app_dir, *args):
+    r = run(["git", "-C", str(app_dir), *args], check=False)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def app_state(ws):
+    """앱 소스 상태 스냅샷: 경로, 브랜치, 커밋, 미커밋 변경 해시."""
+    d = ws.app_dir
+    state = {"appPath": str(ws.project), "scheme": ws.scheme, "configuration": ws.configuration}
+    branch = git(d, "rev-parse", "--abbrev-ref", "HEAD")
+    if branch is not None:
+        state["branch"] = branch
+        state["commit"] = git(d, "rev-parse", "--short", "HEAD")
+        status = git(d, "status", "--porcelain", "--untracked-files=normal") or ""
+        diff = git(d, "diff", "HEAD") or ""
+        state["dirty"] = hashlib.sha1((status + diff).encode()).hexdigest()[:12] if status else ""
+        state["dirtyFiles"] = len(status.splitlines()) if status else 0
+    else:
+        # git이 아니면 Swift 파일 수정 시각으로
+        h = hashlib.sha1()
+        for f in sorted(gen_ids.iter_swift_files([d])):
+            h.update(f"{f}:{f.stat().st_mtime}".encode())
+        state["sourceHash"] = h.hexdigest()[:12]
+    return state
+
+
+SAME_KEYS = ("appPath", "scheme", "configuration", "commit", "dirty", "sourceHash")
+
+
+def load_state(ws, name):
+    f = ws.state_dir / f"{name}.json"
+    return json.loads(f.read_text()) if f.exists() else None
+
+
+def save_state(ws, name, data):
+    ws.state_dir.mkdir(exist_ok=True)
+    data = dict(data, savedAt=datetime.datetime.now().isoformat(timespec="seconds"))
+    (ws.state_dir / f"{name}.json").write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def describe_change(old, new):
+    if not old:
+        return "빌드 기록 없음"
+    parts = []
+    if old.get("appPath") != new.get("appPath"):
+        parts.append(f"앱 경로 {Path(old.get('appPath', '')).parent.name} → {Path(new['appPath']).parent.name}")
+    if old.get("branch") != new.get("branch"):
+        parts.append(f"브랜치 {old.get('branch') or '(git 아님)'} → {new.get('branch') or '(git 아님)'}")
+    elif old.get("commit") != new.get("commit"):
+        parts.append(f"커밋 {old.get('commit')} → {new.get('commit')}")
+    if old.get("dirty") != new.get("dirty"):
+        parts.append(f"미커밋 변경 {new.get('dirtyFiles', 0)}개 파일")
+    if old.get("sourceHash") != new.get("sourceHash"):
+        parts.append("소스 변경")
+    for k in ("scheme", "configuration"):
+        if old.get(k) != new.get(k):
+            parts.append(f"{k} {old.get(k)} → {new.get(k)}")
+    return ", ".join(parts)
+
+
+def app_changed(ws):
+    old = load_state(ws, "installed")
+    new = app_state(ws)
+    changed = not old or any(old.get(k) != new.get(k) for k in SAME_KEYS)
+    return changed, describe_change(old, new) if changed else "", new
+
+
+def auto_sync(ws):
+    if ws.sync_mode == "off":
+        return
+    changed, why, _ = app_changed(ws)
+    if not changed:
+        return
+    if ws.sync_mode == "warn":
+        warn(f"앱이 마지막 빌드 이후 바뀌었습니다 ({why}). 최신 상태로 테스트하려면 qakit sync")
+        return
+    info(f"🔄 앱 변경 감지 ({why}) → 동기화")
+    do_sync(ws, compile_check=False)
+
+
+def cmd_sync(args):
+    ws = find_workspace(args.workspace)
+    do_sync(ws, compile_check=True, force_build=args.rebuild, skip_build=args.skip_build)
+
+
+def do_sync(ws, compile_check=True, force_build=False, skip_build=False):
+    changed, why, state = app_changed(ws)
+    branch = state.get("branch")
+    info(f"앱: {ws.project}" + (f"  [{branch} @ {state.get('commit')}"
+                                 + (f", 미커밋 {state.get('dirtyFiles')}개" if state.get("dirty") else "") + "]"
+                                 if branch else ""))
+    # 1. 앱 빌드/설치
+    if skip_build:
+        info("1) 앱 빌드 생략 (--skip-build)" + (f" — 주의: 설치된 앱과 소스가 다름 ({why})" if changed else ""))
+    elif changed or force_build:
+        info(f"1) 앱 재빌드: {why or '요청'}")
+        cmd_build_app_ws(ws)
+    else:
+        ok("1) 설치된 앱이 최신")
+    # 2. ID 재생성
+    info("2) ID 상수 재생성")
+    generate_ids(ws, quiet=False)
+    # 3. 테스트 코드 컴파일 확인
+    broken = False
+    if compile_check:
+        info("3) 테스트 코드 컴파일 확인")
+        udid = ensure_booted(ws)
+        ensure_runner(ws)
+        r = run(["xcodebuild", "build-for-testing", "-project", str(ws.runner_project),
+                 "-scheme", RUNNER_SCHEME, "-destination", f"id={udid}",
+                 "-derivedDataPath", str(ws.build_dir / "runner")], check=False)
+        if r.returncode == 0:
+            ok("   테스트 코드 정상")
+        else:
+            errors = list(dict.fromkeys(l.strip() for l in r.stdout.splitlines() if "error:" in l))
+            id_errors = [e for e in errors if "QAID" in e]
+            print(f"❌ 테스트 코드 컴파일 실패 {len(errors)}건" + (f" (ID 변경 때문 {len(id_errors)}건)" if id_errors else ""))
+            for e in errors[:15]:
+                print("   " + re.sub(r"^.*/Runner/", "Runner/", e))
+            print("   → 위 Page/Flow에서 바뀐 ID를 새 QAID로 고치세요 (2)의 삭제/추가 목록 참고)")
+            broken = True
+    # 4. 브랜치 안내
+    workspace_branch = git(ws.root, "rev-parse", "--abbrev-ref", "HEAD")
+    if branch and workspace_branch and workspace_branch != branch:
+        if git(ws.root, "rev-parse", "--verify", "--quiet", branch) is not None:
+            warn(f"작업공간 브랜치({workspace_branch})가 앱 브랜치({branch})와 다릅니다. "
+                 f"같은 이름의 작업공간 브랜치가 있습니다: git -C {ws.root} switch {branch}")
+    if broken:
+        fail("동기화는 됐지만 테스트 코드 수정이 필요합니다.")
+    ok("동기화 완료")
+
+
+# ─────────────────────────────── 명령: gen-ids ───────────────────────────────
+
+def cmd_gen_ids(args):
+    ws = find_workspace(args.workspace)
+    trees, model = generate_ids(ws, quiet=False)
+    if args.verify:
+        verify_ids(ws, trees, model)
+
+
+def generate_ids(ws, quiet=True):
+    sources = ws.id_sources or [ws.app_dir]
+    trees, model, nfiles = gen_ids.build(sources)
+    ids = sorted(gen_ids.all_ids(trees))
+    state = app_state(ws)
+    note = f"앱: {ws.project.parent.name}" + (f" [{state.get('branch')} @ {state.get('commit')}]" if state.get("branch") else "")
+    ws.ids_file.parent.mkdir(parents=True, exist_ok=True)
+    ws.ids_file.write_text(gen_ids.render_swift(trees, note), encoding="utf-8")
+
+    prev = load_state(ws, "ids")
+    prev_ids = set(prev["ids"]) if prev else None
+    save_state(ws, "ids", {"ids": ids, "app": note})
+    if quiet:
+        return trees, model
+    info(f"   소스 {nfiles}개 → ID {len(ids)}개 → {ws.ids_file.relative_to(ws.root)}")
+    if prev_ids is not None:
+        added = sorted(set(ids) - prev_ids)
+        removed = sorted(prev_ids - set(ids))
+        if not added and not removed:
+            ok("   ID 변경 없음")
+        else:
+            info(f"   ID 변경: 추가 {len(added)}, 삭제 {len(removed)}")
+            for x in removed[:30]:
+                print(f"     - {x}")
+            for x in added[:30]:
+                print(f"     + {x}")
+            if len(removed) > 30 or len(added) > 30:
+                print("     ...(일부 생략)")
+            used = used_ids(ws)
+            broken = sorted(used & set(removed))
+            if broken:
+                warn(f"   테스트에서 쓰던 ID가 삭제됨: {', '.join(broken)}")
+    return trees, model
+
+
+def used_ids(ws):
+    """테스트 코드에 문자열로 직접 쓴 ID (QAID 상수로 바꾸지 않은 것)."""
+    found = set()
+    for f in (ws.runner_dir / "UITests").rglob("*.swift"):
+        if "Generated" in f.parts:
+            continue
+        found |= set(re.findall(r'"([A-Z]\w*(?:\.\w+)+)"', f.read_text(encoding="utf-8", errors="replace")))
+    return found
+
+
+def verify_ids(ws, trees, model):
+    dumps = sorted((ws.results_dir / "dumps").glob("*.txt"))
+    if (ws.results_dir / "ui-dump.txt").exists():
+        dumps.append(ws.results_dir / "ui-dump.txt")
+    if not dumps:
+        fail("비교할 화면 덤프가 없습니다.", "qakit dump-ui 를 화면별로 몇 번 실행한 뒤 다시 시도하세요.")
+    matched, missing, external = gen_ids.verify(gen_ids.all_ids(trees), model, dumps, gen_ids.id_types(trees))
+    info(f"검증 (덤프 {len(dumps)}개): 일치 {len(matched)}, 불일치 {len(missing)}, 앱 소스 밖·위치 규칙 {len(external)}")
+    for x in missing:
+        print(f"   ❌ 런타임에만 있음: {x}")
+    if missing:
+        fail("생성 ID와 런타임 ID가 다릅니다.", "AutoID 규칙과 gen_ids.py 규칙 차이 — 도구 버그로 보고하세요.")
+    ok("생성 ID가 런타임 ID와 일치")
+
+
+# ─────────────────────────────── 명령: install-skill ───────────────────────────────
+
+def cmd_install_skill(args):
+    """스킬을 Claude Code·Codex에, qakit을 PATH에 심볼릭 링크로 설치 (도구 레포 수정이 바로 반영됨)."""
+    skill = KIT_DIR / "skills" / "ios-qa-kit"
+    links = [
+        (Path.home() / ".claude" / "skills" / "ios-qa-kit", skill, "Claude Code 스킬"),
+        (Path.home() / ".agents" / "skills" / "ios-qa-kit", skill, "Codex 스킬"),
+        (Path.home() / ".local" / "bin" / "qakit", KIT_DIR / "bin" / "qakit", "qakit 명령"),
+    ]
+    for link, target, label in links:
+        if args.uninstall:
+            if link.is_symlink():
+                link.unlink()
+                ok(f"제거: {label} ({link})")
+            continue
+        if link.is_symlink():
+            if Path(os.path.realpath(link)) == target.resolve():
+                ok(f"이미 설치됨: {label} → {link}")
+                continue
+            link.unlink()
+        elif link.exists():
+            warn(f"건너뜀: {link}가 이미 있습니다 (링크 아님). 직접 확인하세요.")
+            continue
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+        ok(f"설치: {label} → {link}")
+    if not args.uninstall and str(Path.home() / ".local" / "bin") not in os.environ.get("PATH", ""):
+        warn("~/.local/bin이 PATH에 없습니다. 셸 설정에 추가하세요: export PATH=\"$HOME/.local/bin:$PATH\"")
+
+
+# ─────────────────────────────── main ───────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(prog="qakit", description="AI용 XCUITest 도구")
+    parser.add_argument("-w", "--workspace", help="작업공간 경로 (기본: 현재 폴더에서 qakit.yml 탐색)")
+    parser.add_argument("--app", help="앱 경로 일시 지정 (다른 워크트리/브랜치 폴더 검증용)")
+    parser.add_argument("--secrets", help="비밀값 파일 직접 지정 (기본: qakit.yml의 secrets). 계정을 바꿔 돌릴 때")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("init", help="작업공간 생성")
+    p.add_argument("project", help="앱 프로젝트 경로 (.xcodeproj/.xcworkspace 또는 그 폴더)")
+    p.add_argument("--name", help="작업공간 이름 (기본: 프로젝트 폴더 이름)")
+    p.add_argument("--dir", help="작업공간 경로 (기본: <프로젝트 상위>/qa-workspaces/<이름>)")
+    p.add_argument("--scheme", help="scheme 직접 지정")
+    p.add_argument("--simulator", help="시뮬레이터 이름")
+    p.add_argument("--force", action="store_true", help="템플릿 파일 덮어쓰기 (Flows/ 테스트는 유지)")
+    p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("install-skill", help="AI 스킬(Claude Code·Codex)과 qakit 명령 설치")
+    p.add_argument("--uninstall", action="store_true", help="설치한 링크 제거")
+    p.set_defaults(func=cmd_install_skill)
+
+    p = sub.add_parser("doctor", help="환경 점검")
+    p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser("build-app", help="대상 앱 빌드 + 설치 + 권한 허용")
+    p.set_defaults(func=cmd_build_app)
+
+    p = sub.add_parser("sync", help="앱 변경 반영: 재빌드·설치 + ID 재생성 + 테스트 코드 컴파일 확인")
+    p.add_argument("--rebuild", action="store_true", help="변경이 없어도 앱 재빌드")
+    p.add_argument("--skip-build", action="store_true", help="앱 빌드 생략 (ID 재생성·컴파일 확인만)")
+    p.set_defaults(func=cmd_sync)
+
+    p = sub.add_parser("gen-ids", help="앱 소스에서 ID 상수(QAIDs.swift) 생성")
+    p.add_argument("--verify", action="store_true", help="저장된 화면 덤프와 비교")
+    p.set_defaults(func=cmd_gen_ids)
+
+    p = sub.add_parser("dump-ui", help="화면 구조를 텍스트로 저장")
+    p.add_argument("--attach", action="store_true", help="앱을 새로 띄우지 않고 지금 화면을 덤프")
+    p.add_argument("--settle", type=float, default=3, help="덤프 전 대기 초 (기본 3)")
+    p.add_argument("--wait-id", help="이 ID가 나타날 때까지 기다린 뒤 덤프")
+    p.add_argument("--print", action="store_true", help="덤프 내용을 바로 출력")
+    p.set_defaults(func=cmd_dump_ui)
+
+    p = sub.add_parser("test", help="UI 테스트 실행")
+    p.add_argument("filters", nargs="*", help="예) LoginFlowTests 또는 LoginFlowTests/test_ensureLoggedIn")
+    p.add_argument("--reset", action="store_true", help="실행 전 앱 재설치 + 키체인 초기화 (로그아웃 상태)")
+    p.set_defaults(func=cmd_test)
+
+    p = sub.add_parser("summarize", help="실패 원인 요약")
+    p.add_argument("xcresult", nargs="?", help="기본: results/latest.xcresult")
+    p.set_defaults(func=cmd_summarize)
+
+    args = parser.parse_args()
+    args.workspace = getattr(args, "workspace", None)
+    global SECRETS_OVERRIDE, APP_OVERRIDE
+    SECRETS_OVERRIDE = args.secrets
+    APP_OVERRIDE = args.app
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

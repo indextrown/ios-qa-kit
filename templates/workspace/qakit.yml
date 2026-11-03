@@ -1,0 +1,30 @@
+# qakit 작업공간 설정 — `qakit init`이 만든 초안. 값을 확인하고 고치세요.
+name: {{NAME}}
+
+app:
+  project: {{PROJECT}}          # .xcodeproj 또는 .xcworkspace
+  scheme: {{SCHEME}}
+  configuration: {{CONFIGURATION}}
+  bundleId: {{BUNDLE_ID}}
+
+simulator: {{SIMULATOR}}
+language: ko                    # 화면 글자로 요소를 찾을 때 언어가 바뀌지 않도록 고정
+locale: ko_KR
+
+# 테스트 전에 미리 허용할 권한 (simctl privacy 이름)
+# 예) location, location-always, photos, camera, microphone, contacts, calendar, notifications
+permissions: []
+
+secrets: ./secrets.txt          # KEY=VALUE 형식, git에 올리지 않음
+
+# inject: 시뮬레이터에서 dylib을 주입해 자동 ID 부여 (앱 수정 없음)
+# embedded: 앱에 AutoID.swift를 넣은 경우 (실기기용)
+autoid: inject
+
+# 앱 변경 동기화: test 실행 전 앱 소스가 마지막 빌드 이후 바뀌었는지 확인
+#   auto: 바뀌었으면 재빌드·설치·ID 재생성 후 테스트 / warn: 알리기만 / off: 확인 안 함
+sync: auto
+
+# ID 상수 생성 대상 소스 (기본: 앱 프로젝트 폴더 전체, Pods/Tests 제외)
+# ids:
+#   sources: [~/path/to/app/Sources]
