@@ -5,6 +5,7 @@
 | 명령 | 하는 일 |
 |---|---|
 | `qakit init <앱 프로젝트> [--name] [--dir] [--scheme] [--force]` | 작업공간 생성. scheme·configuration·bundleId 자동 탐지 |
+| `qakit update [--check]` | 도구를 최신 버전으로 받기 (설치 폴더를 git fast-forward). `--check`: 새 버전이 있는지만 |
 | `qakit doctor` | 환경·설정·secrets 키 점검 |
 | `qakit build-app` | 앱 빌드 → 시뮬레이터 설치 → 권한 허용 |
 | `qakit sync [--rebuild] [--skip-build]` | 앱 변경 반영: 재빌드·설치 + ID 재생성(추가/삭제 보고) + 테스트 코드 컴파일 확인 |
