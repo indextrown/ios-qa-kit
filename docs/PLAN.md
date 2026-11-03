@@ -39,7 +39,7 @@
 
 ## SwiftUI 지원 설계 (다음 단계)
 
-> 상태: 설계 확정, S1(PoC) 완료(2026-11-03, PopPang-iOS). 조사 결과를 바탕으로 방식 ②(QA 빌드 직전 소스 삽입)로 결정.
+> 상태: S1(PoC)·S2(도구) 완료(2026-11-03, PopPang-iOS). 다음은 S3 CLI 통합. 조사 결과를 바탕으로 방식 ②(QA 빌드 직전 소스 삽입)로 결정.
 
 ### 왜 UIKit 방식이 안 되나
 
@@ -75,7 +75,7 @@ qakit build-app
 
 | 부분 | 역할 |
 |---|---|
-| `Tools/swiftui-ids` | SwiftSyntax 기반 Swift 패키지. `list`(ID만 계산, JSON), `insert`(소스 수정 + manifest), `restore`. 첫 빌드는 SwiftSyntax 컴파일로 수 분, `KIT_DIR/.build/swiftui-ids/`에 캐시 |
+| `Tools/swiftui-ids` | SwiftSyntax(604) 기반 Swift 패키지. `list`(ID만 계산, `--json`), `insert`(소스 수정 + manifest에 원본 보관), `restore`(manifest로 복원). 첫 빌드는 SwiftSyntax 컴파일로 약 3분, `Tools/swiftui-ids/.build/release/swiftui-ids` |
 | gen-ids | SwiftUI ID는 Python으로 다시 구현하지 않고 `swiftui-ids list`를 호출해 합친다. **삽입과 상수 생성이 같은 코드**라 규칙 불일치 버그가 원천 차단된다 |
 | qakit CLI | `build-app` 훅, `doctor` 검사, `swiftui-ids --restore`. `check`·`gen-ids --verify`·`dump-ui` 커버리지는 ID 목록만 커지므로 그대로 |
 | `qakit.yml` | `swiftui: auto \| off` (기본 auto: `import SwiftUI`가 있는 파일이 있으면 삽입) |
@@ -132,16 +132,28 @@ QA 워크트리 소스에 손으로 `.accessibilityIdentifier`를 넣고 두 번
 - Tuist 프로젝트는 워크트리에 `tuist generate`를 먼저 해야 `init`이 workspace를 찾는다. `init`의 로컬 파일 복사가 `*.xcodeproj`·`Derived/`·`.githooks`까지 가져온다 → 제외 목록 보강 필요 (S3).
 - 1MB 넘는 gitignore 폴더(RN 프레임워크 263MB)는 복사되지 않아 손으로 복사했다 → `qakit.yml`에 복사 목록을 적는 방안 (S3).
 
+### S2 결과 (2026-11-03)
+
+`Tools/swiftui-ids`를 만들어 PopPang-iOS `Projects/`(Legacy 제외, 92개 파일)에 돌렸다. ID 139개를 40개 파일에 삽입한 소스가 **컴파일 에러 없이 빌드**됐고, 온보딩·로그인 화면 덤프에 나온 앱 ID 7개가 **모두 `list` 결과와 일치**했다 (로그인 화면 커버리지 100%). `restore` 뒤 `git status` 깨끗.
+
+구현하면서 규칙에 더한 것:
+- **모듈 키**: 같은 타입 이름이 다른 모듈에 있을 수 있다 (`OnboardingFeatureView`가 V1·V2 모듈에 각각). 경로의 `Sources` 바로 위까지를 모듈 키로 삼아 (모듈, 타입)별로 번호·중복을 매긴다. ID 문자열에는 모듈이 들어가지 않으므로 두 모듈이 같은 ID를 낼 수 있다 → 상수 생성 때 중복 제거 필요 (S3).
+- **컨트롤 하나짜리 판정**에 "컨트롤 밖에 Text/Image/Label이 없다"를 추가. 버튼 하나와 설명 글자가 있는 화면 뷰(`MaintenanceFeatureView`)를 래퍼로 오인해 호출부 ID가 글자에도 붙는 것을 막는다.
+- **행 규칙 제한**: 행 콘텐츠에 XCUITest가 보는 것(컨트롤·글자·그림·커스텀 뷰)이 있을 때만, 그리고 콘텐츠가 호출식일 때만 붙인다. 점(Capsule)만 있는 ForEach, `if`/`switch`로 시작하는 행은 제외 (if 식 뒤에는 수식어를 못 붙인다).
+- 라벨 추출은 `Text("x", bundle:, comment:)`, `String(localized: "x", …)`, `LocalizedStringKey`, `Label`, `Image(systemName:)`까지.
+- `#Preview`, `PreviewProvider`, `*Tests`·`*Demo` 폴더는 건너뛴다.
+- S1 미결이던 "backButton"은 앱의 커스텀 뷰 `BackNavigationButton`이어서 `BackNavigationButton.Button.0`으로 잡혔다. 시스템 기본 뒤로가기는 여전히 미결.
+
 ### 단계
 
 | 단계 | 내용 | 완료 조건 |
 |---|---|---|
 | S1. PoC | 손으로 삽입 → `dump` (PopPang-iOS) | ✅ 커버리지 0→67~75%. 컨테이너 덮어쓰기·`.contain`·Button 자식 동작 확인, 호출부 규칙 확정 |
-| S2. 도구 | `Tools/swiftui-ids` (list/insert/restore), 위 규칙 전부 | 시범 앱에서 `list` 결과 = 삽입 후 `dump-ui` 결과 (불일치 0) |
+| S2. 도구 | `Tools/swiftui-ids` (list/insert/restore), 위 규칙 전부 | ✅ PopPang 139개 삽입 빌드 성공, 덤프 ID 7/7 일치, 복원 뒤 git 깨끗 |
 | S3. CLI | build-app 훅, 복원 보장, doctor, gen-ids 통합, `qakit.yml` 항목 | 강제 종료 후에도 워크트리가 깨끗해짐. `gen-ids --verify` 통과 |
 | S4. 문서·검증 | 스킬 규칙, README 한계 갱신, 혼합(UIKit+SwiftUI) 앱 한 개 더 | 새 AI 세션이 스킬만 보고 SwiftUI 화면 테스트를 첫 실행에 통과 |
 
-S1은 PopPang-iOS(QA 워크트리 `PopPang-iOS-qa`)에서 마쳤다. 다음은 S2 도구.
+S1·S2는 PopPang-iOS(QA 워크트리 `PopPang-iOS-qa`)에서 마쳤다. 다음은 S3 CLI 통합: `build-app` 훅(워크트리 확인 → insert → 빌드 → finally restore), `doctor`의 manifest 잔존 검사, `gen-ids`가 `swiftui-ids list --json`을 합치기(모듈 간 같은 ID 중복 제거), `qakit.yml`의 `swiftui:` 항목, `init`의 로컬 파일 복사 제외 목록 보강.
 
 ### 미결
 
@@ -163,7 +175,7 @@ S1은 PopPang-iOS(QA 워크트리 `PopPang-iOS-qa`)에서 마쳤다. 다음은 S
 | 5. 범용성 | 두 번째 앱 | ✅ 도구 버그 수정 후 동작 |
 | 6. 정기 실행 | — | 하지 않음 |
 | 이후 | QA 워크트리, 시나리오 언어, AI 없는 저장·복구, 시뮬레이터 잠금, 앱 설정값 판정(pref/repeat/watch), QA README 자동 생성 | ✅ v0.2.0 ~ v0.4.0 |
-| 7. SwiftUI | QA 빌드 직전 소스에 ID 삽입 ([설계](#swiftui-지원-설계-다음-단계)) | S1(PoC) ✅ PopPang-iOS 커버리지 0→75%. 다음 S2 도구 |
+| 7. SwiftUI | QA 빌드 직전 소스에 ID 삽입 ([설계](#swiftui-지원-설계-다음-단계)) | S1 ✅ S2 ✅ (도구 `Tools/swiftui-ids`, PopPang 로그인 화면 100%). 다음 S3 CLI 통합 |
 
 ## 주요 결정과 배운 것
 
