@@ -1703,6 +1703,62 @@ def cmd_install_skill(args):
         warn("~/.local/bin이 PATH에 없습니다. 셸 설정에 추가하세요: export PATH=\"$HOME/.local/bin:$PATH\"")
 
 
+# ─────────────────────────────── 명령: update ───────────────────────────────
+
+def cmd_update(args):
+    """설치한 도구 폴더를 원격의 최신으로 받는다 (git fast-forward만). 명령·스킬은 링크라 그대로 바뀐다."""
+    repo = KIT_DIR
+    if git(repo, "rev-parse", "--git-dir") is None:
+        fail(f"{repo}는 git 저장소가 아닙니다.", "git clone으로 설치한 경우만 qakit update를 쓸 수 있습니다")
+    branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    upstream = git(repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if not upstream:
+        fail(f"브랜치 {branch}에 연결된 원격 브랜치가 없습니다.", f"git -C {repo} branch -u origin/main")
+    if branch != "main":
+        warn(f"설치 폴더가 {branch} 브랜치입니다. 배포 버전은 main입니다 (개발 중이 아니면 git -C {repo} switch main)")
+
+    old_version = kit_version()
+    info(f"확인 중: {repo} ({branch}, {old_version})")
+    r = run(["git", "-C", str(repo), "fetch", "--tags", "--quiet"], check=False)
+    if r.returncode != 0:
+        fail("원격 저장소에서 받지 못했습니다 (네트워크·권한 확인)", (r.stdout or "")[-400:])
+
+    behind = int(git(repo, "rev-list", "--count", "HEAD..@{u}") or 0)
+    ahead = int(git(repo, "rev-list", "--count", "@{u}..HEAD") or 0)
+    if behind == 0:
+        ok(f"이미 최신입니다: qakit {old_version} ({branch})")
+        if ahead:
+            info(f"   로컬에만 있는 커밋 {ahead}개가 있습니다")
+        return
+    new_version = (git(repo, "show", "@{u}:VERSION") or "?").strip()
+    info(f"새 버전: {old_version} → {new_version} (커밋 {behind}개)")
+    for line in (git(repo, "log", "--oneline", "--no-merges", "HEAD..@{u}") or "").splitlines()[:20]:
+        print(f"   {line}")
+    if args.check:
+        info("받으려면: qakit update")
+        return
+
+    dirty = [l for l in (git(repo, "status", "--porcelain", "--untracked-files=no") or "").splitlines() if l.strip()]
+    if dirty:
+        fail("설치 폴더에 고친 파일이 있어 업데이트하지 않습니다: " + ", ".join(l[3:] for l in dirty[:5]),
+             f"git -C {repo} status 로 확인 (버려도 되면 git -C {repo} checkout -- .)")
+    if ahead:
+        fail(f"설치 폴더에 원격에 없는 커밋이 {ahead}개 있어 빨리 감기(fast-forward)가 안 됩니다.",
+             f"git -C {repo} log @{{u}}..HEAD 로 확인")
+    r = run(["git", "-C", str(repo), "merge", "--ff-only", "--quiet", "@{u}"], check=False)
+    if r.returncode != 0:
+        fail("업데이트 실패", (r.stdout or "")[-400:])
+    ok(f"업데이트 완료: qakit {kit_version()}")
+
+    # 명령·스킬 링크가 이 폴더를 가리키는지 (다른 폴더를 가리키면 업데이트가 반영되지 않는다)
+    links = [Path.home() / ".local" / "bin" / "qakit", Path.home() / ".claude" / "skills" / "ios-qa-kit",
+             Path.home() / ".agents" / "skills" / "ios-qa-kit"]
+    elsewhere = [str(l) for l in links if l.is_symlink() and not Path(os.path.realpath(l)).is_relative_to(repo.resolve())]
+    if elsewhere:
+        warn("다른 폴더를 가리키는 링크가 있습니다: " + ", ".join(elsewhere) + f" → {repo}/bin/qakit install-skill")
+    info("AutoID·swiftui-ids 도구는 다음 build-app 때 바뀐 것만 자동으로 다시 빌드됩니다.")
+
+
 # ─────────────────────────────── main ───────────────────────────────
 
 def main():
@@ -1735,6 +1791,10 @@ def main():
     p = sub.add_parser("install-skill", help="AI 스킬(Claude Code·Codex)과 qakit 명령 설치")
     p.add_argument("--uninstall", action="store_true", help="설치한 링크 제거")
     p.set_defaults(func=cmd_install_skill)
+
+    p = sub.add_parser("update", help="도구를 최신 버전으로 받기 (설치 폴더 git fast-forward)")
+    p.add_argument("--check", action="store_true", help="새 버전이 있는지만 확인")
+    p.set_defaults(func=cmd_update)
 
     p = sub.add_parser("doctor", help="환경 점검")
     p.set_defaults(func=cmd_doctor)

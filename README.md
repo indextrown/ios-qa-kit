@@ -49,6 +49,8 @@ git clone -b main https://github.com/indextrown/ios-qa-kit.git ~/ios-qa-kit
 - Claude Code 스킬 → `~/.claude/skills/ios-qa-kit` (`/ios-qa-kit`)
 - Codex 스킬 → `~/.agents/skills/ios-qa-kit` (`$ios-qa-kit`)
 
+**업데이트**: 새 버전이 나오면 `qakit update`. 설치 폴더(`~/ios-qa-kit`)를 원격 main으로 빨리 감기(fast-forward)하므로 명령과 스킬이 함께 바뀝니다. `qakit update --check`는 받지 않고 새 버전과 변경 목록만 보여 주고, 지금 버전은 `qakit --version`으로 봅니다.
+
 ### 2. 앱에 QA 워크트리 만들기 (권장)
 
 ```bash
@@ -503,6 +505,8 @@ SwiftUI는 실행 중에 읽을 프로퍼티 이름이 없어서, **QA 워크트
 | `qakit sync` | 앱 변경 반영 (재빌드 + ID 재생성 + 테스트 코드 컴파일 확인) |
 | `qakit gen-ids [--verify]` | ID 상수 생성 (`--verify`: 실제 화면 ID와 비교) |
 | `qakit install-skill [--uninstall]` | 스킬·명령 설치/제거 |
+| `qakit update [--check]` | 도구를 최신 버전으로 받기 (`--check`: 확인만) |
+| `qakit swiftui-ids --list` | SwiftUI 화면에 붙을 ID 목록 (`--insert`/`--restore`: 손으로 삽입·되돌리기) |
 | `qakit init <앱> --worktree` | QA 전용 워크트리(`<앱>-qa`) + 그 안 `QA/` 작업공간 |
 | `qakit run <시나리오> [--reset]` / `qakit check` | 시나리오 파일 실행 / 형식·ID 정적 검사 |
 | `qakit save -m "…"` / `qakit restore [--from 이름 --to QA]` | 결과물 저장 / AI 없이 복구 |
