@@ -20,6 +20,7 @@ description: iOS 앱의 QA 시나리오를 XCUITest로 만들고, 돌리고, 고
 4. **비밀값은 `QASecrets`로만 읽고** 출력·로그·note·테스트 이름에 넣지 않는다. secrets.txt를 직접 열어 값을 읽지 않는다 (키 확인은 `qakit doctor`).
 5. **`sleep` 금지.** `waitForExistence`, `QAWait.forAny`, `BasePage.waitUntilDisplayed`를 쓴다.
 6. **ID는 문자열로 쓰지 않고 `QAID` 상수로 쓴다.** 상수가 없는 요소만 라벨(`text("…")`)로 찾는다.
+7. **QA 워크트리는 유지한다.** 사용자가 명시적으로 요청하지 않는 한 QA 워크트리 브랜치(`qa/workspace`)를 develop 등 다른 브랜치로 병합하거나 push하지 않는다. 따라갈 브랜치가 앞서 있으면 그 커밋을 QA 워크트리로 가져와 최신화한다 (`qakit worktree-update`, `test`·`run` 전에 자동). 충돌이 나면 직접 풀지 말고 사용자에게 보고한다.
 
 ## 1. 시작
 
@@ -172,3 +173,4 @@ qakit test --reset FreshLoginTests            # 앱 재설치+키체인 초기�
 2. **컴파일 실패 위치**: 위 변경 때문이면 Page를 고친다.
 3. 그다음 `qakit test`로 동작(흐름·팝업) 변경을 확인하고 4번 루프로 고친다.
 4. 다른 브랜치 폴더(워크트리)를 검증할 때: `qakit --app <앱 폴더> test …`. 끝나면 원래 앱 기준으로 `qakit sync`.
+5. QA 워크트리가 develop보다 뒤처졌으면(`qakit doctor`가 알림) `qakit worktree-update`로 가져온 뒤 1번부터. QA 브랜치를 develop으로 병합하지 않는다.
