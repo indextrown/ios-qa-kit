@@ -1270,7 +1270,7 @@ def verify_ids(ws, trees, model):
     if not dumps:
         fail("비교할 화면 덤프가 없습니다.", "qakit dump-ui 를 화면별로 몇 번 실행한 뒤 다시 시도하세요.")
     matched, missing, external = gen_ids.verify(gen_ids.all_ids(trees), model, dumps, gen_ids.id_types(trees))
-    info(f"검증 (덤프 {len(dumps)}개): 일치 {len(matched)}, 불일치 {len(missing)}, 앱 소스 밖·위치 규칙 {len(external)}")
+    info(f"검증 (덤프 {len(dumps)}개): 일치 {len(matched)}, 불일치 {len(missing)}, 앱 소스 밖·위치 규칙·선언 타입 차이 {len(external)}")
     for x in missing:
         print(f"   ❌ 런타임에만 있음: {x}")
     if missing:
