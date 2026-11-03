@@ -39,7 +39,7 @@ steps:
 | 형식 | 의미 |
 |---|---|
 | `"ID"` | 자동 ID로 찾기 (`QAIDs.swift`의 값) |
-| `{ id, label, contains, type, in: <대상>, index }` | 조합. contains는 대소문자 무시 포함. type: button/cell/text/textField/secureTextField/switch/image/segment/other |
+| `{ id, label, contains, type, in: <대상>, index }` | 조합. contains는 대소문자 무시 포함. type: button/cell/text/textField/secureTextField/switch/image/segment/other/collectionview/scrollview/table. 목록을 스크롤할 때는 화면 밖 요소가 아니라 목록 자체에 스와이프한다: `swipe: { on: { type: collectionview, index: 0 }, dir: up }` |
 | `{ cell: 셀ID, has: { id?, label?, contains? } }` | 안에 조건에 맞는 요소가 있는 셀 |
 | `{ segment: 세그먼트ID, label: 항목 }` | UISegmentedControl 항목 |
 | `{ alert-button: 버튼 }` / `{ alert-field: true }` | 시스템 알림 버튼 / 입력칸 |

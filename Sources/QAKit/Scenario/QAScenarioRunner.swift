@@ -371,6 +371,9 @@ public final class QAScenarioRunner {
         case "image": return .image
         case "segment", "segmentedcontrol": return .segmentedControl
         case "other": return .other
+        case "collectionview", "collection": return .collectionView
+        case "scrollview", "scroll": return .scrollView
+        case "table", "tableview": return .table
         default: return .any
         }
     }
