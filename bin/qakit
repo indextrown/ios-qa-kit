@@ -23,6 +23,8 @@ Python 3.9 표준 라이브러리만 쓴다.
 """
 
 import argparse
+import contextlib
+import fcntl
 import datetime
 import hashlib
 import json
@@ -280,6 +282,34 @@ def ensure_booted(ws):
         run(["xcrun", "simctl", "boot", udid], check=False)
         run(["xcrun", "simctl", "bootstatus", udid, "-b"])
     return udid
+
+
+@contextlib.contextmanager
+def sim_lock(ws, what):
+    """시뮬레이터 하나에 qakit 실행은 한 번에 하나만. 두 실행이 같은 앱을 동시에 조작하면 입력이 섞인다.
+    다른 실행이 있으면 누가 돌리는지 알려 주고 끝날 때까지 기다린다."""
+    udid = ensure_booted(ws)
+    lock_dir = Path.home() / ".qakit" / "locks"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    path = lock_dir / f"{udid}.lock"
+    f = open(path, "a+")
+    try:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            f.seek(0)
+            holder = f.read().strip() or "다른 qakit 실행"
+            warn(f"이 시뮬레이터에서 다른 실행이 진행 중입니다 → 끝날 때까지 기다립니다\n   ({holder})")
+            fcntl.flock(f, fcntl.LOCK_EX)
+            ok("앞선 실행이 끝났습니다. 시작합니다.")
+        f.seek(0)
+        f.truncate()
+        f.write(f"pid {os.getpid()} · {what} · {ws.root} · {datetime.datetime.now():%H:%M:%S} 시작")
+        f.flush()
+        yield udid
+    finally:
+        fcntl.flock(f, fcntl.LOCK_UN)
+        f.close()
 
 
 def app_installed(udid, bundle_id):
@@ -758,7 +788,9 @@ Workspace.parse_keys = staticmethod(_parse_keys)
 # ─────────────────────────────── 명령: build-app ───────────────────────────────
 
 def cmd_build_app(args):
-    cmd_build_app_ws(find_workspace(args.workspace))
+    ws = find_workspace(args.workspace)
+    with sim_lock(ws, "qakit build-app"):   # 설치하면 실행 중인 앱이 꺼지므로
+        cmd_build_app_ws(ws)
 
 
 def cmd_build_app_ws(ws):
@@ -817,6 +849,11 @@ def find_built_app(ws):
 
 def cmd_dump_ui(args):
     ws = find_workspace(args.workspace)
+    with sim_lock(ws, "qakit dump-ui"):
+        _cmd_dump_ui(ws, args)
+
+
+def _cmd_dump_ui(ws, args):
     extra = {"DUMP_MODE": "attach" if args.attach else "launch", "DUMP_SETTLE": str(args.settle)}
     if args.wait_id:
         extra["DUMP_WAIT_ID"] = args.wait_id
@@ -862,6 +899,11 @@ def reset_app(ws, udid):
 
 def cmd_test(args):
     ws = find_workspace(args.workspace)
+    with sim_lock(ws, "qakit test " + " ".join(args.filters or [])):
+        _cmd_test(ws, args)
+
+
+def _cmd_test(ws, args):
     if not has_swift_runner(ws):
         fail("Swift 테스트가 없는 작업공간입니다.", "시나리오는 qakit run <시나리오>, 목록은 ls scenarios/")
     only = args.filters or []
@@ -1294,6 +1336,11 @@ def count_steps(steps):
 
 def cmd_run(args):
     ws = find_workspace(args.workspace)
+    with sim_lock(ws, f"qakit run {args.scenario}"):
+        _cmd_run(ws, args)
+
+
+def _cmd_run(ws, args):
     path, scenario = load_checked_scenario(ws, args.scenario, strict=not args.no_check)
     out = ws.root / ".qakit" / "scenarios" / (path.name.replace(".qa.yml", "") + ".json")
     out.parent.mkdir(parents=True, exist_ok=True)

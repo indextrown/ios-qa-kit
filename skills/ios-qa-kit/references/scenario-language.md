@@ -43,11 +43,34 @@ steps:
 
 ## 조건
 
-`exists` · `missing` · `visible`(화면 안) · `hidden` · `selected` · `hittable`: <대상>
+| 조건 | 참이 되는 경우 |
+|---|---|
+| `exists` / `missing` | 접근성 구조에 있다 / 없다 (화면 밖이어도 "있다") |
+| `visible` | 있고, 프레임이 화면 안에 있다 |
+| `hidden` | 없거나, 화면 밖에 있다 → **하단 시트·드로어를 닫았는지**는 이걸로 판정 (닫혀도 화면 밖에 남아 exists는 참) |
+| `selected` / `hittable` | 있고 선택됨 / 있고 누를 수 있음 |
+
 `right-of: [A, B]` (A가 B 가운데보다 오른쪽 — 커스텀 토글 판정 등) · `contains: { target, text }` · `equals: [a, b]`
 `changed: { of: <대상>, since: 스냅샷 }` · `not:` · `all: [..]` · `any: [..]`
 
+## 기본 대기 시간
+
+| 단계 | 기본 | 비고 |
+|---|---|---|
+| `tap`, `wait`, `read` | 10초 | 대상이 나타날 때까지 |
+| `wait-any` | 30초 | |
+| `input` 알림 | 5초 | |
+| `expect`, `if`, `unless` | **0초 (바로 판정)** | 화면 전환 직후라면 `timeout:`을 꼭 적는다 (예: 닫기 뒤 `hidden`은 `timeout: 5`) |
+
+## 변수
+
+- `vars`와 `read ... as:`, `wait-any ... as:`의 값은 **글자만** 된다. 대상(맵)을 변수에 넣어 재사용할 수는 없다 → 같은 대상은 그대로 다시 쓴다.
+- 비밀값은 `{secret:KEY}`로만 쓰고, `note`에 넣지 않는다.
+
 ## 쓰는 기준
+
+- 만들기 전에 `scenarios/`, `steps/`, `Runner/UITests/Flows/`에 **같은 시나리오·단계가 이미 있는지** 본다.
+- NOTES.md나 Swift Page에 적힌 헬퍼(예: `openMenu()`)는 Swift용이다. 시나리오 파일에서는 그 Page 소스(`Runner/UITests/Pages`)에 적힌 ID를 그대로 쓴다.
 
 - 대부분의 시나리오는 이 파일로 쓴다 (AI가 만들고, 실행·복구는 파일만으로).
 - 계산·복잡한 판정이 필요하면 Swift(`Runner/UITests/Flows`)로 쓴다.

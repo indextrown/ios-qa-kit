@@ -136,6 +136,8 @@ final class ItemListFlowTests: QATestCase {
 ## 4. 실행 → 고치기 루프
 
 ```bash
+qakit check menu-open-close                   # 시나리오 파일: 형식·ID 정적 검사
+qakit run menu-open-close                     # 시나리오 파일 실행 (실패 요약은 Swift와 같은 형식)
 qakit test SearchFlowTests                    # 클래스
 qakit test SearchFlowTests/test_search_showsResults
 qakit test --reset FreshLoginTests            # 앱 재설치+키체인 초기화 후 (로그아웃 상태가 필요할 때)
@@ -149,7 +151,8 @@ qakit test --reset FreshLoginTests            # 앱 재설치+키체인 초기�
 
 ## 5. 마무리
 
-- `qakit save -m "무엇을 만들었나"` — 결과물 목록·해시(qa.lock.json)와 보관소 복사. 이후 복구는 AI 없이 `qakit restore`.
+- `qakit save -m "무엇을 만들었나"` — 결과물 목록·해시(qa.lock.json)와 보관소 복사. 시나리오 파일·공통 단계·Swift·NOTES가 모두 포함된다. 이후 복구는 AI 없이 `qakit restore`.
+- 시나리오 파일로 만들었다면 NOTES.md에 그 시나리오가 쓰는 ID·판정 방법도 적는다 (Swift 헬퍼 이름만 적지 않는다).
 
 - 새로 알게 된 것을 `NOTES.md`에 적는다: 진입 흐름, 상태 판별 anchor, 새 팝업과 처리법, ID 없는 영역, 사용자 결정.
 - 사용자에게 보고: 만든/고친 테스트, 통과 여부(`qakit test` 출력 근거), 실행 횟수, 남은 문제.
