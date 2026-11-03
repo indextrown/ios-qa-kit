@@ -48,7 +48,7 @@
 ### 1. 설치
 
 ```bash
-git clone <이 레포> ~/ios-qa-kit        # 원하는 위치
+git clone -b main https://github.com/indextrown/ios-qa-kit.git ~/ios-qa-kit   # 비공개 레포: 접근 권한 필요
 ~/ios-qa-kit/bin/qakit install-skill
 ```
 
@@ -253,8 +253,14 @@ ios-qa-kit/
 ├── templates/workspace/      qakit init이 복사하는 작업공간 틀
 ├── skills/ios-qa-kit/        AI 스킬 (SKILL.md + references)
 ├── scripts/build-autoid.sh
-└── docs/PLAN.md              설계·진행 기록
+└── docs/
+    ├── PLAN.md               설계·진행 기록
+    └── gitflow.md            브랜치 규칙·기여 순서 (Git Flow)
 ```
+
+## 기여하기
+
+이 저장소는 Git Flow를 씁니다 — 사용자는 `main`을 설치하고, 개발은 `develop`에서 `feature/…` 브랜치 → PR로 합칩니다. CI가 없으니 PR 전에 [머지 전 확인](docs/gitflow.md#머지-전-확인)을 직접 돌립니다. 자세한 순서: [docs/gitflow.md](docs/gitflow.md)
 
 ## 검증 현황
 
