@@ -21,7 +21,8 @@ public enum QADump {
     /// - Parameters:
     ///   - app: 대상 앱
     ///   - settle: 덤프 전 기다릴 시간 (화면 전환/애니메이션 대기)
-    public static func run(app: XCUIApplication, settle: TimeInterval = 2) throws -> String {
+    ///   - name: 지정하면 results/ui-dump.txt 대신 results/dumps/<name>.txt에 저장 (시나리오 `dump:` 단계용)
+    public static func run(app: XCUIApplication, settle: TimeInterval = 2, name: String? = nil) throws -> String {
         RunLoop.current.run(until: Date().addingTimeInterval(settle))
 
         let snapshot = try app.snapshot()
@@ -67,7 +68,14 @@ public enum QADump {
         let output = (header + [""] + lines).joined(separator: "\n") + "\n"
 
         if let dir = QAConfig.resultsDir {
-            let url = URL(fileURLWithPath: dir).appendingPathComponent("ui-dump.txt")
+            var url = URL(fileURLWithPath: dir)
+            if let name {
+                url.appendPathComponent("dumps")
+                try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+                url.appendPathComponent("\(name).txt")
+            } else {
+                url.appendPathComponent("ui-dump.txt")
+            }
             try output.write(to: url, atomically: true, encoding: .utf8)
         }
         print("[qakit-coverage] \(withID)/\(total) (\(ratio)%)")
