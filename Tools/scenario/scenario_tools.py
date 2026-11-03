@@ -284,6 +284,8 @@ def _expand(steps, qa_root, stack):
             for k in ("then", "else", "steps"):
                 if k in step and isinstance(step[k], list):
                     step[k] = _expand(step[k], qa_root, stack)
+            if isinstance(step.get("repeat"), dict) and isinstance(step["repeat"].get("steps"), list):
+                step["repeat"] = dict(step["repeat"], steps=_expand(step["repeat"]["steps"], qa_root, stack))
         out.append(step)
     return out
 
