@@ -2318,6 +2318,39 @@ class BenchSession(threading.Thread):
         return result
 
 
+def write_call_tree(path, top, title, min_pct=0.5):
+    """Time Profiler 샘플로 만든 호출 트리를 읽기 쉬운 텍스트로 (시뮬레이터의 bench-sample.txt에 해당)."""
+    total, rename, binary = top["active"], top.get("rename") or {}, top.get("binary")
+    lines = [f"# 호출 트리 — {title}",
+             f"# 샘플 {total:,}개 (1ms마다 CPU를 쓰던 스택). 바깥(시작점) → 안쪽(실제로 CPU를 쓴 곳) 순서",
+             f"# 비율 = 그 함수와 그 아래에서 쓴 CPU / 전체. {min_pct}% 미만은 생략. [앱] = 앱 코드",
+             ""]
+
+    def label(frame_):
+        fn, lib = frame_
+        fn = rename.get(fn, fn)
+        where = "앱" if lib == binary else (lib or "?")
+        return (fn if len(fn) <= 110 else fn[:107] + "…") + f"  [{where}]"
+
+    def walk(node, prefix, chain=False):
+        items = sorted(node.items(), key=lambda kv: -kv[1][0])
+        items = [(k, v) for k, v in items if v[0] * 100.0 / total >= min_pct]
+        single = len(items) == 1
+        for i, (frame_, (count, children)) in enumerate(items):
+            last = i == len(items) - 1
+            pct_ = f"{count * 100.0 / total:5.1f}%"
+            if single and chain:
+                # 한 갈래로만 이어지면 들여쓰지 않고 바로 아래에 (시작점 쪽의 긴 사슬이 오른쪽으로 밀리지 않게)
+                lines.append(f"{prefix}   {pct_}  {label(frame_)}")
+                walk(children, prefix, chain=True)
+            else:
+                lines.append(f"{prefix}{'└─ ' if last else '├─ '}{pct_}  {label(frame_)}")
+                walk(children, prefix + ("   " if last else "│  "), chain=True)
+    walk(top["tree"], "")
+    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
 def atos_names(dsym, load_addr, addresses):
     """앱 주소 → 함수 이름 (dSYM + atos). 기기 전체 녹화는 앱 함수 이름이 안 붙어 직접 붙인다."""
     dwarf = next((Path(dsym) / "Contents" / "Resources" / "DWARF").glob("*"), None) if dsym else None
@@ -2375,6 +2408,7 @@ def time_profile_analyze(trace, app_binary, seconds, limit=10, pid=None, dsym=No
         return [val(fr, frame) for fr in el.findall("frame")]
 
     per_sec, selfc, appc, total, t0 = {}, {}, {}, 0, None
+    tree = {}   # 호출 트리: {(함수, 바이너리): [개수, {자식}]} — 바깥(시작점)에서 안쪽(실제로 CPU를 쓴 곳)으로
     try:
         for _, el in ET.iterparse(str(xml), events=("end",)):
             if el.tag != "row":
@@ -2396,6 +2430,16 @@ def time_profile_analyze(trace, app_binary, seconds, limit=10, pid=None, dsym=No
             if not stack:
                 continue
             total += 1
+            node, prev = tree, None
+            for fn_, lib_ in reversed(stack[-80:] if len(stack) > 80 else stack):   # 바깥 → 안쪽
+                if fn_.startswith("0x") and lib_ != app_binary:
+                    fn_ = f"({lib_} 내부)"        # 이름 없는 라이브러리 내부 함수는 이어지면 한 줄로
+                if (fn_, lib_) == prev and fn_.endswith(" 내부)"):
+                    continue
+                prev = (fn_, lib_)
+                entry = node.setdefault(prev, [0, {}])
+                entry[0] += 1
+                node = entry[1]
             fn, lib = stack[0]
             key = (fn if fn != "???" else f"??? ({lib})", lib)
             selfc[key] = selfc.get(key, 0) + 1
@@ -2424,9 +2468,11 @@ def time_profile_analyze(trace, app_binary, seconds, limit=10, pid=None, dsym=No
         selfc, appc = merged_self, {fn: v for fn, v in merged_app.items()
                                      if fn not in SAMPLE_APP_SKIP and not fn.startswith(SAMPLE_APP_SKIP_PREFIX)}
     pct = lambda v: v * 100.0 / total
+    rename = names if names else {}
     cpu = [per_sec.get(i, 0) / 1e7 for i in range(min(int(seconds), (max(per_sec) + 1) if per_sec else 0))]
     return {
         "cpu": cpu, "active": total, "symbolicated": bool(names) or not unresolved,
+        "tree": tree, "rename": rename, "binary": app_binary,
         "self": [(fn, "앱" if lb == app_binary else lb, pct(v)) for (fn, lb), v in
                  sorted(selfc.items(), key=lambda x: -x[1])[:limit]],
         "app": [(fn, "", pct(v)) for fn, v in sorted(appc.items(), key=lambda x: -x[1])[:limit]],
@@ -2578,6 +2624,8 @@ class DeviceBenchSession(threading.Thread):
         s = sorted(cpus)
         result.update(csv=str(csv), samples=len(cpus), cpu_avg=sum(cpus) / len(cpus), cpu_max=s[-1],
                       cpu_p95=s[min(len(s) - 1, int(len(s) * 0.95))],
+                      calltree=str(write_call_tree(Path(f"{self.base}-calltree.txt"), top,
+                                                   f"{ws.bundle_id} · {ws.device['name']} · {human_duration(seconds)}")),
                       top=top, top_raw=str(trace),
                       top_how="Time Profiler, 1ms 간격, 측정 전체" + (" · 무선이라 기기 전체 녹화에서 앱만 골라냄" if self.whole_device else ""))
         return result
@@ -2604,6 +2652,8 @@ def write_bench_summary(base, seconds, scenario, ws, s):
         if top["app"]:
             lines.append("앱 코드 기준 (그 함수가 부른 것까지 포함):")
             lines += [f"  {pct:5.1f}%  {short(fn)}" for fn, _, pct in top["app"]]
+        if s.get("calltree"):
+            lines.append(f"호출 트리 (텍스트): {s['calltree']}")
         lines.append(f"Time Profiler 기록: {s['top_raw']} (Instruments로 열기: open <파일>)")
     elif s.get("trace_error"):
         lines += ["", f"Time Profiler 녹화 실패: {s['trace_error']}"]
