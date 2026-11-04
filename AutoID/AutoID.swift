@@ -50,6 +50,46 @@ public final class QAAutoID: NSObject {
                 #selector(UIView.didMoveToWindow),
                 #selector(UIView.qa_didMoveToWindow))
         log("started")
+        if ProcessInfo.processInfo.environment["QAKIT_PREFS_ELEMENT"] == "1" {
+            DispatchQueue.main.async { startPrefsElement() }
+        }
+    }
+
+    // MARK: - 앱 설정 값 내보내기 (실기기)
+    // 실기기에서는 테스트가 앱의 설정(UserDefaults) 파일을 직접 읽을 수 없다.
+    // 0.5초마다 앱 설정 중 숫자·글자·참거짓 값을 JSON으로 만들어, 보이지 않는 1×1 요소(QAKit.prefs)의 값으로 둔다.
+
+    private static var prefsView: UIView?
+
+    private static func startPrefsElement() {
+        Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in updatePrefsElement() }
+        updatePrefsElement()
+    }
+
+    private static func updatePrefsElement() {
+        guard let window = UIApplication.shared.connectedScenes
+            .compactMap({ ($0 as? UIWindowScene)?.windows.first(where: \.isKeyWindow) }).first else { return }
+        let view: UIView
+        if let existing = prefsView {
+            view = existing
+        } else {
+            view = UIView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+            view.backgroundColor = .clear
+            view.isUserInteractionEnabled = false
+            view.isAccessibilityElement = true
+            view.accessibilityIdentifier = "QAKit.prefs"
+            prefsView = view
+        }
+        if view.window !== window { window.addSubview(view) }
+        window.bringSubviewToFront(view)
+        let domain = Bundle.main.bundleIdentifier.flatMap { UserDefaults.standard.persistentDomain(forName: $0) } ?? [:]
+        let scalars = domain.filter { _, value in
+            value is NSNumber || ((value as? String).map { $0.count <= 200 } ?? false)
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: scalars, options: [.sortedKeys]),
+           let json = String(data: data, encoding: .utf8), view.accessibilityValue != json {
+            view.accessibilityValue = json
+        }
     }
 
     // MARK: - Entry points

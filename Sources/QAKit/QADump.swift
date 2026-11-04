@@ -67,7 +67,13 @@ public enum QADump {
         }
         let output = (header + [""] + lines).joined(separator: "\n") + "\n"
 
-        if let dir = QAConfig.resultsDir {
+        if QAConfig.isDevice {
+            // 실기기: Mac 폴더에 쓸 수 없다 → 첨부로 남기면 qakit이 결과 폴더로 꺼낸다
+            let attachment = XCTAttachment(string: output)
+            attachment.name = "qakit-file:" + (name.map { "dumps/\($0).txt" } ?? "ui-dump.txt")
+            attachment.lifetime = .keepAlways
+            XCTContext.runActivity(named: "qakit dump") { $0.add(attachment) }
+        } else if let dir = QAConfig.resultsDir {
             var url = URL(fileURLWithPath: dir)
             if let name {
                 url.appendPathComponent("dumps")

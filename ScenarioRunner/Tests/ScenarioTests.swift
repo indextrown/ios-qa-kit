@@ -5,6 +5,10 @@ import XCTest
 final class ScenarioTests: QATestCase {
 
     func test_run() throws {
+        if let b64 = QAConfig.value("SCENARIO_B64"), let data = Data(base64Encoded: b64) {
+            try QAScenarioRunner(testCase: self).run(json: data)
+            return
+        }
         guard let path = QAConfig.value("SCENARIO_JSON") else {
             XCTFail("QA_ARG_SCENARIO_JSON이 없습니다. qakit run <시나리오>로 실행하세요.")
             return

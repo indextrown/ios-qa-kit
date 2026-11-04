@@ -24,6 +24,7 @@ Python 3.9 표준 라이브러리만 쓴다.
 """
 
 import argparse
+import base64
 import contextlib
 import fcntl
 import datetime
@@ -35,6 +36,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import xml.etree.ElementTree as ET
@@ -152,6 +154,7 @@ class Workspace:
         srcs = ids.get("sources") if isinstance(ids, dict) else None
         self.id_sources = [expand(x, self.root) for x in (srcs if isinstance(srcs, list) else [srcs] if srcs else [])]
         self.app_override = False
+        self.device = None   # --device로 고른 실기기 (None = 시뮬레이터)
         # 빌드 종류: debug(기본) = app.configuration / release = app.release.configuration (기본 Release)
         self.build = BUILD_MODE or "debug"
         self.state_name = "installed"
@@ -190,9 +193,10 @@ class Workspace:
     @property
     def app_build_dir(self):
         # 앱 경로별로 빌드 폴더를 나눈다 (워크트리/브랜치 폴더를 오가도 서로 덮어쓰지 않게)
+        suffix = "-device" if self.device else ""
         if not self.app_override:
-            return self.build_dir / "app"
-        return self.build_dir / ("app-" + slug(str(self.app_dir.name)))
+            return self.build_dir / ("app" + suffix)
+        return self.build_dir / ("app-" + slug(str(self.app_dir.name)) + suffix)
 
     @property
     def state_dir(self):
@@ -208,7 +212,7 @@ class Workspace:
 
     @property
     def autoid_dylib(self):
-        return KIT_DIR / ".build" / "autoid" / "QAAutoID.dylib"
+        return KIT_DIR / ".build" / ("autoid-device" if self.device else "autoid") / "QAAutoID.dylib"
 
     @property
     def swiftui_manifest(self):
@@ -239,6 +243,7 @@ def expand(path, base):
 SECRETS_OVERRIDE = None
 APP_OVERRIDE = None
 BUILD_MODE = None   # --build debug|release
+DEVICE_ARG = None   # --device select|last|<이름>
 
 
 def find_workspace(explicit):
@@ -253,6 +258,10 @@ def find_workspace(explicit):
             ws.project = project.resolve()
             ws.app_override = True
             info(f"ℹ️  앱 경로 일시 지정: {ws.project}")
+    if DEVICE_ARG:
+        ws.device = choose_device(ws, DEVICE_ARG)
+        if ws.device:
+            ws.state_name += f"-device-{ws.device['udid']}"
     return ws
 
 
@@ -330,7 +339,7 @@ def ensure_booted(ws):
 def sim_lock(ws, what):
     """시뮬레이터 하나에 qakit 실행은 한 번에 하나만. 두 실행이 같은 앱을 동시에 조작하면 입력이 섞인다.
     다른 실행이 있으면 누가 돌리는지 알려 주고 끝날 때까지 기다린다."""
-    udid = ensure_booted(ws)
+    udid = ws.device["udid"] if ws.device else ensure_booted(ws)
     lock_dir = Path.home() / ".qakit" / "locks"
     lock_dir.mkdir(parents=True, exist_ok=True)
     path = lock_dir / f"{udid}.lock"
@@ -341,7 +350,7 @@ def sim_lock(ws, what):
         except BlockingIOError:
             f.seek(0)
             holder = f.read().strip() or "다른 qakit 실행"
-            warn(f"이 시뮬레이터에서 다른 실행이 진행 중입니다 → 끝날 때까지 기다립니다\n   ({holder})")
+            warn(f"이 {'기기' if ws.device else '시뮬레이터'}에서 다른 실행이 진행 중입니다 → 끝날 때까지 기다립니다\n   ({holder})")
             fcntl.flock(f, fcntl.LOCK_EX)
             ok("앞선 실행이 끝났습니다. 시작합니다.")
         f.seek(0)
@@ -359,6 +368,326 @@ def app_installed(udid, bundle_id):
     return r.returncode == 0
 
 
+# ─────────────────────────────── 실기기 (--device) ───────────────────────────────
+# 같은 네트워크(또는 케이블)로 연결된 iPhone/iPad에서 시나리오를 돌린다.
+# 시뮬레이터와 다른 점: 앱·실행기를 개발자 팀으로 서명, AutoID dylib을 앱 안(Frameworks/)에 넣고 다시 서명,
+# devicectl로 설치. Mac 파일을 읽고 쓸 수 없어 시나리오는 내용째(base64) 넘기고 결과는 테스트 첨부로 받는다.
+
+DEVICE_AUTOID_PATH = "@executable_path/Frameworks/QAAutoID.dylib"
+
+
+def list_devices():
+    """devicectl이 아는 iOS 기기 목록 (페어링된 것)."""
+    out = Path(tempfile.mkstemp(suffix=".json")[1])
+    try:
+        run(["xcrun", "devicectl", "list", "devices", "--json-output", str(out)], check=False)
+        data = json.loads(out.read_text() or "{}")
+    except (OSError, ValueError):
+        data = {}
+    finally:
+        out.unlink(missing_ok=True)
+    devices = []
+    for d in (data.get("result") or {}).get("devices", []):
+        hw, dp, cp = d.get("hardwareProperties", {}), d.get("deviceProperties", {}), d.get("connectionProperties", {})
+        if hw.get("platform") not in ("iOS", "iPadOS") or not hw.get("udid"):
+            continue
+        state = cp.get("tunnelState") or "unavailable"
+        transport = cp.get("transportType")
+        devices.append({
+            "name": dp.get("name") or hw.get("marketingName") or d.get("identifier"),
+            "id": d.get("identifier"), "udid": hw.get("udid"),
+            "model": hw.get("marketingName") or "", "os": dp.get("osVersionNumber") or "",
+            "state": state, "transport": transport,
+            "developerMode": dp.get("developerModeStatus") == "enabled",
+            "available": state != "unavailable",
+        })
+    return devices
+
+
+def device_status_text(d):
+    if not d["available"]:
+        return "연결 안 됨"
+    if d["state"] == "connected":
+        return "케이블 연결됨" if d["transport"] == "wired" else "무선 연결됨"
+    return "같은 네트워크 (실행할 때 연결)"
+
+
+def _last_device_file(ws):
+    return ws.state_dir / "device.json"
+
+
+def pick_from_list(title, rows, start=0):
+    """방향키로 고르는 목록. rows = [(글자, 선택 가능)]. 고른 번호 또는 None(취소)."""
+    import termios
+    import tty
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    idx = start if rows[start][1] else next((i for i, r in enumerate(rows) if r[1]), 0)
+    out = sys.stdout
+
+    def draw(first):
+        if not first:
+            out.write(f"\x1b[{len(rows) + 2}F")
+        out.write(f"\x1b[J{title}  (↑↓ 이동 · Enter 선택 · Esc 취소)\r\n\r\n")
+        for i, (text, enabled) in enumerate(rows):
+            if i == idx:
+                out.write(f"  \x1b[1;36m❯ {text}\x1b[0m\r\n")
+            elif not enabled:
+                out.write(f"    \x1b[2m{text}\x1b[0m\r\n")
+            else:
+                out.write(f"    {text}\r\n")
+        out.flush()
+
+    def move(step):
+        nonlocal idx
+        for _ in range(len(rows)):
+            idx = (idx + step) % len(rows)
+            if rows[idx][1]:
+                return
+
+    try:
+        tty.setraw(fd)
+        out.write("\x1b[?25l")
+        draw(True)
+        while True:
+            ch = os.read(fd, 1)
+            if ch in (b"\r", b"\n"):
+                return idx
+            if ch in (b"q", b"\x03"):
+                return None
+            if ch == b"\x1b":
+                seq = os.read(fd, 2) if select_ready(fd) else b""
+                if seq == b"[A":
+                    move(-1)
+                elif seq == b"[B":
+                    move(1)
+                elif not seq:
+                    return None
+            elif ch in (b"k",):
+                move(-1)
+            elif ch in (b"j",):
+                move(1)
+            elif ch.isdigit() and 1 <= int(ch) <= len(rows) and rows[int(ch) - 1][1]:
+                idx = int(ch) - 1
+            draw(False)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        out.write("\x1b[?25h")
+        out.flush()
+
+
+def text_width(text):
+    """터미널에 보이는 폭 (한글 등 넓은 글자는 2칸)."""
+    import unicodedata
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in str(text))
+
+
+def pad(text, width):
+    return str(text) + " " * max(1, width - text_width(text))
+
+
+def select_ready(fd, timeout=0.05):
+    import select
+    return bool(select.select([fd], [], [], timeout)[0])
+
+
+def choose_device(ws, arg):
+    """--device 값 → 기기 dict, 또는 None(시뮬레이터). select: 방향키 목록 / last: 지난번 기기 / 이름·UDID."""
+    devices = list_devices()
+    last = {}
+    try:
+        last = json.loads(_last_device_file(ws).read_text())
+    except (OSError, ValueError):
+        pass
+    arg = str(arg).strip()
+    if arg in ("select", "list", "?"):
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            listing = "\n   ".join(f"{d['name']}  ({d['model']}, iOS {d['os']}, {device_status_text(d)})" for d in devices)
+            fail("--device select는 터미널에서만 고를 수 있습니다.",
+                 f'--device "<이름>"으로 지정하세요. 기기 목록:\n   {listing or "(페어링된 기기 없음)"}')
+        devices.sort(key=lambda d: (not d["available"], d["udid"] != last.get("udid"), d["name"]))
+        ready = [d for d in devices if d["available"]]
+        sim = {"name": "시뮬레이터", "model": ws.simulator, "sim": True}
+        order = ready + [sim] + [d for d in devices if not d["available"]]   # 연결 안 된 기기는 맨 아래
+        name_w = max(text_width(d["name"]) for d in order) + 2
+        model_w = max(text_width(d["model"]) for d in order) + 2
+        rows = []
+        for d in order:
+            head = pad(d["name"], name_w) + pad(d["model"], model_w)
+            if d.get("sim"):
+                rows.append((head + "(qakit.yml의 simulator)", True))
+                continue
+            tag = "   ← 지난번" if d["udid"] == last.get("udid") else ""
+            rows.append((head + pad(f"iOS {d['os']}", 13) + device_status_text(d) + tag, d["available"]))
+        devices = order
+        choice = pick_from_list("실행할 기기를 고르세요", rows)
+        if choice is None:
+            fail("취소했습니다.")
+        if devices[choice].get("sim"):
+            return None
+        device = devices[choice]
+    elif arg == "last":
+        device = next((d for d in devices if d["udid"] == last.get("udid")), None)
+        if not device:
+            fail("지난번에 고른 기기가 없거나 지금 목록에 없습니다.", "--device select로 고르세요")
+    else:
+        key = arg.lower()
+        matches = [d for d in devices if key in (d["udid"].lower(), (d["id"] or "").lower(), d["name"].lower())]
+        matches = matches or [d for d in devices if key in d["name"].lower()]
+        if len(matches) != 1:
+            listing = "\n   ".join(d["name"] for d in devices) or "(페어링된 기기 없음)"
+            fail(f"기기 '{arg}'를 " + ("찾지 못했습니다." if not matches else "하나로 정하지 못했습니다."),
+                 f"이름을 정확히 쓰거나 --device select로 고르세요. 기기 목록:\n   {listing}")
+        device = matches[0]
+    if not device["available"]:
+        fail(f"{device['name']}이(가) 연결돼 있지 않습니다.",
+             "기기 잠금을 풀고 Mac과 같은 Wi-Fi에 있는지 확인하세요 (처음엔 케이블로 한 번 연결해 Xcode에서 페어링)")
+    if not device["developerMode"]:
+        fail(f"{device['name']}의 개발자 모드가 꺼져 있습니다.", "기기에서 설정 › 개인정보 보호 및 보안 › 개발자 모드를 켜세요")
+    ws.state_dir.mkdir(exist_ok=True)
+    _last_device_file(ws).write_text(json.dumps({"udid": device["udid"], "name": device["name"]}, ensure_ascii=False))
+    info(f"📱 실기기: {device['name']} ({device['model']}, iOS {device['os']}, {device_status_text(device)})")
+    return device
+
+
+def device_team(ws):
+    """서명할 개발자 팀: qakit.yml device.team → 앱 빌드 설정의 DEVELOPMENT_TEAM (기억해 둔다)."""
+    cfg = ws.cfg.get("device") or {}
+    if isinstance(cfg, dict) and cfg.get("team"):
+        return str(cfg["team"])
+    cache = ws.state_dir / "device-team.json"
+    key = f"{ws.project}|{ws.scheme}|{ws.configuration}"
+    try:
+        data = json.loads(cache.read_text())
+        if data.get("key") == key and data.get("team"):
+            return data["team"]
+    except (OSError, ValueError):
+        pass
+    r = run(["xcodebuild", "-showBuildSettings", *project_flag(ws.project), "-scheme", ws.scheme,
+             "-configuration", ws.configuration, "-destination", "generic/platform=iOS"], check=False)
+    team = next((l.split("=", 1)[1].strip() for l in (r.stdout or "").splitlines()
+                 if l.strip().startswith("DEVELOPMENT_TEAM =")), "")
+    if not team:
+        fail("실기기 서명에 쓸 개발자 팀을 찾지 못했습니다.", "qakit.yml에 device: { team: <팀 ID> }를 적으세요")
+    ws.state_dir.mkdir(exist_ok=True)
+    cache.write_text(json.dumps({"key": key, "team": team}))
+    return team
+
+
+def embed_autoid(app_path, dylib):
+    """AutoID dylib을 앱의 Frameworks/에 넣고 앱과 같은 인증서·권한으로 다시 서명한다."""
+    r = run(["codesign", "-dvvv", str(app_path)], check=False)
+    identity = next((l.split("=", 1)[1] for l in (r.stdout or "").splitlines() if l.startswith("Authority=")), None)
+    if not identity:
+        fail(f"{app_path.name}의 서명 인증서를 읽지 못했습니다.", "Xcode에서 이 앱을 기기로 한 번 실행해 서명을 확인하세요")
+    ent = Path(tempfile.mkstemp(suffix=".plist")[1])
+    try:
+        # stdout만 (stderr의 "Executable=…" 줄이 섞이면 plist가 깨진다)
+        ent.write_bytes(subprocess.run(["codesign", "-d", "--entitlements", "-", "--xml", str(app_path)],
+                                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout or b"")
+        fw = app_path / "Frameworks"
+        fw.mkdir(exist_ok=True)
+        shutil.copy2(dylib, fw / "QAAutoID.dylib")
+        run(["codesign", "--force", "--sign", identity, str(fw / "QAAutoID.dylib")])
+        sign = ["codesign", "--force", "--sign", identity, "--generate-entitlement-der"]
+        if ent.stat().st_size > 0:
+            sign += ["--entitlements", str(ent)]
+        run(sign + [str(app_path)])
+    finally:
+        ent.unlink(missing_ok=True)
+
+
+def device_install(ws, app_path):
+    run(["xcrun", "devicectl", "device", "install", "app", "--device", ws.device["id"], str(app_path)])
+
+
+def device_app_installed(ws):
+    r = run(["xcrun", "devicectl", "device", "info", "apps", "--device", ws.device["id"],
+             "--bundle-id", ws.bundle_id], check=False)
+    return r.returncode == 0 and ws.bundle_id in (r.stdout or "")
+
+
+def device_app_pid(ws):
+    """기기에서 실행 중인 대상 앱의 PID (앱 설치 경로로 찾는다 — 이름이 같은 다른 앱과 구분)."""
+    def devicectl_json(*cmd):
+        out = Path(tempfile.mkstemp(suffix=".json")[1])
+        try:
+            run(["xcrun", "devicectl", "device", "info", *cmd, "--device", ws.device["id"],
+                 "--json-output", str(out)], check=False)
+            return json.loads(out.read_text() or "{}").get("result") or {}
+        except (OSError, ValueError):
+            return {}
+        finally:
+            out.unlink(missing_ok=True)
+    apps = devicectl_json("apps", "--bundle-id", ws.bundle_id).get("apps") or []
+    url = (apps[0].get("url") if apps else "") or ""
+    prefix = url.replace("file://", "").rstrip("/").replace("/private/var/", "/var/")
+    if not prefix:
+        return None
+    for p in devicectl_json("processes").get("runningProcesses") or []:
+        exe = (p.get("executable") or "").replace("file://", "").replace("/private/var/", "/var/")
+        if exe.startswith(prefix + "/"):
+            return p.get("processIdentifier")
+    return None
+
+
+def ensure_device_runner(team):
+    """시나리오 실행기를 실기기용으로 서명해서 빌드한다 (도구·팀이 바뀌었을 때만)."""
+    build = KIT_DIR / ".build" / f"scenario-runner-device-{team}"
+    h = hashlib.sha1(team.encode())
+    for base in (KIT_DIR / "Sources" / "QAKit", KIT_DIR / "ScenarioRunner"):
+        for f in sorted(base.rglob("*")):
+            if f.is_file() and ".xcodeproj" not in str(f):
+                h.update(str(f.relative_to(KIT_DIR)).encode())
+                h.update(f.read_bytes())
+    h.update(run(["xcodebuild", "-version"], check=False).stdout.encode())
+    stamp = build / ".stamp"
+    found = list((build / "Build" / "Products").glob("*iphoneos*.xctestrun"))
+    if found and stamp.exists() and stamp.read_text() == h.hexdigest():
+        return found[0]
+    info("시나리오 실행기 빌드 중 (실기기용, 도구가 바뀌었을 때 한 번)...")
+    run(["xcodegen", "generate", "--quiet", "--spec", str(KIT_DIR / "ScenarioRunner" / "project.yml"),
+         "--project", str(KIT_DIR / "ScenarioRunner")])
+    r = run(["xcodebuild", "build-for-testing", "-project", str(SCENARIO_PROJECT), "-scheme", "ScenarioTests",
+             "-destination", "generic/platform=iOS", "-derivedDataPath", str(build),
+             "CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_STYLE=Automatic", f"DEVELOPMENT_TEAM={team}",
+             "-allowProvisioningUpdates"], check=False)
+    if r.returncode != 0:
+        errors = [l for l in (r.stdout or "").splitlines() if "error:" in l]
+        fail("시나리오 실행기 빌드 실패 (실기기)", "\n   ".join(dict.fromkeys(errors[:10])))
+    stamp.write_text(h.hexdigest())
+    return list((build / "Build" / "Products").glob("*iphoneos*.xctestrun"))[0]
+
+
+def extract_device_files(ws, xcresult, run_dir):
+    """실기기 실행기가 첨부로 남긴 파일(qakit-file:<경로>)을 결과 폴더로 꺼낸다 (덤프 등)."""
+    dest = Path(tempfile.mkdtemp())
+    try:
+        r = run(["xcrun", "xcresulttool", "export", "attachments", "--path", str(xcresult),
+                 "--output-path", str(dest)], check=False)
+        manifest = dest / "manifest.json"
+        if r.returncode != 0 or not manifest.exists():
+            return
+        mask = masker(ws.secrets())
+        for entry in json.loads(manifest.read_text()):
+            for a in entry.get("attachments", []):
+                name = a.get("suggestedHumanReadableName", "")
+                if not name.startswith("qakit-file:"):
+                    continue
+                rel = re.sub(r"_\d+_[0-9A-F-]{36}(\.\w+)?$", "", name[len("qakit-file:"):])   # xcresult가 붙인 꼬리 제거
+                rel = rel if rel.endswith(".txt") else rel + ".txt"
+                if ".." in Path(rel).parts:
+                    continue
+                for target in (ws.results_dir / rel, run_dir / rel):
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(mask((dest / a["exportedFileName"]).read_text(encoding="utf-8", errors="replace")),
+                                      encoding="utf-8")
+    finally:
+        shutil.rmtree(dest, ignore_errors=True)
+
+
+
+
 # ─────────────────────────────── 빌드 ───────────────────────────────
 
 def project_flag(project):
@@ -372,8 +701,8 @@ def ensure_autoid(ws):
     dylib = ws.autoid_dylib
     newest_src = max(p.stat().st_mtime for p in src.iterdir())
     if not dylib.exists() or dylib.stat().st_mtime < newest_src:
-        info("AutoID dylib 빌드 중...")
-        run([str(KIT_DIR / "scripts" / "build-autoid.sh")])
+        info("AutoID dylib 빌드 중..." + (" (실기기용)" if ws.device else ""))
+        run([str(KIT_DIR / "scripts" / "build-autoid.sh"), str(dylib.parent), "device" if ws.device else "simulator"])
 
 
 SWIFTUI_IDS_DIR = KIT_DIR / "Tools" / "swiftui-ids"
@@ -530,7 +859,8 @@ def test_env(ws, extra=None):
         if value is not None:
             env[f"TEST_RUNNER_{key}"] = str(value)
     put("QA_BUNDLE_ID", ws.bundle_id)
-    put("QA_AUTOID_DYLIB", ws.autoid_dylib if ws.autoid == "inject" else None)
+    put("QA_AUTOID_DYLIB", (DEVICE_AUTOID_PATH if ws.device else ws.autoid_dylib) if ws.autoid == "inject" else None)
+    put("QA_DEVICE", "1" if ws.device else None)
     put("QA_LANGUAGE", ws.language)
     put("QA_LOCALE", ws.locale)
     put("QA_RESULTS_DIR", ws.results_dir)
@@ -582,7 +912,7 @@ def run_tests(ws, only, extra_env=None, label="test", quiet=False):
     return execute_xctest(ws, cmd, extra_env, label, ts, xcresult, quiet)
 
 
-def execute_xctest(ws, cmd, extra_env, label, ts, xcresult, quiet, history_name=None):
+def execute_xctest(ws, cmd, extra_env, label, ts, xcresult, quiet, history_name=None, on_line=None):
     """xcodebuild 테스트 실행 공통: 출력 마스킹·필터, 로그, latest 링크, 실행 기록."""
     mask = masker(ws.secrets())
     log_path = xcresult.parent / "output.log"
@@ -595,6 +925,8 @@ def execute_xctest(ws, cmd, extra_env, label, ts, xcresult, quiet, history_name=
             line = mask(line)
             log.write(line)
             lines.append(line)
+            if on_line:
+                on_line(line)
             if not quiet and shown.search(line):
                 print("  " + simplify_line(line.rstrip()), flush=True)
     proc.wait()
@@ -995,16 +1327,19 @@ def cmd_build_app(args):
 def cmd_build_app_ws(ws):
     ws.results_dir.mkdir(exist_ok=True)
     ensure_autoid(ws)
-    udid = ensure_booted(ws)
+    udid = ws.device["udid"] if ws.device else ensure_booted(ws)
 
-    info(f"앱 빌드 중: {ws.scheme} ({ws.configuration}, {ws.build}) — 처음엔 몇 분 걸립니다")
+    info(f"앱 빌드 중: {ws.scheme} ({ws.configuration}, {ws.build})" + (" · 실기기용" if ws.device else "")
+         + " — 처음엔 몇 분 걸립니다")
     log_path = ws.results_dir / "build-app.log"
     cmd = ["xcodebuild", "build", *project_flag(ws.project), "-scheme", ws.scheme,
            "-configuration", ws.configuration,
            # -sdk는 주지 않는다: 모든 타깃의 SDK를 덮어써서 Swift 매크로 플러그인(macOS 실행 파일)까지
            # 시뮬레이터용으로 빌드돼 "produced malformed response"로 실패한다. -destination이 SDK를 정한다.
-           "-destination", "generic/platform=iOS Simulator",
+           "-destination", "generic/platform=iOS" if ws.device else "generic/platform=iOS Simulator",
            "-derivedDataPath", str(ws.app_build_dir)]
+    if ws.device:
+        cmd += ["-allowProvisioningUpdates", f"DEVELOPMENT_TEAM={device_team(ws)}"]
     state = app_state(ws)
     before = git(ws.app_dir, "status", "--porcelain", "--", *app_pathspec(ws))
     # SwiftUI 소스에 ID를 끼워 넣고 빌드한 뒤, 무슨 일이 있어도(실패·Ctrl-C) 원래대로 되돌린다
@@ -1029,6 +1364,17 @@ def cmd_build_app_ws(ws):
     app_path = find_built_app(ws)
     if not app_path:
         fail(f"빌드 결과에서 {ws.bundle_id} 앱을 찾지 못했습니다.", "qakit.yml의 bundleId/configuration 확인")
+    if ws.device:
+        if ws.autoid == "inject":
+            embed_autoid(app_path, ws.autoid_dylib)
+        device_install(ws, app_path)
+        ok(f"설치: {app_path.name} → {ws.device['name']}")
+        if ws.permissions:
+            info("ℹ️  실기기는 권한을 미리 허용할 수 없습니다 → 처음 한 번 기기에서 허용하거나 시나리오가 팝업을 누르게 하세요 ("
+                 + ", ".join(map(str, ws.permissions)) + ")")
+        state["installedOn"] = udid
+        save_state(ws, ws.state_name, state)
+        return
     run(["xcrun", "simctl", "install", udid, str(app_path)])
     ok(f"설치: {app_path.name} → {ws.simulator}")
 
@@ -1041,7 +1387,7 @@ def cmd_build_app_ws(ws):
 
 def find_built_app(ws):
     products = ws.app_build_dir / "Build" / "Products"
-    for app in products.glob("*-iphonesimulator/*.app"):
+    for app in products.glob("*-iphoneos/*.app" if ws.device else "*-iphonesimulator/*.app"):
         try:
             with open(app / "Info.plist", "rb") as f:
                 if plistlib.load(f).get("CFBundleIdentifier") == ws.bundle_id:
@@ -1066,7 +1412,7 @@ def _cmd_dump_ui(ws, args):
     dump = ws.results_dir / "ui-dump.txt"
     if dump.exists():
         dump.unlink()
-    if has_swift_runner(ws):
+    if has_swift_runner(ws) and not ws.device:
         success, xcresult, output = run_tests(ws, [DUMP_TEST], extra, label="dump", quiet=True)
     else:
         success, xcresult, output = run_scenario_runner(ws, "test_dump", extra, label="dump", quiet=True)
@@ -1094,6 +1440,11 @@ def reset_app(ws, udid):
     app_path = find_built_app(ws)
     if not app_path:
         fail("재설치할 앱 빌드가 없습니다.", "qakit build-app")
+    if ws.device:
+        run(["xcrun", "devicectl", "device", "uninstall", "app", "--device", ws.device["id"], ws.bundle_id], check=False)
+        device_install(ws, app_path)
+        ok("앱 초기화 (재설치 — 실기기는 키체인을 지울 수 없어 저장된 로그인 정보가 남을 수 있음)")
+        return
     run(["xcrun", "simctl", "terminate", udid, ws.bundle_id], check=False)
     run(["xcrun", "simctl", "uninstall", udid, ws.bundle_id], check=False)
     run(["xcrun", "simctl", "keychain", udid, "reset"], check=False)
@@ -1113,13 +1464,15 @@ def cmd_test(args):
 
 
 def _cmd_test(ws, args):
+    if ws.device:
+        fail("qakit test는 아직 실기기를 지원하지 않습니다.", "실기기는 시나리오로: qakit run <시나리오> --device")
     if not has_swift_runner(ws):
         fail("Swift 테스트가 없는 작업공간입니다.", "시나리오는 qakit run <시나리오>, 목록은 ls scenarios/")
     only = args.filters or []
     extra = {}
     auto_sync(ws)
     if args.reset:
-        reset_app(ws, ensure_booted(ws))
+        reset_app(ws, ws.device["udid"] if ws.device else ensure_booted(ws))
         extra["RESET"] = "1"
     info(f"테스트 실행: {', '.join(only) if only else '전체'}")
     success, xcresult, _ = run_tests(ws, only, extra, label="test")
@@ -1611,24 +1964,36 @@ def app_prefs_path(udid, bundle_id):
     return str(Path(r.stdout.strip()) / "Library" / "Preferences" / f"{bundle_id}.plist")
 
 
-def run_scenario_runner(ws, method, extra_env, label, quiet=False, history_name=None, run_dir=None):
+def run_scenario_runner(ws, method, extra_env, label, quiet=False, history_name=None, run_dir=None, on_line=None):
     ws.results_dir.mkdir(exist_ok=True)
     ensure_autoid(ws)
-    udid = ensure_booted(ws)
-    if not app_installed(udid, ws.bundle_id):
-        fail(f"시뮬레이터에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app")
-    xctestrun = ensure_scenario_runner(udid)
     extra_env = dict(extra_env or {})
-    prefs = app_prefs_path(udid, ws.bundle_id)
-    if prefs:
-        extra_env["APP_PREFS"] = prefs
+    if ws.device:
+        udid = ws.device["udid"]
+        if not device_app_installed(ws):
+            fail(f"{ws.device['name']}에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app --device ...")
+        xctestrun = ensure_device_runner(device_team(ws))
+        # 기기 안 실행기는 Mac 파일을 못 읽는다 → 시나리오를 내용째 넘긴다
+        if extra_env.get("SCENARIO_JSON"):
+            extra_env["SCENARIO_B64"] = base64.b64encode(Path(extra_env.pop("SCENARIO_JSON")).read_bytes()).decode()
+    else:
+        udid = ensure_booted(ws)
+        if not app_installed(udid, ws.bundle_id):
+            fail(f"시뮬레이터에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app")
+        xctestrun = ensure_scenario_runner(udid)
+        prefs = app_prefs_path(udid, ws.bundle_id)
+        if prefs:
+            extra_env["APP_PREFS"] = prefs
     ts = timestamp()
     rd = run_dir or new_run_dir(ws, label, history_name)
     xcresult = rd / "result.xcresult"
     cmd = ["xcodebuild", "test-without-building", "-xctestrun", str(xctestrun),
            "-destination", f"id={udid}", "-resultBundlePath", str(xcresult),
            "-only-testing", f"ScenarioTests/ScenarioTests/{method}"]
-    return execute_xctest(ws, cmd, extra_env, label, ts, xcresult, quiet, history_name)
+    result = execute_xctest(ws, cmd, extra_env, label, ts, xcresult, quiet, history_name, on_line=on_line)
+    if ws.device and xcresult.exists():
+        extract_device_files(ws, xcresult, rd)
+    return result
 
 
 def load_checked_scenario(ws, name, strict=True):
@@ -1942,18 +2307,256 @@ class BenchSession(threading.Thread):
         return result
 
 
+def atos_names(dsym, load_addr, addresses):
+    """앱 주소 → 함수 이름 (dSYM + atos). 기기 전체 녹화는 앱 함수 이름이 안 붙어 직접 붙인다."""
+    dwarf = next((Path(dsym) / "Contents" / "Resources" / "DWARF").glob("*"), None) if dsym else None
+    if not dwarf or not load_addr or not addresses:
+        return {}
+    addrs, names = sorted(addresses), {}
+    for i in range(0, len(addrs), 500):
+        chunk = addrs[i:i + 500]
+        r = run(["xcrun", "atos", "-o", str(dwarf), "-arch", "arm64", "-l", load_addr, *chunk], check=False)
+        for a, line in zip(chunk, (r.stdout or "").splitlines()):
+            name = re.sub(r" \(in [^)]*\)( \([^)]*\))?$", "", line.strip())
+            if name and not name.startswith("0x"):
+                names[a] = name
+    return names
+
+
+def time_profile_analyze(trace, app_binary, seconds, limit=10, pid=None, dsym=None):
+    """Time Profiler 기록(.trace) → 1초 단위 CPU %, 직접 CPU를 쓴 함수, 앱 코드 기준(부른 것 포함) 상위 목록.
+    xctrace export의 XML은 같은 값을 id로 한 번 쓰고 다음부터 ref로 가리킨다 → 값을 캐시하며 한 줄씩 읽는다."""
+    xml = Path(f"{trace}.xml")
+    with open(xml, "w") as f:
+        r = subprocess.run(["xcrun", "xctrace", "export", "--input", str(trace), "--xpath",
+                            '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]'],
+                           stdout=f, stderr=subprocess.DEVNULL)
+    if r.returncode != 0:
+        xml.unlink(missing_ok=True)
+        return None
+    cache = {}
+
+    def val(el, conv=lambda e: e.text):
+        if el is None:
+            return None
+        if el.get("ref"):
+            return cache.get(el.get("ref"))
+        v = conv(el)
+        if el.get("id"):
+            cache[el.get("id")] = v
+        return v
+
+    loads = {}
+
+    def binary(e):
+        if e.get("name") and e.get("load-addr"):
+            loads.setdefault(e.get("name"), e.get("load-addr"))
+        return e.get("name") or ""
+
+    def frame(el):
+        b = el.find("binary")
+        return (el.get("name") or "?", val(b, binary) or "")
+
+    def backtrace(el):
+        inner = el.find("backtrace") if el.tag == "tagged-backtrace" else el
+        if inner is not el and inner is not None:
+            return val(inner, lambda e: [val(fr, frame) for fr in e.findall("frame")])
+        return [val(fr, frame) for fr in el.findall("frame")]
+
+    per_sec, selfc, appc, total, t0 = {}, {}, {}, 0, None
+    try:
+        for _, el in ET.iterparse(str(xml), events=("end",)):
+            if el.tag != "row":
+                continue
+            t = val(el.find("sample-time"), lambda e: int(e.text or 0))
+            w = val(el.find("weight"), lambda e: int(e.text or 0)) or 1_000_000
+            bt_el = el.find("tagged-backtrace")
+            bt_el = bt_el if bt_el is not None else el.find("backtrace")
+            stack = val(bt_el, backtrace) if bt_el is not None else None
+            proc = val(el.find("process"), lambda e: e.get("fmt") or "")
+            el.clear()
+            if t is None:
+                continue
+            if pid and proc and not proc.endswith(f"({pid})"):
+                continue   # 기기 전체 녹화: 대상 앱 샘플만
+            t0 = t if t0 is None else t0
+            sec = int((t - t0) / 1e9)
+            per_sec[sec] = per_sec.get(sec, 0) + w
+            if not stack:
+                continue
+            total += 1
+            fn, lib = stack[0]
+            key = (fn if fn != "???" else f"??? ({lib})", lib)
+            selfc[key] = selfc.get(key, 0) + 1
+            seen = set()
+            for name, b in stack:
+                if b == app_binary and name not in seen and name not in SAMPLE_APP_SKIP \
+                        and not name.startswith(SAMPLE_APP_SKIP_PREFIX):
+                    seen.add(name)
+                    appc[name] = appc.get(name, 0) + 1
+    except ET.ParseError:
+        pass
+    finally:
+        xml.unlink(missing_ok=True)
+    if not total:
+        return None
+    # 앱 함수가 주소(0x…)로만 남았으면 dSYM으로 이름을 붙인다 (같은 함수의 여러 주소는 하나로 합친다)
+    unresolved = {fn for fn, b in selfc if b == app_binary and fn.startswith("0x")} | {fn for fn in appc if fn.startswith("0x")}
+    names = atos_names(dsym, loads.get(app_binary), unresolved)
+    if names:
+        merged_self, merged_app = {}, {}
+        for (fn, lb), v in selfc.items():
+            key = (names.get(fn, fn), lb)
+            merged_self[key] = merged_self.get(key, 0) + v
+        for fn, v in appc.items():
+            merged_app[names.get(fn, fn)] = max(merged_app.get(names.get(fn, fn), 0), v)
+        selfc, appc = merged_self, {fn: v for fn, v in merged_app.items()
+                                     if fn not in SAMPLE_APP_SKIP and not fn.startswith(SAMPLE_APP_SKIP_PREFIX)}
+    pct = lambda v: v * 100.0 / total
+    cpu = [per_sec.get(i, 0) / 1e7 for i in range(min(int(seconds), (max(per_sec) + 1) if per_sec else 0))]
+    return {
+        "cpu": cpu, "active": total, "symbolicated": bool(names) or not unresolved,
+        "self": [(fn, "앱" if lb == app_binary else lb, pct(v)) for (fn, lb), v in
+                 sorted(selfc.items(), key=lambda x: -x[1])[:limit]],
+        "app": [(fn, "", pct(v)) for fn, v in sorted(appc.items(), key=lambda x: -x[1])[:limit]],
+    }
+
+
+class DeviceBenchSession(threading.Thread):
+    """실기기: 실행기가 '[qakit-bench] ready'를 출력하면 앱에 Time Profiler를 붙여 그 시간 동안 녹화하고 분석한다.
+    (실기기 앱은 Mac 프로세스가 아니라 ps·sample을 쓸 수 없다. CPU %도 Time Profiler 샘플로 계산한다)"""
+
+    def __init__(self, ws, seconds, base, app_binary):
+        super().__init__(daemon=True)
+        self.ws, self.seconds, self.base, self.app_binary = ws, seconds, base, app_binary
+        self.ready = threading.Event()
+        self.stop = threading.Event()
+        self.summary = None
+
+    def on_line(self, line):
+        if "[qakit-bench] ready" in line:
+            self.ready.set()
+
+    def run(self):
+        while not self.ready.wait(1):
+            if self.stop.is_set():
+                return
+        self.summary = self.measure()
+
+    def measure(self):
+        ws, seconds = self.ws, self.seconds
+        pid = None
+        for _ in range(10):
+            pid = device_app_pid(ws)
+            if pid:
+                break
+            time.sleep(1)
+        if not pid:
+            return {"error": "기기에서 실행 중인 앱을 찾지 못함"}
+        info(f"📈 성능 측정 시작: {ws.device['name']} · {ws.bundle_id} (PID {pid}), {human_duration(seconds)} — Time Profiler")
+        trace = Path(f"{self.base}.trace")
+        log = Path(f"{self.base}-xctrace.log")
+
+        def record(target):
+            shutil.rmtree(trace, ignore_errors=True)
+            return subprocess.Popen(["xcrun", "xctrace", "record", "--template", "Time Profiler",
+                                     "--device", ws.device["udid"], *target,
+                                     "--time-limit", f"{int(seconds)}s", "--output", str(trace), "--no-prompt"],
+                                    stdout=open(log, "w"), stderr=subprocess.STDOUT)
+        # 앱 하나에만 붙인다 (기록이 작다). 무선 연결에서는 앱을 못 찾는 경우가 있어 → 기기 전체를 녹화하고 앱 샘플만 고른다
+        self.whole_device = False
+        xt = record(["--attach", str(pid)])
+        start, began, every = time.monotonic(), None, 1 if sys.stdout.isatty() else 15
+        while xt.poll() is None or (not self.whole_device and "Cannot find process" in
+                                    (log.read_text(errors="replace") if log.exists() else "")):
+            text = log.read_text(errors="replace") if log.exists() else ""
+            if not self.whole_device and "Cannot find process" in text:
+                xt.wait()
+                info("ℹ️  무선 연결이라 앱에만 붙지 못함 → 기기 전체를 녹화하고 앱 샘플만 골라냅니다 (기록이 1분에 200MB 안팎)")
+                self.whole_device = True
+                xt = record(["--all-processes"])
+                time.sleep(1)
+                continue
+            now = time.monotonic()
+            if began is None and "Ctrl-C to stop the recording" in text:
+                began = now
+            if began is None and now - start > 90:
+                xt.send_signal(2)
+                break
+            if began is not None and "Recording completed" not in text:
+                _progress(f"📈 성능 측정 중 {_mmss(min(now - began, seconds))} / {_mmss(seconds)} (Time Profiler 녹화)")
+            elif "Recording completed" in text:
+                _progress(f"🧹 측정 완료 → Time Profiler 저장 중 {_mmss(now - began - seconds)}")
+            if now - start > seconds + 600:
+                xt.send_signal(2)
+                break
+            time.sleep(every)
+        try:
+            xt.wait(timeout=120)
+        except subprocess.TimeoutExpired:
+            xt.kill()
+            xt.wait()
+        _progress("📈 성능 측정 끝", final=True)
+        text = log.read_text(errors="replace") if log.exists() else ""
+        result = {"pid": pid, "device": ws.device["name"]}
+        if xt.returncode != 0 or not trace.exists() or began is None:
+            shutil.rmtree(trace, ignore_errors=True)
+            result["trace_error"] = (text.strip().splitlines() or ["(출력 없음)"])[-1]
+            return result
+        log.unlink(missing_ok=True)
+        result["trace"] = str(trace)
+        info("🔎 Time Profiler 기록에서 CPU 사용률·함수 정리 중…")
+        app_path = find_built_app(ws)
+        dsym = app_path.with_name(app_path.name + ".dSYM") if app_path else None
+        top = time_profile_analyze(trace, self.app_binary, seconds, pid=pid if self.whole_device else None,
+                                   dsym=dsym if dsym and dsym.exists() else None)
+        # 녹화가 중간에 끊겼는지 (예: 무선 연결이 끊김)
+        toc = run(["xcrun", "xctrace", "export", "--input", str(trace), "--toc"], check=False).stdout or ""
+        dur = re.search(r"<duration>([\d.]+)</duration>", toc)
+        why = re.search(r"<end-reason>([^<]+)</end-reason>", toc)
+        if dur and float(dur.group(1)) < seconds * 0.9:
+            result["error"] = (f"녹화가 {float(dur.group(1)):.0f}초 만에 끝남 ({why.group(1) if why else '이유 모름'})"
+                               + (" — 무선 연결은 테스트와 녹화를 같이 하면 끊길 수 있음 → 케이블로 연결해 다시"
+                                  if ws.device.get("transport") != "wired" else ""))
+        if not top:
+            result["error"] = "Time Profiler 기록에 앱 샘플이 없음"
+            return result
+        cpus = top["cpu"]
+        csv = Path(f"{self.base}-cpu.csv")
+        csv.write_text("seconds,cpu_percent\n" + "".join(f"{i + 1},{c:.1f}\n" for i, c in enumerate(cpus)))
+        s = sorted(cpus)
+        result.update(csv=str(csv), samples=len(cpus), cpu_avg=sum(cpus) / len(cpus), cpu_max=s[-1],
+                      cpu_p95=s[min(len(s) - 1, int(len(s) * 0.95))],
+                      top=top, top_raw=str(trace),
+                      top_how="Time Profiler, 1ms 간격, 측정 전체" + (" · 무선이라 기기 전체 녹화에서 앱만 골라냄" if self.whole_device else ""))
+        return result
+
+
 def write_bench_summary(base, seconds, scenario, ws, s):
-    lines = [f"# 성능 측정 요약", f"시나리오: {scenario}", f"앱: {ws.bundle_id} ({ws.configuration}, {ws.build})",
+    where = f"실기기 {ws.device['name']} ({ws.device['model']}, iOS {ws.device['os']})" if ws.device else f"시뮬레이터 {ws.simulator}"
+    lines = [f"# 성능 측정 요약", f"시나리오: {scenario}", f"앱: {ws.bundle_id} ({ws.configuration}, {ws.build}) · {where}",
              f"측정: {human_duration(seconds)} (시나리오 마지막 화면에서 그대로)", ""]
     if s.get("error"):
         lines.append(f"⚠️ {s['error']}")
     if "cpu_avg" in s:
         lines += [f"CPU 평균 {s['cpu_avg']:.1f}%  ·  p95 {s['cpu_p95']:.1f}%  ·  최대 {s['cpu_max']:.1f}%  "
                   f"(100% = 코어 1개, 샘플 {s['samples']}개)",
-                  f"메모리 시작 {s['mem_start']:.0f}MB → 끝 {s['mem_end']:.0f}MB (최대 {s['mem_max']:.0f}MB)",
+                  *([f"메모리 시작 {s['mem_start']:.0f}MB → 끝 {s['mem_end']:.0f}MB (최대 {s['mem_max']:.0f}MB)"]
+                    if "mem_start" in s else []),
                   f"1초 단위 기록: {s['csv']}"]
     top, wins = s.get("sample_top"), s.get("sample_windows") or []
-    if top:
+    if s.get("top"):
+        top = s["top"]
+        lines += ["", f"함수별 CPU ({s['top_how']}) — 샘플 {top['active']:,}개 기준", "직접 CPU를 쓴 함수 (스택 맨 위):"]
+        short = lambda t: t if len(t) <= 90 else t[:87] + "…"
+        lines += [f"  {pct:5.1f}%  {short(fn)}  [{lb}]" for fn, lb, pct in top["self"]]
+        if top["app"]:
+            lines.append("앱 코드 기준 (그 함수가 부른 것까지 포함):")
+            lines += [f"  {pct:5.1f}%  {short(fn)}" for fn, _, pct in top["app"]]
+        lines.append(f"Time Profiler 기록: {s['top_raw']} (Instruments로 열기: open <파일>)")
+    elif s.get("trace_error"):
+        lines += ["", f"Time Profiler 녹화 실패: {s['trace_error']}"]
+    elif top:
         covered = sum(d for _, d in wins)
         how = "측정 전체" if len(wins) == 1 else f"{_mmss(SAMPLE_EVERY)}마다 {SAMPLE_WINDOW}초씩 {len(wins)}번, 합계 {human_duration(covered)}"
         lines += ["", f"함수별 CPU (sample, {SAMPLE_INTERVAL_MS}ms 간격, {how}) — 기다리는 스레드는 빼고 CPU를 쓴 샘플 {top['active']:,}개 기준",
@@ -1970,7 +2573,8 @@ def write_bench_summary(base, seconds, scenario, ws, s):
     elif "sample_top" in s:
         lines += ["", "함수별 CPU: sample 기록을 얻지 못함"]
     lines.append("")
-    lines.append("주의: 시뮬레이터(Mac CPU) 측정이라 실제 기기와 절대값이 다르다. 같은 조건끼리 비교할 때 쓴다.")
+    lines.append("주의: 실기기 측정. Time Profiler를 붙인 동안이라 약간의 부하가 더해진다." if ws.device else
+                 "주의: 시뮬레이터(Mac CPU) 측정이라 실제 기기와 절대값이 다르다. 같은 조건끼리 비교할 때 쓴다.")
     path = Path(f"{base}-summary.txt")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path, lines
@@ -2010,19 +2614,36 @@ def _cmd_run(ws, args):
         extra["BENCH_SIGNAL"] = str(base)
         extra["BENCH_SECONDS"] = str(bench_seconds)
         profile = not args.no_profile
-        bench = BenchSession(ws, ensure_booted(ws), bench_seconds, base, profile=profile)
+        if ws.device:
+            # 실기기: CPU %와 함수 목록을 모두 Time Profiler로 잰다 (ps·sample은 Mac 프로세스에만 됨)
+            if args.no_profile:
+                warn("실기기는 Time Profiler로만 잴 수 있어 --no-profile을 무시합니다")
+            profile = True
+            extra["BENCH_SIGNAL"] = "device"
+            extra["BENCH_LEAD"] = "45"   # Time Profiler가 붙는 데 걸리는 시간만큼 더 둔다
+            app_path = find_built_app(ws)
+            binary = "app"
+            if app_path:
+                with open(app_path / "Info.plist", "rb") as f:
+                    binary = plistlib.load(f).get("CFBundleExecutable", binary)
+            bench = DeviceBenchSession(ws, bench_seconds, base, binary)
+        else:
+            bench = BenchSession(ws, ensure_booted(ws), bench_seconds, base, profile=profile)
         bench.start()
-        info(f"성능 측정 예약: 시나리오가 끝나면 {human_duration(bench_seconds)} 동안 CPU·메모리"
-             + (" + 함수별 CPU(sample)" if profile else "") + " 기록")
+        info(f"성능 측정 예약: 시나리오가 끝나면 {human_duration(bench_seconds)} 동안 "
+             + ("CPU + 함수별 CPU (Time Profiler)" if ws.device else
+                "CPU·메모리" + (" + 함수별 CPU(sample)" if profile else "")) + " 기록")
     info(f"시나리오 실행: {scenario.get('name')} ({path.name})")
     try:
         success, xcresult, _ = run_scenario_runner(ws, "test_run", extra, label="run",
+                                                   on_line=bench.on_line if isinstance(bench, DeviceBenchSession) else None,
                                                    history_name=path.name.replace(".qa.yml", ""), run_dir=run_dir)
     finally:
         if bench:
             bench.stop.set()
     if bench:
-        bench.join(timeout=300)
+        # 실기기는 실행기가 끝난 뒤에도 Time Profiler 저장·분석이 남아 있을 수 있다
+        bench.join(timeout=bench_seconds + 900 if ws.device else 300)
         for suffix in (".ready", ".done"):   # 실행기와 주고받은 신호 파일
             Path(f"{base}{suffix}").unlink(missing_ok=True)
         if bench.summary:
@@ -2259,6 +2880,8 @@ def main():
     parser.add_argument("--app", help="앱 경로 일시 지정 (다른 워크트리/브랜치 폴더 검증용)")
     parser.add_argument("--build", choices=["debug", "release"], default="debug",
                         help="빌드 종류 (기본 debug = qakit.yml app.configuration, release = app.release.configuration 기본 Release)")
+    device_help = "실기기에서 실행: select(방향키로 고르기, 값 생략 시) · last(지난번 기기) · <기기 이름>"
+    parser.add_argument("--device", nargs="?", const="select", default=None, metavar="기기", help=device_help)
     parser.add_argument("--secrets", help="비밀값 파일 직접 지정 (기본: qakit.yml의 secrets). 계정을 바꿔 돌릴 때")
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -2367,11 +2990,14 @@ def main():
     for sp in sub.choices.values():
         sp.add_argument("--build", choices=["debug", "release"], default=argparse.SUPPRESS,
                         help="빌드 종류 (기본 debug)")
+        sp.add_argument("--device", nargs="?", const="select", default=argparse.SUPPRESS, metavar="기기",
+                        help=device_help)
 
     args = parser.parse_args()
     args.workspace = getattr(args, "workspace", None)
-    global SECRETS_OVERRIDE, APP_OVERRIDE, BUILD_MODE
+    global SECRETS_OVERRIDE, APP_OVERRIDE, BUILD_MODE, DEVICE_ARG
     BUILD_MODE = args.build
+    DEVICE_ARG = args.device
     SECRETS_OVERRIDE = args.secrets
     APP_OVERRIDE = args.app
     args.func(args)
