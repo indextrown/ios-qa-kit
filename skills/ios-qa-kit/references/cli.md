@@ -45,7 +45,7 @@ sync: auto                       # auto | warn | off
   # release:                      # --build release 때 (생략 시 configuration: Release, bundleId 자동)
   #   configuration: Release
 worktree:                        # QA 워크트리(init --worktree)일 때
-  base: develop                  # 따라갈 브랜치
+  base: develop                  # 따라갈 브랜치. release/* 처럼 쓰면 버전이 가장 높은 브랜치(예: release/0.6.0)
   update: auto                   # auto(test/run 전 자동으로 가져옴) | warn | off
 # ids:
 #   sources: [~/path/App/Sources]

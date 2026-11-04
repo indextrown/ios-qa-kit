@@ -36,6 +36,7 @@ sync: auto
 # QA 워크트리 최신화 (qakit init --worktree로 만든 경우)
 #   QA 워크트리 브랜치는 그대로 유지하고, 다른 브랜치로 병합하거나 push하지 않는다 (사용자가 직접 요청할 때만).
 #   base 브랜치(원격이 앞서면 origin/<base>)가 앞서 있으면 그 커밋을 QA 워크트리로 가져온다 (merge).
+#   base에 release/* 같은 패턴을 쓰면 버전이 가장 높은 브랜치를 따라간다.
 #   update — auto: test/run 전에 자동으로 가져옴 / warn: 알리기만 / off: 확인 안 함. 수동: qakit worktree-update
 worktree:
   base: {{WORKTREE_BASE}}

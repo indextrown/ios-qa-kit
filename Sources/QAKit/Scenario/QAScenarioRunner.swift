@@ -115,7 +115,10 @@ public final class QAScenarioRunner {
 
     private func runStep(_ raw: Any) throws {
         guard let step = raw as? [String: Any] else { throw fail("단계 형식 오류: \(raw)") }
-        if step["group"] == nil { try handleInterrupts(before: step) }
+        if step["group"] == nil {
+            try handleInterrupts(before: step)
+            currentStep = step
+        }
         try XCTContext.runActivity(named: describe(step)) { _ in try execute(step) }
     }
 
@@ -124,10 +127,20 @@ public final class QAScenarioRunner {
     //   interrupts:
     //     - if: { contains: { target: PopupView.titleLabel, text: 항해 보조 장치 } }
     //       then: [ tap: PopupView.actionButton ]
-    // 조건은 기다리지 않고 지금 화면만 본다. `use:`로 공통 단계 파일을 넣으면 그 안의 if 단계들이 모두 interrupt가 된다.
+    // 조건은 기다리지 않고 지금 화면만 본다. 단계가 기다리는 동안에도 1초마다 다시 확인한다 (늦게 뜨는 팝업). `use:`로 공통 단계 파일을 넣으면 그 안의 if 단계들이 모두 interrupt가 된다.
 
     private var interrupts: [[String: Any]] = []
     private var handlingInterrupt = false
+    private var currentStep: [String: Any] = [:]
+    private var lastInterruptPoll = Date.distantPast
+
+    /// 단계가 기다리는 동안(wait·tap·wait-any·timeout 있는 조건) 1초에 한 번씩 interrupt를 다시 확인한다.
+    /// 기다리는 사이에 늦게 뜬 팝업이 화면을 막아 단계가 시간 초과로 실패하지 않게.
+    private func pollInterrupts() throws {
+        guard !interrupts.isEmpty, !handlingInterrupt, Date().timeIntervalSince(lastInterruptPoll) >= 1 else { return }
+        lastInterruptPoll = Date()
+        try handleInterrupts(before: currentStep)
+    }
 
     private func flattenInterrupts(_ items: [Any]) -> [[String: Any]] {
         items.flatMap { item -> [[String: Any]] in
@@ -207,7 +220,16 @@ public final class QAScenarioRunner {
         } else if let spec = step["wait-any"] as? [String: Any] {
             let candidates = (spec["candidates"] as? [String: Any] ?? [:]).mapValues { resolve($0) }
             let timeout = number(spec["timeout"]) ?? 30
-            guard let found = QAWait.forAny(candidates, timeout: timeout) else {
+            let ordered = candidates.sorted { $0.key < $1.key }
+            let deadline = Date().addingTimeInterval(timeout)
+            var found: String?
+            repeat {
+                found = ordered.first { $0.value.exists }?.key
+                if found != nil { break }
+                try pollInterrupts()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            } while Date() < deadline
+            guard let found else {
                 throw fail("\(Int(timeout))초 안에 아무것도 나타나지 않음: \(candidates.keys.sorted().joined(separator: ", "))")
             }
             if let name = spec["as"] as? String { vars[name] = found }
@@ -432,7 +454,10 @@ public final class QAScenarioRunner {
         let deadline = Date().addingTimeInterval(timeout)
         repeat {
             if try check(raw) { return true }
-            if timeout > 0 { RunLoop.current.run(until: Date().addingTimeInterval(0.3)) }
+            if timeout > 0 {
+                try pollInterrupts()
+                RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            }
         } while Date() < deadline
         return false
     }
@@ -549,10 +574,15 @@ public final class QAScenarioRunner {
     // MARK: - Helpers
 
     private func waitFor(_ element: XCUIElement, timeout: TimeInterval, what: Any) throws {
-        if element.exists { return }   // 이미 있으면 기다리지 않는다 (waitForExistence는 최소 1초 쉰다)
-        guard element.waitForExistence(timeout: timeout) else {
-            throw fail("\(Int(timeout))초 안에 나타나지 않음: \(compact(what))")
-        }
+        if element.exists { return }   // 이미 있으면 기다리지 않는다
+        // waitForExistence 대신 직접 폴링: 기다리는 동안 늦게 뜬 팝업(interrupts)도 처리한다
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            try pollInterrupts()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            if element.exists { return }
+        } while Date() < deadline
+        throw fail("\(Int(timeout))초 안에 나타나지 않음: \(compact(what))")
     }
 
     private func swipe(_ element: XCUIElement, _ dir: String) {
