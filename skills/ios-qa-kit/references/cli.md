@@ -15,7 +15,7 @@
 | `qakit dump-ui [--attach] [--wait-id ID] [--settle 초] [--print]` | 화면 구조 → `results/ui-dump.txt` |
 | `qakit test [필터...] [--reset]` | 테스트 실행. 필터 예: `LoginFlowTests`, `LoginFlowTests/test_x`. `--reset`: 앱 재설치+키체인 초기화 |
 | `qakit check [시나리오...]` | 시나리오 형식·ID 정적 검사 (실행 없이) |
-| `qakit run <시나리오> [--reset] [--var 키=값 ...] [--no-check]` | 시나리오 파일 실행. `--var`: `vars` 기본값을 이번 실행 값으로 덮어씀 (예: `--var ship="ULTRA FOREST"`) |
+| `qakit run <시나리오> [--reset] [--var 키=값 ...] [--bench 시간 [--no-profile]] [--no-check]` | 시나리오 파일 실행. `--var`: `vars` 기본값을 이번 실행 값으로 덮어씀 (예: `--var ship="ULTRA FOREST"`). `--bench <시간>`: 시나리오가 끝난 화면 그대로 그 시간 동안 (단위 필수: `30s`·`5m`·`1h`·`1h30m`, `30초`·`5분`·`1시간`도 됨. 단위가 없으면 오류, 최소 5초) CPU·메모리(1초 단위) + Time Profiler 기록 → 실행 폴더의 `bench-*`. Time Profiler는 개발자 모드 필요(`sudo DevToolsSecurity -enable`, 꺼져 있으면 건너뜀). `--no-profile`: CPU·메모리만 |
 | `qakit summarize [xcresult]` | 실패 요약 (기본: 마지막 결과) |
 
 | 전역 옵션 | 설명 |
@@ -23,6 +23,7 @@
 | `-w <작업공간>` | 다른 폴더에서 실행할 때 |
 | `--app <앱 폴더>` | 다른 브랜치 워크트리 등 앱 경로 일시 변경 |
 | `--secrets <파일>` | 다른 계정 파일 |
+| `--build debug\|release` | 빌드 종류 (기본 debug = `app.configuration`, release = `app.release.configuration` 기본 `Release`, bundle ID는 자동). 명령 뒤에 써도 됨. 앱의 Release가 실서비스 서버를 쓰면 시나리오도 실서비스에 접속한다 |
 
 ## qakit.yml
 
@@ -40,6 +41,8 @@ permissions: [location-always]   # simctl privacy 이름
 secrets: ./secrets.txt
 autoid: inject                   # inject(시뮬레이터 주입) | embedded
 sync: auto                       # auto | warn | off
+  # release:                      # --build release 때 (생략 시 configuration: Release, bundleId 자동)
+  #   configuration: Release
 worktree:                        # QA 워크트리(init --worktree)일 때
   base: develop                  # 따라갈 브랜치
   update: auto                   # auto(test/run 전 자동으로 가져옴) | warn | off
@@ -49,10 +52,18 @@ worktree:                        # QA 워크트리(init --worktree)일 때
 
 ## 결과 파일 (results/, git 제외)
 
-| 파일 | 내용 |
+실행 한 번이 폴더 하나다: `results/<날짜>/<시각>-<종류>[-<이름>]/` (예: `results/2026-11-04/104609-run-interpolation-setup/`)
+
+| 파일 (실행 폴더 안) | 내용 |
 |---|---|
-| `test-<시각>.log` | 테스트 출력 (비밀값 가림) |
-| `test-<시각>.xcresult`, `latest.xcresult` | Xcode 결과 |
-| `test-<시각>-attachments/` | 실패 시점 화면 구조·스크린샷 |
-| `ui-dump.txt`, `dumps/` | 화면 덤프 |
+| `output.log` | 테스트 출력 (비밀값 가림) |
+| `result.xcresult` | Xcode 결과 |
+| `result-attachments/` | 실패 시점 화면 구조·스크린샷 (`qakit summarize` 때) |
+| `build.log` | Swift 테스트 Runner 빌드 로그 (`qakit test`) |
+| `bench-summary.txt`, `bench-cpu.csv`, `bench.trace` | `--bench` 성능 측정 요약·1초 단위 CPU/메모리·Time Profiler |
+
+| 파일 (results/ 바로 아래) | 내용 |
+|---|---|
+| `latest` → 마지막 실행 폴더, `latest.xcresult` → 그 결과 | 바로가기 (`qakit summarize`가 씀) |
+| `ui-dump.txt`, `dumps/` | 화면 덤프 (마지막 덤프 / 모아 둔 덤프·시나리오 `dump:`) |
 | `build-app.log` | 앱 빌드 로그 |

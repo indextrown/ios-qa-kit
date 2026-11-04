@@ -148,6 +148,8 @@ cp secrets.example.txt secrets.txt
 | 시나리오 파일 실행 | `qakit run <시나리오>` |
 | 값을 바꿔 실행 (매개변수) | `qakit run <시나리오> --var ship="선박명"` |
 | 마지막 실패 다시 보기 | `qakit summarize` |
+| 성능 측정 (시나리오 후 30분) | `qakit run <시나리오> --bench 30m` |
+| Release 빌드로 | `qakit run <시나리오> --build release` |
 | 도구 최신화 | `qakit update` |
 
 ---
@@ -400,7 +402,7 @@ qakit summarize            # 마지막 실패 요약 다시 보기
      - 로그인 입력
    실패 시점 화면 구조 (ID/라벨 있는 요소):
      Button, identifier: 'AlertView.confirmButton', label: '로그인'
-   스크린샷: results/test-…-attachments/….png
+   스크린샷: results/2026-11-04/101530-test-logintests/result-attachments/….png
 ```
 
 - **체험해 보기** — `Pages/`에서 `QAID` 상수 하나를 없는 이름으로 바꿔 보세요. 실행 전에 **컴파일 에러**로 막히고 위치가 출력됩니다.
@@ -577,7 +579,7 @@ flowchart LR
 3. 앱 소스를 읽어 ID 상수 `Generated/QAIDs.swift`를 만듭니다.
 4. 빌드한 앱을 시뮬레이터에 설치합니다. 실행할 때 AutoID를 끼워 넣어 화면 요소에 ID를 자동으로 붙입니다.
 5. AI가 만든 Page·테스트가 ID 상수로 요소를 찾아 조작합니다 (`qakit test`).
-6. 로그·덤프·실패 요약은 작업공간의 `results/`에 남습니다.
+6. 로그·덤프·실패 요약은 작업공간의 `results/<날짜>/<시각>-<종류>-<이름>/`에 실행마다 폴더로 남습니다 (`results/latest`가 마지막 실행).
 
 </details>
 
@@ -907,6 +909,7 @@ worktree:
 |---|---|
 | `qakit test [클래스[/테스트]] [--reset]` | Swift 테스트 실행 (`--reset`: 앱 재설치+키체인 초기화 = 로그아웃 상태) |
 | `qakit run <시나리오> [--reset] [--var 키=값]` | 시나리오 파일 실행 (`--var`: `vars` 기본값 대신 이번 실행에 쓸 값. 여러 번 가능) |
+| `qakit run <시나리오> --bench <시간> [--no-profile]` | 시나리오가 끝난 화면 그대로 그 시간 동안 CPU·메모리 + Time Profiler 기록. 시간은 단위 필수: `30s`·`5m`·`1h`·`1h30m` (`30초`·`5분`·`1시간`도 됨, 최소 5초). Time Profiler는 개발자 모드 필요: `sudo DevToolsSecurity -enable` |
 | `qakit check` | 시나리오 형식·ID 정적 검사 |
 | `qakit summarize` | 마지막 실패 요약 다시 보기 |
 | `qakit history [-n 20]` | 실행 기록 |
@@ -926,6 +929,7 @@ worktree:
 | `--app <다른 앱 폴더>` | 다른 브랜치 워크트리 검증 |
 | `--secrets <파일>` | 다른 계정 |
 | `-w <작업공간>` | 작업공간 지정 |
+| `--build debug\|release` | 빌드 종류 (기본 debug = `qakit.yml`의 `app.configuration`, release = `app.release.configuration` 기본 `Release`) |
 
 상세: [cli.md](skills/ios-qa-kit/references/cli.md) · QAKit API: [qakit-api.md](skills/ios-qa-kit/references/qakit-api.md)
 
@@ -944,7 +948,7 @@ worktree:
 | 🧩 **테스트끼리 상태를 공유하지 않습니다** | 공통 진입(로그인 등)은 `Flows/*Steps.swift`에 한 번만 만들어 재사용합니다 |
 
 > [!CAUTION]
-> Xcode 결과 파일 `results/*.xcresult`에는 **입력 기록이 남으니 공유하지 마세요.** (`results/`는 git에서 제외됩니다.)
+> Xcode 결과 파일 `results/…/result.xcresult`에는 **입력 기록이 남으니 공유하지 마세요.** (`results/`는 git에서 제외됩니다.)
 
 <sub>[↑ 목차](#목차)</sub>
 

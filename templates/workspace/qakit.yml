@@ -6,6 +6,10 @@ app:
   scheme: {{SCHEME}}
   configuration: {{CONFIGURATION}}
   bundleId: {{BUNDLE_ID}}
+  # --build release 때 쓸 설정 (생략하면 configuration: Release, bundleId는 프로젝트에서 자동으로 읽음)
+  #   주의: 앱의 Release가 실서비스 서버를 쓰면 시나리오도 실서비스에 접속한다
+  # release:
+  #   configuration: Release
 
 simulator: {{SIMULATOR}}
 language: ko                    # 화면 글자로 요소를 찾을 때 언어가 바뀌지 않도록 고정

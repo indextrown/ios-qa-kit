@@ -61,6 +61,26 @@ public final class QAScenarioRunner {
             testCase.launchApp()
         }
         try runSteps(root["steps"] as? [Any] ?? [])
+        if let signal = QAConfig.value("BENCH_SIGNAL"), let seconds = Double(QAConfig.value("BENCH_SECONDS") ?? "") {
+            try benchHold(signal: signal, seconds: seconds)
+        }
+    }
+
+    /// qakit run --bench: 마지막 단계 뒤 앱을 그 상태로 켜 둔 채, qakit이 측정을 끝낼 때까지 기다린다.
+    /// 시작은 `<signal>.ready` 파일로 알리고, qakit이 `<signal>.done`을 만들면 끝낸다.
+    private func benchHold(signal: String, seconds: Double) throws {
+        let fm = FileManager.default
+        fm.createFile(atPath: signal + ".ready", contents: Data("ready".utf8))
+        testCase.note("성능 측정 시작: \(Int(seconds))초 동안 앱을 이 상태로 둔다")
+        let deadline = Date().addingTimeInterval(seconds * 2 + 900)   // 측정 + Time Profiler 정리 시간
+        while !fm.fileExists(atPath: signal + ".done") {
+            if Date() > deadline { throw fail("성능 측정이 끝나지 않음 (qakit의 종료 신호 없음)") }
+            if app.state != .runningForeground {
+                throw fail("성능 측정 중 앱이 종료되거나 화면에서 내려감 (상태 \(app.state.rawValue))")
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(2))
+        }
+        testCase.note("성능 측정 끝")
     }
 
     // MARK: - Steps
