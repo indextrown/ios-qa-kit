@@ -2422,6 +2422,40 @@ def time_profile_analyze(trace, app_binary, seconds, limit=10, pid=None, dsym=No
     }
 
 
+def activity_memory(trace, pid):
+    """Activity Monitor 기록 → 앱 메모리(MB, physical footprint = Xcode 메모리 게이지와 같은 기준) 1초 단위 목록."""
+    r = run(["xcrun", "xctrace", "export", "--input", str(trace), "--xpath",
+             '/trace-toc/run[@number="1"]/data/table[@schema="activity-monitor-process-live"]'], check=False)
+    text = r.stdout or ""
+    if r.returncode != 0 or "<" not in text:
+        return []
+    try:
+        root = ET.fromstring(text[text.index("<"):])
+    except ET.ParseError:
+        return []
+    cols = [c.findtext("mnemonic") for c in root.iter("col")]
+    cache, per_sec, t0 = {}, {}, None
+
+    def val(e):
+        if e.get("ref"):
+            return cache.get(e.get("ref"), (None, None))
+        v = (e.text, e.get("fmt"))
+        if e.get("id"):
+            cache[e.get("id")] = v
+        return v
+    for row in root.iter("row"):
+        d = dict(zip(cols, (val(c) for c in row)))
+        proc = (d.get("process") or (None, ""))[1] or ""
+        mem = (d.get("memory-physical-footprint") or (None, None))[0]
+        start = (d.get("start") or (None, None))[0]
+        if not proc.endswith(f"({pid})") or not mem or not start:
+            continue
+        t = int(start)
+        t0 = t if t0 is None else t0
+        per_sec[int((t - t0) / 1e9)] = int(mem) / 1024 / 1024
+    return [per_sec[k] for k in sorted(per_sec)]
+
+
 class DeviceBenchSession(threading.Thread):
     """실기기: 실행기가 '[qakit-bench] ready'를 출력하면 앱에 Time Profiler를 붙여 그 시간 동안 녹화하고 분석한다.
     (실기기 앱은 Mac 프로세스가 아니라 ps·sample을 쓸 수 없다. CPU %도 Time Profiler 샘플로 계산한다)"""
@@ -2459,7 +2493,9 @@ class DeviceBenchSession(threading.Thread):
 
         def record(target):
             shutil.rmtree(trace, ignore_errors=True)
+            # Activity Monitor를 같이 넣어 앱 메모리도 1초마다 기록한다 (Time Profiler는 메모리를 기록하지 않음)
             return subprocess.Popen(["xcrun", "xctrace", "record", "--template", "Time Profiler",
+                                     "--instrument", "Activity Monitor",
                                      "--device", ws.device["udid"], *target,
                                      "--time-limit", f"{int(seconds)}s", "--output", str(trace), "--no-prompt"],
                                     stdout=open(log, "w"), stderr=subprocess.STDOUT)
@@ -2522,8 +2558,12 @@ class DeviceBenchSession(threading.Thread):
             result["error"] = "Time Profiler 기록에 앱 샘플이 없음"
             return result
         cpus = top["cpu"]
+        mems = activity_memory(trace, pid)
         csv = Path(f"{self.base}-cpu.csv")
-        csv.write_text("seconds,cpu_percent\n" + "".join(f"{i + 1},{c:.1f}\n" for i, c in enumerate(cpus)))
+        csv.write_text("seconds,cpu_percent,memory_mb\n" + "".join(
+            f"{i + 1},{c:.1f},{(f'{mems[i]:.1f}' if i < len(mems) else '')}\n" for i, c in enumerate(cpus)))
+        if mems:
+            result.update(mem_start=mems[0], mem_end=mems[-1], mem_max=max(mems))
         s = sorted(cpus)
         result.update(csv=str(csv), samples=len(cpus), cpu_avg=sum(cpus) / len(cpus), cpu_max=s[-1],
                       cpu_p95=s[min(len(s) - 1, int(len(s) * 0.95))],
