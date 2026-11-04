@@ -987,7 +987,7 @@ qakit worktree-update --from release/1.2.0   # 다른 브랜치를 따라가기
 ```yaml
 # qakit.yml
 worktree:
-  base: develop      # 따라갈 브랜치
+  base: develop      # 따라갈 브랜치. release/* → 버전이 가장 높은 release 브랜치 (새 릴리스 브랜치가 생기면 자동으로 그쪽)
   update: auto       # auto: test/run 전에 자동 / warn: 알리기만 / off
 ```
 

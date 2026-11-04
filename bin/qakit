@@ -1708,14 +1708,31 @@ def app_changed(ws):
 # 다른 브랜치로 병합하지 않고 push하지 않는다. 따라갈 브랜치(develop)가 앞서 있으면 그 커밋을 QA 쪽으로 가져온다.
 
 def _git_quiet_fetch(repo_dir, branch):
+    """branch가 None이면 origin 전체를 가져온다 (패턴으로 브랜치를 고를 때)."""
     if not git(repo_dir, "remote"):
         return
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
     try:
-        subprocess.run(["git", "-C", str(repo_dir), "fetch", "--quiet", "origin", branch],
+        subprocess.run(["git", "-C", str(repo_dir), "fetch", "--quiet", "--prune", "origin", *([branch] if branch else [])],
                        env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
     except (subprocess.TimeoutExpired, OSError):
         pass
+
+
+def latest_matching_branch(repo_dir, pattern):
+    """release/* 같은 패턴에 맞는 브랜치 중 버전이 가장 높은 것 (원격·로컬 모두 보고, origin/ 은 뗀다)."""
+    out = git(repo_dir, "for-each-ref", "--sort=-version:refname", "--format=%(refname)",
+              f"refs/remotes/origin/{pattern}", f"refs/heads/{pattern}") or ""
+    names = []
+    for ref in out.splitlines():
+        name = ref.removeprefix("refs/remotes/origin/").removeprefix("refs/heads/")
+        if name not in names:
+            names.append(name)
+    if not names:
+        return None
+    def key(n):
+        return [int(x) if x.isdigit() else x for x in re.split(r"(\d+)", n)]
+    return max(names, key=key)
 
 
 def worktree_status(ws, base=None, fetch=True):
@@ -1725,7 +1742,9 @@ def worktree_status(ws, base=None, fetch=True):
         return None
     base = base or ws.worktree_base
     if fetch:
-        _git_quiet_fetch(d, base)
+        _git_quiet_fetch(d, None if "*" in base else base)
+    if "*" in base:   # 예) release/* → 버전이 가장 높은 release 브랜치
+        base = latest_matching_branch(d, base) or base
     refs = [r for r in (f"origin/{base}", base) if git(d, "rev-parse", "--verify", "--quiet", r) is not None]
     ref = refs[0] if refs else None
     for other in refs[1:]:   # 로컬이 원격보다 앞서 있으면 로컬을 쓴다
