@@ -2369,6 +2369,27 @@ def write_call_tree(path, top, title, min_pct=0.5):
     return path
 
 
+def xctrace_export(trace, schema, out=None, tries=4):
+    """xctrace export로 표 하나를 꺼낸다. 막 녹화한 기록은 첫 export가 빈 결과로 끝날 때가 있어(심볼 정리 중) 다시 시도한다.
+    out을 주면 파일로 쓰고 True/False, 아니면 XML 글자(없으면 "")."""
+    xpath = f'/trace-toc/run[@number="1"]/data/table[@schema="{schema}"]'
+    for i in range(tries):
+        if out:
+            with open(out, "w") as f:
+                r = subprocess.run(["xcrun", "xctrace", "export", "--input", str(trace), "--xpath", xpath],
+                                   stdout=f, stderr=subprocess.DEVNULL)
+            if r.returncode == 0 and Path(out).stat().st_size > 0:
+                with open(out, errors="replace") as f:
+                    if "<row" in f.read(4_000_000):   # 큰 기록도 앞부분만 본다
+                        return True
+        else:
+            r = run(["xcrun", "xctrace", "export", "--input", str(trace), "--xpath", xpath], check=False)
+            if r.returncode == 0 and "<row" in (r.stdout or ""):
+                return r.stdout
+        time.sleep(2 * (i + 1))
+    return False if out else ""
+
+
 def atos_names(dsym, load_addr, addresses):
     """앱 주소 → 함수 이름 (dSYM + atos). 기기 전체 녹화는 앱 함수 이름이 안 붙어 직접 붙인다."""
     dwarf = next((Path(dsym) / "Contents" / "Resources" / "DWARF").glob("*"), None) if dsym else None
@@ -2389,11 +2410,7 @@ def time_profile_analyze(trace, app_binary, seconds, limit=10, pid=None, dsym=No
     """Time Profiler 기록(.trace) → 1초 단위 CPU %, 직접 CPU를 쓴 함수, 앱 코드 기준(부른 것 포함) 상위 목록.
     xctrace export의 XML은 같은 값을 id로 한 번 쓰고 다음부터 ref로 가리킨다 → 값을 캐시하며 한 줄씩 읽는다."""
     xml = Path(f"{trace}.xml")
-    with open(xml, "w") as f:
-        r = subprocess.run(["xcrun", "xctrace", "export", "--input", str(trace), "--xpath",
-                            '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]'],
-                           stdout=f, stderr=subprocess.DEVNULL)
-    if r.returncode != 0:
+    if not xctrace_export(trace, "time-profile", out=xml):
         xml.unlink(missing_ok=True)
         return None
     cache = {}
@@ -2499,10 +2516,8 @@ def time_profile_analyze(trace, app_binary, seconds, limit=10, pid=None, dsym=No
 
 def activity_memory(trace, pid):
     """Activity Monitor 기록 → 앱 메모리(MB, physical footprint = Xcode 메모리 게이지와 같은 기준) 1초 단위 목록."""
-    r = run(["xcrun", "xctrace", "export", "--input", str(trace), "--xpath",
-             '/trace-toc/run[@number="1"]/data/table[@schema="activity-monitor-process-live"]'], check=False)
-    text = r.stdout or ""
-    if r.returncode != 0 or "<" not in text:
+    text = xctrace_export(trace, "activity-monitor-process-live")
+    if "<" not in text:
         return []
     try:
         root = ET.fromstring(text[text.index("<"):])
