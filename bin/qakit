@@ -2666,6 +2666,9 @@ def _cmd_run(ws, args):
         extra["BENCH_SECONDS"] = str(bench_seconds)
         profile = not args.no_profile
         if ws.device:
+            if ws.device.get("transport") != "wired":
+                warn("무선 연결입니다. 무선에서는 Time Profiler가 앱에 붙지 못하고, 기기 전체 녹화는 테스트와 같이 돌면 "
+                     "몇 초 만에 끊깁니다 (2026-11 확인) → 측정은 케이블로 연결해서 하세요. 일단 시도합니다.")
             # 실기기: CPU %와 함수 목록을 모두 Time Profiler로 잰다 (ps·sample은 Mac 프로세스에만 됨)
             if args.no_profile:
                 warn("실기기는 Time Profiler로만 잴 수 있어 --no-profile을 무시합니다")

@@ -260,7 +260,17 @@ public final class QAScenarioRunner {
             try waitFor(element, timeout: 5, what: spec["on"] as Any)
             guard let key = spec["pref"] as? String, let target = number(spec["target"]), let gain = number(spec["gain"]),
                   gain > 0 else { throw fail("pinch-to: { on, pref, target, gain } 형식") }
-            guard let startValue = prefValue(key).flatMap({ ($0 as? NSNumber)?.doubleValue }) else {
+            var current = prefValue(key).flatMap { ($0 as? NSNumber)?.doubleValue }
+            if current == nil {
+                // 값이 아직 없으면(한 번도 확대·축소하지 않은 앱) 한 번 핀치해서 값이 생기게 한다
+                element.pinch(withScale: 2, velocity: 4)
+                let end = Date().addingTimeInterval(number(spec["wait"]) ?? 10)
+                while current == nil && Date() < end {
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+                    current = prefValue(key).flatMap { ($0 as? NSNumber)?.doubleValue }
+                }
+            }
+            guard let startValue = current else {
                 throw fail("앱 설정에 '\(key)' 숫자 값이 없음 (\(prefsPathNote))")
             }
             // 축소는 빠르게 크게 오므리면 거의 안 먹는다 → scale 0.5 핀치 한 번의 변화량(gain-out)으로 횟수를 센다
@@ -372,19 +382,36 @@ public final class QAScenarioRunner {
             guard let key = spec["key"] as? String, let name = spec["as"] as? String else {
                 throw fail("read-pref: { key, as } 형식")
             }
-            guard let value = prefValue(key) else { throw fail("앱 설정에 '\(key)' 값이 없음 (\(prefsPathNote))") }
+            guard let value = prefValue(key) else {
+                // default: 값이 아직 없을 때 쓸 글자 (예: 새로 설치해 한 번도 확대하지 않은 앱에는 zoom이 없다)
+                if let fallback = spec["default"] {
+                    vars[name] = text(fallback)
+                    testCase.note("앱 설정 \(key) 없음 → \(text(fallback))")
+                    return
+                }
+                throw fail("앱 설정에 '\(key)' 값이 없음 (\(prefsPathNote))")
+            }
             vars[name] = formatPref(value)
             testCase.note("앱 설정 \(key) = \(vars[name] ?? "")")
 
         } else if step["hide-keyboard"] != nil {
             let keyboard = app.keyboards.firstMatch
             if keyboard.exists {
+                // iPad 키보드에는 "키보드 내리기" 키가 있다 → 먼저 그 키 (Return은 화면에 따라 입력을 제출해 버릴 수 있음)
+                let dismiss = keyboard.buttons.matching(NSPredicate(format:
+                    "label CONTAINS[c] 'hide keyboard' OR label CONTAINS[c] 'dismiss' OR label CONTAINS '키보드'"
+                    + " OR identifier CONTAINS[c] 'dismiss'")).firstMatch
                 let keys = ["Return", "return", "Done", "완료", "확인", "이동"]
-                if let key = keys.map({ keyboard.buttons[$0] }).first(where: { $0.exists }) {
+                if dismiss.exists {
+                    dismiss.tap()
+                } else if let key = keys.map({ keyboard.buttons[$0] }).first(where: { $0.exists }) {
                     key.tap()
                 } else {
                     keyboard.buttons.allElementsBoundByIndex.last?.tap()
                 }
+                // 키보드가 실제로 사라질 때까지 (최대 3초) — 남아 있으면 다음 탭이 키보드에 들어간다
+                let end = Date().addingTimeInterval(3)
+                while keyboard.exists && Date() < end { RunLoop.current.run(until: Date().addingTimeInterval(0.2)) }
             }
 
         } else if step["relaunch"] != nil {
