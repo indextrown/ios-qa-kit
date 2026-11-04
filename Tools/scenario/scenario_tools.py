@@ -256,6 +256,8 @@ def load_scenario(path, qa_root):
         raise YamlError(f"{path}: 맨 위에 steps: 가 있어야 합니다")
     data.setdefault("name", Path(path).stem.replace(".qa", ""))
     data["steps"] = _expand(data["steps"], qa_root, [Path(path).name])
+    if data.get("interrupts") is not None:
+        data["interrupts"] = _expand(data["interrupts"], qa_root, [Path(path).name])
     return data
 
 
@@ -314,7 +316,7 @@ def collect_ids(node, out=None, key=None):
 def check_ids(scenario, known_ids, extra_ok=()):
     """(알 수 없는 ID 목록). 위치 규칙 ID, 외부 SDK 접두어(extra_ok)는 통과."""
     unknown = []
-    for i in sorted(collect_ids(scenario.get("steps", []))):
+    for i in sorted(collect_ids(scenario.get("steps", []) + (scenario.get("interrupts") or []))):
         if i in known_ids or RULE_ID.search(i) or any(i.startswith(p) for p in extra_ok):
             continue
         unknown.append(i)

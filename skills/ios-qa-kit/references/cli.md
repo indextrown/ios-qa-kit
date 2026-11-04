@@ -16,6 +16,7 @@
 | `qakit test [필터...] [--reset]` | 테스트 실행. 필터 예: `LoginFlowTests`, `LoginFlowTests/test_x`. `--reset`: 앱 재설치+키체인 초기화 |
 | `qakit check [시나리오...]` | 시나리오 형식·ID 정적 검사 (실행 없이) |
 | `qakit run <시나리오> [--reset] [--var 키=값 ...] [--bench 시간 [--no-profile]] [--no-check]` | 시나리오 파일 실행. `--var`: `vars` 기본값을 이번 실행 값으로 덮어씀 (예: `--var ship="ULTRA FOREST"`). `--bench <시간>`: 시나리오가 끝난 화면 그대로 그 시간 동안 (단위 필수: `30s`·`5m`·`1h`·`1h30m`, `30초`·`5분`·`1시간`도 됨. 단위가 없으면 오류, 최소 5초) CPU·메모리(1초 단위, `ps`) + 함수별 CPU(macOS `sample`, 10ms 간격. 1분 이하는 전체, 더 길면 3분마다 20초씩. 권한 불필요) → 실행 폴더의 `bench-*`. 요약에 직접 CPU를 쓴 함수·앱 코드 기준 상위 10개. `--no-profile`: CPU·메모리만 |
+| `qakit run <시나리오> --device [select\|last\|<이름>]` | 실기기에서 실행 (`build-app`·`dump-ui`도 됨). 값을 빼면 방향키 목록(터미널에서만, AI는 이름으로 지정). 앱·실행기를 앱의 개발자 팀으로 서명, AutoID를 앱 `Frameworks/`에 넣고 다시 서명해 `devicectl`로 설치. 시나리오는 base64로 전달, `pref`는 AutoID의 숨은 요소 `QAKit.prefs`로 읽고, 덤프는 첨부로 받아 결과 폴더로 꺼낸다. `--bench`는 Time Profiler로 CPU %·함수 목록(`bench.trace`, `bench-cpu.csv`). 권한 미리 허용 불가, `--reset`은 재설치만(키체인 유지), `qakit test`는 시뮬레이터만 |
 | `qakit summarize [xcresult]` | 실패 요약 (기본: 마지막 결과) |
 
 | 전역 옵션 | 설명 |
@@ -67,3 +68,11 @@ worktree:                        # QA 워크트리(init --worktree)일 때
 | `latest` → 마지막 실행 폴더, `latest.xcresult` → 그 결과 | 바로가기 (`qakit summarize`가 씀) |
 | `ui-dump.txt`, `dumps/` | 화면 덤프 (마지막 덤프 / 모아 둔 덤프·시나리오 `dump:`) |
 | `build-app.log` | 앱 빌드 로그 |
+
+
+### qakit.yml `device` (선택)
+
+```yaml
+device:
+  team: ABCDE12345   # 실기기 서명 팀. 없으면 앱 빌드 설정의 DEVELOPMENT_TEAM
+```

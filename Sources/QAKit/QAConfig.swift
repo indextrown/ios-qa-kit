@@ -29,6 +29,9 @@ public enum QAConfig {
     /// 앱 지역 (qakit.yml: locale), 예) ko_KR
     public static var locale: String? { nonEmpty("QA_LOCALE") }
 
+    /// 실기기에서 실행 중 (qakit run --device). Mac 파일을 읽고 쓸 수 없어 결과는 테스트 첨부로 넘긴다
+    public static var isDevice: Bool { env["QA_DEVICE"] == "1" }
+
     /// 결과물(덤프 등)을 저장할 호스트 폴더
     public static var resultsDir: String? { nonEmpty("QA_RESULTS_DIR") }
 

@@ -23,6 +23,8 @@
 //    read-pref: { key: 키, as: 변수 }      앱 설정(UserDefaults) 값 읽기
 //    note: 글자 / relaunch: true / group: 이름 + steps (use: 가 펼쳐진 것) / fail: 글자
 //
+//  맨 위 interrupts: [ if/unless + then ] — 언제 뜰지 모르는 팝업. 단계마다 실행 전에 확인해 처리
+//
 //  대상(target):
 //    "ID"  |  { id, label, contains, type, in: <대상>, index }
 //    { cell: 셀ID, has: { id?, label?, contains? } }     셀 안에 조건에 맞는 요소가 있는 셀
@@ -51,11 +53,16 @@ public final class QAScenarioRunner {
 
     /// 시나리오 JSON 파일 실행
     public func run(fileAt path: String) throws {
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        try run(json: try Data(contentsOf: URL(fileURLWithPath: path)))
+    }
+
+    /// 시나리오 JSON 실행 (실기기: Mac 파일을 읽을 수 없어 qakit이 내용을 base64로 넘긴다)
+    public func run(json data: Data) throws {
         guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw fail("시나리오 형식 오류: 맨 위가 맵이 아님")
         }
         mergeVars(root["vars"])
+        interrupts = flattenInterrupts(root["interrupts"] as? [Any] ?? [])
         testCase.note("시나리오: \(root["name"] as? String ?? "(이름 없음)")")
         if (root["launch"] as? Bool) != false {
             testCase.launchApp()
@@ -69,6 +76,22 @@ public final class QAScenarioRunner {
     /// qakit run --bench: 마지막 단계 뒤 앱을 그 상태로 켜 둔 채, qakit이 측정을 끝낼 때까지 기다린다.
     /// 시작은 `<signal>.ready` 파일로 알리고, qakit이 `<signal>.done`을 만들면 끝낸다.
     private func benchHold(signal: String, seconds: Double) throws {
+        if QAConfig.isDevice {
+            // 실기기: Mac의 신호 파일을 볼 수 없다 → 출력 줄로 시작을 알리고, 측정 시간 + 여유만큼 그대로 둔다
+            let lead = Double(QAConfig.value("BENCH_LEAD") ?? "") ?? 30
+            print("[qakit-bench] ready")
+            testCase.note("성능 측정 시작: \(Int(seconds))초 동안 앱을 이 상태로 둔다")
+            let end = Date().addingTimeInterval(seconds + lead)
+            while Date() < end {
+                if app.state != .runningForeground {
+                    throw fail("성능 측정 중 앱이 종료되거나 화면에서 내려감 (상태 \(app.state.rawValue))")
+                }
+                // 기기와 주고받는 양을 줄인다 (무선에서 Time Profiler 녹화와 같이 쓰면 연결이 끊길 수 있음)
+                RunLoop.current.run(until: min(end, Date().addingTimeInterval(10)))
+            }
+            testCase.note("성능 측정 끝")
+            return
+        }
         let fm = FileManager.default
         fm.createFile(atPath: signal + ".ready", contents: Data("ready".utf8))
         testCase.note("성능 측정 시작: \(Int(seconds))초 동안 앱을 이 상태로 둔다")
@@ -91,7 +114,60 @@ public final class QAScenarioRunner {
 
     private func runStep(_ raw: Any) throws {
         guard let step = raw as? [String: Any] else { throw fail("단계 형식 오류: \(raw)") }
+        if step["group"] == nil { try handleInterrupts(before: step) }
         try XCTContext.runActivity(named: describe(step)) { _ in try execute(step) }
+    }
+
+    // MARK: - 끼어드는 화면 (interrupts)
+    // 시나리오 맨 위 `interrupts:` — 언제 뜰지 모르는 팝업(안내·광고 등)을 단계마다 실행 전에 확인해 처리한다.
+    //   interrupts:
+    //     - if: { contains: { target: PopupView.titleLabel, text: 항해 보조 장치 } }
+    //       then: [ tap: PopupView.actionButton ]
+    // 조건은 기다리지 않고 지금 화면만 본다. `use:`로 공통 단계 파일을 넣으면 그 안의 if 단계들이 모두 interrupt가 된다.
+
+    private var interrupts: [[String: Any]] = []
+    private var handlingInterrupt = false
+
+    private func flattenInterrupts(_ items: [Any]) -> [[String: Any]] {
+        items.flatMap { item -> [[String: Any]] in
+            guard let step = item as? [String: Any] else { return [] }
+            if step["group"] != nil { return flattenInterrupts(step["steps"] as? [Any] ?? []) }
+            return (step["if"] ?? step["unless"]) != nil ? [step] : []
+        }
+    }
+
+    /// 단계·interrupt 안의 ID처럼 보이는 글자들 (점이 들어간 것)
+    private func ids(in value: Any) -> Set<String> {
+        if let s = value as? String { return s.contains(".") ? [s] : [] }
+        if let a = value as? [Any] { return a.reduce(into: Set<String>()) { $0.formUnion(ids(in: $1)) } }
+        if let d = value as? [String: Any] { return d.values.reduce(into: Set<String>()) { $0.formUnion(ids(in: $1)) } }
+        return []
+    }
+
+    private func handleInterrupts(before current: [String: Any]) throws {
+        guard !interrupts.isEmpty, !handlingInterrupt else { return }
+        handlingInterrupt = true
+        defer { handlingInterrupt = false }
+        let currentIDs = ids(in: current)
+        for step in interrupts {
+            // 이 단계가 그 화면을 직접 다루면(같은 ID) 건너뛴다 — 단계가 누르려던 버튼을 먼저 눌러 버리지 않게
+            if !currentIDs.isDisjoint(with: ids(in: step)) { continue }
+            var hit = try evaluate(step["if"] ?? step["unless"] as Any, timeout: 0)
+            if step["unless"] != nil { hit.toggle() }
+            guard hit else { continue }
+            try XCTContext.runActivity(named: "끼어든 화면 처리: " + describe(step)) { _ in
+                testCase.note((step["note"] as? String).map { text($0) } ?? "끼어든 화면 처리")
+                try runSteps(step["then"] as? [Any] ?? [])
+            }
+            // 닫히는 동안(애니메이션) 남아 있는 글자를 다음 단계가 다시 보지 않게, 조건이 풀릴 때까지 잠깐 기다린다
+            let end = Date().addingTimeInterval(3)
+            while Date() < end {
+                var still = try evaluate(step["if"] ?? step["unless"] as Any, timeout: 0)
+                if step["unless"] != nil { still.toggle() }
+                if !still { break }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+            }
+        }
     }
 
     private func execute(_ step: [String: Any]) throws {
@@ -429,9 +505,18 @@ public final class QAScenarioRunner {
 
     /// 앱 설정(UserDefaults) 파일. qakit이 시뮬레이터 앱 데이터 경로를 넘겨 준다 (QA_ARG_APP_PREFS).
     /// UserDefaults는 디스크에 늦게 쓰일 수 있으므로 조건은 timeout으로 기다리며 읽는다.
-    private var prefsPathNote: String { QAConfig.value("APP_PREFS") ?? "QA_ARG_APP_PREFS 없음" }
+    private var prefsPathNote: String {
+        QAConfig.isDevice ? "실기기: 앱 안 AutoID의 QAKit.prefs 요소" : (QAConfig.value("APP_PREFS") ?? "QA_ARG_APP_PREFS 없음")
+    }
 
     private func prefValue(_ key: String) -> Any? {
+        if QAConfig.isDevice {
+            // AutoID가 앱 설정 값을 JSON으로 담아 두는 숨은 요소 (0.5초마다 갱신)
+            let element = app.descendants(matching: .any).matching(identifier: "QAKit.prefs").firstMatch
+            guard element.waitForExistence(timeout: 3), let json = element.value as? String,
+                  let dict = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { return nil }
+            return dict[key]
+        }
         guard let path = QAConfig.value("APP_PREFS"),
               let dict = NSDictionary(contentsOfFile: path) as? [String: Any] else { return nil }
         return dict[key]

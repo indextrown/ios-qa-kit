@@ -177,6 +177,7 @@ cp secrets.example.txt secrets.txt
    - [5단계 첫 테스트](#5단계-첫-테스트-만들기) · [6단계 실패 고치기](#6단계-실패-읽고-고치기) · [7단계 앱 변경 체험](#7단계-앱-변경-체험-선택) · [8단계 정리](#8단계-정리)
    - [처음 쓸 때 알아 둘 것](#처음-쓸-때-알아-둘-것)
 4. [시나리오 파일로 QA (Swift 없이)](#시나리오-파일로-qa-swift-없이)
+   - [실기기에서 실행 (`--device`)](#실기기에서-실행---device)
 5. [저장과 복구 (AI 없이)](#저장과-복구-ai-없이)
 
 **이해하기**
@@ -486,6 +487,50 @@ qakit run search-favorite --var item=라떼   # vars 값을 바꿔서 실행 (�
 <sub>[↑ 목차](#목차)</sub>
 
 ---
+
+### 실기기에서 실행 (`--device`)
+
+같은 Wi-Fi(또는 케이블)로 연결된 iPhone·iPad에서 시나리오와 성능 측정을 그대로 돌립니다. 명령 뒤에 `--device`만 붙이면 됩니다.
+
+```bash
+qakit run <시나리오> --device                          # 기기 목록이 뜨고 ↑↓ · Enter로 고름 (= --device select)
+qakit run <시나리오> --device "내 iPhone"              # 이름으로 바로
+qakit run <시나리오> --device last                     # 지난번에 고른 기기
+qakit run <시나리오> --device last --bench 5m          # 실기기 성능 측정 (Time Profiler)
+qakit build-app --device last                          # 기기에 앱만 빌드·설치
+```
+
+```text
+실행할 기기를 고르세요  (↑↓ 이동 · Enter 선택 · Esc 취소)
+
+  ❯ 내 iPhone      iPhone 15          iOS 26.6   케이블 연결됨   ← 지난번
+    팀 iPad        iPad Air (4th…)    iOS 26.5   같은 네트워크 (실행할 때 연결)
+    시뮬레이터     iPhone 17          (qakit.yml의 simulator)
+    옛 iPhone      iPhone 13          iOS 27.0   연결 안 됨        ← 흐리게, 고를 수 없음
+```
+
+**처음 한 번 (기기마다)**
+
+1. 기기에서 **개발자 모드**를 켠다: 설정 › 개인정보 보호 및 보안 › 개발자 모드
+2. 케이블로 연결해 Xcode에서 페어링하고 "네트워크로 연결"을 켠다. 그다음부터는 같은 Wi-Fi에서 무선으로 된다.
+3. 실행하는 동안 기기 잠금을 풀어 둔다.
+
+**qakit이 대신 하는 일**
+
+| 단계 | 시뮬레이터 | 실기기 |
+|---|---|---|
+| 앱 빌드 | 서명 없이 | 앱의 개발자 팀으로 자동 서명 (`-allowProvisioningUpdates`) |
+| 자동 ID (AutoID) | dylib을 환경변수로 주입 | dylib을 앱 안 `Frameworks/`에 넣고 앱과 같은 인증서로 다시 서명한 뒤 주입 |
+| 설치 | `simctl install` | `devicectl device install app` |
+| 시나리오 전달 | 파일 경로 | 기기 안 실행기는 Mac 파일을 못 읽어서 내용째(base64) 전달 |
+| `pref` 조건 (앱 설정 값) | Mac에서 설정 파일을 직접 읽음 | AutoID가 앱 설정 값을 보이지 않는 요소(`QAKit.prefs`)에 담아 두고 테스트가 읽음 |
+| 덤프 (`dump:`·`dump-ui`) | 결과 폴더에 바로 저장 | 테스트 첨부로 받아 결과 폴더로 꺼냄 |
+| `--bench` | `ps`(CPU·메모리) + `sample`(함수) | **Time Profiler** 하나로 CPU %와 함수 목록. `bench.trace`는 Instruments로 바로 열림 |
+
+- 권한(위치 등)은 미리 허용할 수 없다. 처음 한 번 기기에서 허용하거나 시나리오가 팝업을 누르게 한다.
+- `--reset`은 앱 재설치만 한다. 키체인은 지울 수 없어 저장된 로그인 정보가 남을 수 있다.
+- 서명 팀은 앱 빌드 설정의 `DEVELOPMENT_TEAM`을 쓴다. 다르게 하려면 `qakit.yml`에 `device: { team: <팀 ID> }`.
+- 실기기 실행은 `qakit run`(시나리오)·`dump-ui`·`build-app`에서 된다. `qakit test`(Swift 테스트)는 아직 시뮬레이터만.
 
 ## 저장과 복구 (AI 없이)
 
@@ -910,6 +955,7 @@ worktree:
 | `qakit test [클래스[/테스트]] [--reset]` | Swift 테스트 실행 (`--reset`: 앱 재설치+키체인 초기화 = 로그아웃 상태) |
 | `qakit run <시나리오> [--reset] [--var 키=값]` | 시나리오 파일 실행 (`--var`: `vars` 기본값 대신 이번 실행에 쓸 값. 여러 번 가능) |
 | `qakit run <시나리오> --bench <시간> [--no-profile]` | 시나리오가 끝난 화면 그대로 그 시간 동안 CPU·메모리(1초 단위) + 함수별 CPU(`sample`) 기록. 시간은 단위 필수: `30s`·`5m`·`1h`·`1h30m` (`30초`·`5분`·`1시간`도 됨, 최소 5초). 1분 이하는 전체를, 더 길면 3분마다 20초씩 함수를 찍는다. 권한 불필요. `--no-profile`: CPU·메모리만 |
+| `qakit run <시나리오> --device [select\|last\|이름]` | 실기기에서 실행. 값을 빼면 방향키 목록에서 고름. `--bench`와 같이 쓰면 Time Profiler로 측정 ([실기기에서 실행](#실기기에서-실행---device)) |
 | `qakit check` | 시나리오 형식·ID 정적 검사 |
 | `qakit summarize` | 마지막 실패 요약 다시 보기 |
 | `qakit history [-n 20]` | 실행 기록 |
@@ -962,7 +1008,7 @@ worktree:
 | 외부 SDK가 내부에서 만든 뷰 (예: 지도 SDK의 버튼) | 화면 글자 또는 좌표 |
 | 지도·차트·캔버스처럼 그려지는 영역 | 좌표로 조작, 결과는 그 위의 UI로 확인 |
 | SwiftUI 화면 | `qakit init --worktree`로 만든 QA 워크트리에서만 ID가 붙음 (개발 폴더 소스는 안 건드림). 시스템 기본 뒤로가기·동적 라벨 버튼은 라벨·순서 번호로 |
-| 실기기 | 자동 ID 주입은 시뮬레이터 전용. 실기기는 `AutoID/AutoID.swift`를 앱 Debug 빌드에 넣고 `QAAutoID.start()` 호출 (`qakit.yml: autoid: embedded`) |
+| 실기기 | `--device`로 시나리오·`--bench`는 된다 ([실기기에서 실행](#실기기에서-실행---device)). Swift 테스트(`qakit test`)와 권한 미리 허용은 아직 시뮬레이터만 |
 
 문제가 생기면: [troubleshooting.md](skills/ios-qa-kit/references/troubleshooting.md)
 

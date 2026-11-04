@@ -15,6 +15,10 @@ public enum QAApp {
         let app = XCUIApplication(bundleIdentifier: QAConfig.bundleId)
         if let dylib = QAConfig.autoIDDylib {
             app.launchEnvironment["DYLD_INSERT_LIBRARIES"] = dylib
+            if QAConfig.isDevice {
+                // 실기기: 앱 설정(UserDefaults) 파일을 밖에서 읽을 수 없어 AutoID가 값을 숨은 요소로 내보낸다
+                app.launchEnvironment["QAKIT_PREFS_ELEMENT"] = "1"
+            }
         }
         if let language = QAConfig.language {
             app.launchArguments += ["-AppleLanguages", "(\(language))"]

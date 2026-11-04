@@ -92,6 +92,26 @@ steps:
   timeout: 15
 ```
 
+## 끼어드는 화면 (`interrupts:`)
+
+언제 뜰지 모르는 팝업(안내·공지·광고 등)은 시나리오 맨 위 `interrupts:`에 둔다. **단계마다 실행 전에** 지금 화면을 확인해(기다리지 않음) 조건이 맞으면 처리한다. 앱을 다시 켰을 때나 시나리오 중간에 떠도 막히지 않는다.
+
+```yaml
+name: 위치 보간용 준비
+interrupts:
+  - use: notice-popup            # steps/notice-popup.qa.yml 안의 if 단계들이 모두 interrupt가 된다
+  - if: { visible: EventPopup.closeButton }
+    then: [ tap: EventPopup.closeButton ]
+    note: 이벤트 팝업 닫음
+steps:
+  - …
+```
+
+- 항목은 `if:`/`unless:` + `then:` 형태만 쓴다. `note:`를 주면 처리할 때 그 글자를 남긴다.
+- 조건은 싼 것(`exists`·`visible`·`contains`)으로. 단계마다 확인하므로 느린 조건은 시나리오 전체를 느리게 한다.
+- 처리하는 동안에는 다른 interrupt를 다시 확인하지 않는다. 처리한 뒤에는 조건이 풀릴 때까지(최대 3초) 기다린다.
+- 단계가 그 화면의 ID를 직접 쓰면(예: 로그인 단계가 같은 팝업을 닫음) 그 단계 앞에서는 interrupt를 건너뛴다.
+
 ## 기본 대기 시간
 
 | 단계 | 기본 | 비고 |
