@@ -16,6 +16,7 @@
 //    scroll-to: { target: <대상>, in: <대상>, dir: up, max: 8 }
 //    swipe: { on: <대상>, dir: up|down|left|right }
 //    pinch: { on: <대상>, scale: 2.5, velocity: 2 }
+//    pinch-to: { on: <대상>, pref: 키, target: 값, gain: scale 10 한 번의 변화량, gain-out?: scale 0.5 한 번의 변화량 }   필요한 핀치를 계산해 연달아
 //    snapshot: { of: <대상>, as: 이름 }
 //    expect: <조건>, timeout?: 초, hold?: 초, message?: 글자
 //    hide-keyboard: true (키보드가 버튼을 가릴 때)
@@ -251,6 +252,50 @@ public final class QAScenarioRunner {
             let speed = abs(CGFloat(number(spec["velocity"]) ?? Double(max(4, scale >= 1 ? scale : 1 / scale))))
             element.pinch(withScale: scale, velocity: scale < 1 ? -speed : speed)
             RunLoop.current.run(until: Date().addingTimeInterval(number(spec["settle"]) ?? 0.5))
+
+        } else if let spec = step["pinch-to"] as? [String: Any] {
+            // 숫자 앱 설정(예: 지도 줌)이 target이 되도록 필요한 핀치 수를 계산해 기다리지 않고 연달아 한 뒤, 값이 멈출 때 한 번만 본다.
+            // gain = scale 10 핀치 한 번에 바뀌는 양(측정값). 핀치 한 번이 바꾸는 양 ≈ log2(scale) × gain / log2(10)
+            let element = resolve(spec["on"] as Any)
+            try waitFor(element, timeout: 5, what: spec["on"] as Any)
+            guard let key = spec["pref"] as? String, let target = number(spec["target"]), let gain = number(spec["gain"]),
+                  gain > 0 else { throw fail("pinch-to: { on, pref, target, gain } 형식") }
+            guard let startValue = prefValue(key).flatMap({ ($0 as? NSNumber)?.doubleValue }) else {
+                throw fail("앱 설정에 '\(key)' 숫자 값이 없음 (\(prefsPathNote))")
+            }
+            // 축소는 빠르게 크게 오므리면 거의 안 먹는다 → scale 0.5 핀치 한 번의 변화량(gain-out)으로 횟수를 센다
+            let gainOut = number(spec["gain-out"]) ?? gain / 4
+            let perLog2 = gain / log2(10)
+            var remaining = target - startValue
+            var pinches: [Double] = []
+            let limit = Int(number(spec["max"]) ?? 12)
+            while abs(remaining) > 0.2 && pinches.count < limit {
+                if remaining > 0 {
+                    let step = min(gain, remaining)                  // 확대: 한 번에 scale 10까지
+                    pinches.append(pow(2, step / perLog2))
+                    remaining -= step
+                } else {
+                    let step = min(gainOut, -remaining)              // 축소: scale 0.5 한 번 = gain-out
+                    pinches.append(pow(0.5, step / gainOut))
+                    remaining += step
+                }
+            }
+            for scale in pinches {
+                let speed = CGFloat(scale >= 1 ? max(4, scale) : 4)
+                element.pinch(withScale: CGFloat(scale), velocity: scale < 1 ? -speed : speed)
+                RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            }
+            // 값이 바뀐 뒤 1초 동안 더 변하지 않을 때까지 (최대 wait초) — UserDefaults는 늦게 쓰인다
+            let before = formatPref(startValue as NSNumber)
+            var last = before, lastChange = Date()
+            let deadline = Date().addingTimeInterval(number(spec["wait"]) ?? 10)
+            while !pinches.isEmpty && Date() < deadline {
+                let now = prefValue(key).map { formatPref($0) } ?? last
+                if now != last { last = now; lastChange = Date() }
+                if last != before && Date().timeIntervalSince(lastChange) >= 1.0 { break }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+            }
+            testCase.note("\(key) \(before) → \(last) (목표 \(formatPref(target as NSNumber)), 핀치 \(pinches.count)번 연달아)")
 
         } else if let spec = step["snapshot"] as? [String: Any] {
             let element = resolve(spec["of"] as Any)

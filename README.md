@@ -635,7 +635,7 @@ flowchart LR
 3. 앱 소스를 읽어 ID 상수 `Generated/QAIDs.swift`를 만듭니다.
 4. 빌드한 앱을 시뮬레이터에 설치합니다. 실행할 때 AutoID를 끼워 넣어 화면 요소에 ID를 자동으로 붙입니다.
 5. AI가 만든 Page·테스트가 ID 상수로 요소를 찾아 조작합니다 (`qakit test`).
-6. 로그·덤프·실패 요약은 작업공간의 `results/<날짜>/<시각>-<종류>-<이름>/`에 실행마다 폴더로 남습니다 (`results/latest`가 마지막 실행).
+6. 로그·덤프·실패 요약은 작업공간의 `results/<날짜>/<시-분-초>_<종류>_<이름>/`(예: `14-15-16_run_interpolation-setup`, 측정은 `14-20-03_bench-1m_…`)에 실행마다 폴더로 남습니다 (`results/latest`가 마지막 실행).
 
 </details>
 
