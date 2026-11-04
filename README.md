@@ -116,24 +116,59 @@ ios-qa-kit의 필요성은 "ID 붙이기"보다 **QA를 누구나 같은 명령�
 
 ### 시나리오 파일에 컴파일이 필요 없는 이유
 
-시나리오 파일은 코드가 아니라 **데이터**입니다. 컴파일된 실행기가 이 데이터를 읽어 그때그때 XCUITest 동작으로 바꿉니다.
+**테스트 코드는 미리 한 번만 컴파일해 두고, 시나리오(`.qa.yml`)는 그 코드가 실행할 때 읽는 데이터로 넘깁니다.** 그래서 시나리오를 고쳐도 다시 빌드하지 않습니다. 게임 엔진은 그대로 두고 맵 파일만 바꾸는 것과 같습니다.
+
+**① 미리 컴파일해 둔 것: 범용 실행기**
+
+도구 안에 앱과 상관없는 XCUITest 테스트가 하나 있습니다 (`ScenarioTests.test_run` + `QAScenarioRunner`).
+`qakit run`을 처음 할 때 `xcodebuild build-for-testing`으로 한 번 빌드해 두고(`.xctestrun`), 이후로는 **도구가 바뀌었을 때만** 다시 빌드합니다 (소스 해시로 판단). 앱이 여러 개여도 이 실행기 하나를 같이 씁니다.
+
+**② 실행할 때: yml → JSON → 실행기에 전달**
 
 ```text
-scenarios/login.qa.yml ──(qakit이 JSON으로 변환)──▶ 범용 실행기 (이미 빌드됨) ──▶ XCUITest 동작
-                                                     "tap" → element.tap()
-                                                     "expect" → 조건 판정 …
+scenarios/login.qa.yml
+   │  qakit이 읽어서: use: 로 쓴 공통 단계를 펼치고, --var 값을 넣고, ID가 앱에 있는지 검사
+   ▼
+.qakit/scenarios/login.json
+   │  환경변수로 경로를 넘김 (실기기는 Mac 파일을 못 읽어서 내용째 base64로)
+   ▼
+xcodebuild test-without-building   ← 빌드 없이 미리 만든 실행기만 실행
+   ▼
+QAScenarioRunner가 JSON을 한 단계씩 읽어 XCUITest 동작으로
 ```
+
+**③ 실행기 안: 단계 이름 → XCUITest 호출**
+
+```yaml
+# 시나리오 (데이터)
+- tap: LoginView.loginButton
+- type: { into: LoginView.emailField, text: "{secret:EMAIL}" }
+- expect: { visible: HomeView.title }
+  timeout: 10
+```
+
+```swift
+// 실행기 (미리 컴파일된 코드) — 단계마다 키를 보고 같은 동작을 부른다
+if let target = step["tap"] {            // "LoginView.loginButton"
+    resolve(target).tap()                //   → app.descendants(…)["LoginView.loginButton"].tap()
+} else if let spec = step["type"] {
+    resolve(spec["into"]).typeText(text(spec["text"]))
+} else if let condition = step["expect"] {
+    try waitUntil(condition, timeout: step["timeout"])
+} …
+```
+
+대상(ID·라벨)과 값(`{변수}`, `{secret:…}`)은 컴파일할 때가 아니라 **실행할 때** 문자열로 찾고 채웁니다. 그래서 시나리오 내용이 바뀌어도 실행기 코드는 그대로입니다.
 
 | | Swift 테스트 | 시나리오 파일 |
 |---|---|---|
-| 무엇을 빌드하나 | 테스트를 고칠 때마다 그 테스트 코드 | 도구의 **범용 실행기 하나** (`QAScenarioRunner`) |
-| 언제 빌드하나 | 매번 | **도구가 바뀌었을 때 한 번만** (소스 해시로 판단해 다시 씀) |
+| 무엇을 빌드하나 | 테스트를 고칠 때마다 그 테스트 코드 | 도구의 **범용 실행기 하나** |
+| 언제 빌드하나 | 고칠 때마다 | **도구가 바뀌었을 때 한 번만** |
 | 앱마다 | 앱별 테스트 프로젝트 | 모든 앱이 같은 실행기를 씀 |
 | 시나리오를 고친 뒤 | 다시 빌드 → 실행 | **바로 실행** |
 
-- 실행기는 단계(`tap`, `input`, `expect` …)를 하나씩 읽어 같은 이름의 XCUITest 동작을 호출합니다. 대상은 ID·라벨 조건으로 그때 찾습니다.
-- 컴파일 에러가 해 주던 확인은 `qakit check`가 대신합니다. 형식이 맞는지, 적힌 ID가 앱에 실제로 있는지를 실행 없이 검사합니다 (`qakit run`도 실행 전에 먼저 검사).
-- `--var` 값도 실행 때 데이터로 넘어가므로, 값을 바꿔도 다시 빌드하지 않습니다.
+- 컴파일 에러가 해 주던 확인은 `qakit check`가 대신합니다. 형식과 ID가 앱에 실제로 있는지를 실행 없이 검사합니다 (`qakit run`도 실행 전에 먼저 검사).
+- 실행기가 모르는 동작이 필요하면 도구에 단계를 하나 추가합니다 (예: `pinch-to`). 그때만 실행기를 다시 빌드합니다.
 
 ---
 
