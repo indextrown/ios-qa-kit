@@ -42,6 +42,7 @@ cp secrets.example.txt secrets.txt
 | 전체 테스트 실행 (토큰 0) | `qakit test` |
 | 테스트 하나만 | `qakit test LoginTests` |
 | 시나리오 파일 실행 | `qakit run <시나리오>` |
+| 값을 바꿔 실행 (매개변수) | `qakit run <시나리오> --var ship="선박명"` |
 | 마지막 실패 다시 보기 | `qakit summarize` |
 | 도구 최신화 | `qakit update` |
 
@@ -357,6 +358,7 @@ steps:
 ```bash
 qakit check search-favorite      # 형식 + 적힌 ID가 앱에 있는지 (실행 없이, Swift의 컴파일 에러 역할)
 qakit run search-favorite        # 실행 (reset: true면 앱 초기화부터)
+qakit run search-favorite --var item=라떼   # vars 값을 바꿔서 실행 (매개변수)
 ```
 
 **표현할 수 있는 것**
@@ -799,7 +801,7 @@ worktree:
 | 명령 | 하는 일 |
 |---|---|
 | `qakit test [클래스[/테스트]] [--reset]` | Swift 테스트 실행 (`--reset`: 앱 재설치+키체인 초기화 = 로그아웃 상태) |
-| `qakit run <시나리오> [--reset]` | 시나리오 파일 실행 |
+| `qakit run <시나리오> [--reset] [--var 키=값]` | 시나리오 파일 실행 (`--var`: `vars` 기본값 대신 이번 실행에 쓸 값. 여러 번 가능) |
 | `qakit check` | 시나리오 형식·ID 정적 검사 |
 | `qakit summarize` | 마지막 실패 요약 다시 보기 |
 | `qakit history [-n 20]` | 실행 기록 |

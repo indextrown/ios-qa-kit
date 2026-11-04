@@ -1633,6 +1633,15 @@ def cmd_run(args):
 
 def _cmd_run(ws, args):
     path, scenario = load_checked_scenario(ws, args.scenario, strict=not args.no_check)
+    overrides = {}
+    for item in args.var or []:
+        key, sep, value = item.partition("=")
+        if not sep or not key.strip():
+            fail(f"--var 형식이 잘못됐습니다: {item!r}", '예) --var ship="ULTRA FOREST"')
+        overrides[key.strip()] = value
+    if overrides:
+        scenario["vars"] = dict(scenario.get("vars") or {}, **overrides)
+        info("변수: " + ", ".join(f"{k}={v}" for k, v in overrides.items()))
     out = ws.root / ".qakit" / "scenarios" / (path.name.replace(".qa.yml", "") + ".json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(scenario_tools.to_json(scenario), encoding="utf-8")
@@ -1937,6 +1946,8 @@ def main():
     p.add_argument("scenario", help="scenarios/<이름>.qa.yml의 이름 또는 파일 경로")
     p.add_argument("--reset", action="store_true", help="실행 전 앱 재설치 + 키체인 초기화")
     p.add_argument("--no-check", action="store_true", help="ID 정적 검사 실패해도 실행")
+    p.add_argument("--var", action="append", metavar="KEY=VALUE",
+                   help='시나리오 변수 지정 (vars 기본값을 덮어씀, 여러 번 가능). 예) --var ship="ULTRA FOREST"')
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("check", help="시나리오 형식·ID 정적 검사 (실행 없이)")

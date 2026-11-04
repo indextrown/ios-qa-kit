@@ -14,6 +14,8 @@
 | `qakit swiftui-ids --list \| --insert \| --restore` | SwiftUI ID 삽입 도구. `--list`: 삽입될 ID 목록. `--insert`: 워크트리 소스에 삽입한 채 둠(diff 확인용). `--restore`: 되돌림. `build-app`은 자동으로 삽입→빌드→복원 |
 | `qakit dump-ui [--attach] [--wait-id ID] [--settle 초] [--print]` | 화면 구조 → `results/ui-dump.txt` |
 | `qakit test [필터...] [--reset]` | 테스트 실행. 필터 예: `LoginFlowTests`, `LoginFlowTests/test_x`. `--reset`: 앱 재설치+키체인 초기화 |
+| `qakit check [시나리오...]` | 시나리오 형식·ID 정적 검사 (실행 없이) |
+| `qakit run <시나리오> [--reset] [--var 키=값 ...] [--no-check]` | 시나리오 파일 실행. `--var`: `vars` 기본값을 이번 실행 값으로 덮어씀 (예: `--var ship="ULTRA FOREST"`) |
 | `qakit summarize [xcresult]` | 실패 요약 (기본: 마지막 결과) |
 
 | 전역 옵션 | 설명 |
