@@ -61,7 +61,8 @@ worktree:                        # QA 워크트리(init --worktree)일 때
 | `result.xcresult` | Xcode 결과 |
 | `result-attachments/` | 실패 시점 화면 구조·스크린샷 (`qakit summarize` 때) |
 | `build.log` | Swift 테스트 Runner 빌드 로그 (`qakit test`) |
-| `bench-summary.txt`, `bench-cpu.csv`, `bench-sample.txt` (긴 측정은 `bench-sample-01.txt`…) | `--bench` 성능 측정 요약·1초 단위 CPU/메모리·함수 호출 트리 원본 |
+| `bench-summary.txt`, `bench-cpu.csv`, `bench-sample.txt` (긴 측정은 `bench-sample-01.txt`…) | `--bench` 성능 측정 요약·1초 단위 CPU/메모리·함수 호출 트리 원본 (시뮬레이터) |
+| `bench.trace`, `bench-calltree.txt` | 실기기 `--bench`: Time Profiler 기록(Instruments로 열기)·그 샘플로 만든 호출 트리 텍스트 |
 
 | 파일 (results/ 바로 아래) | 내용 |
 |---|---|

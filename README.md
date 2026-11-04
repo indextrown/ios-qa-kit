@@ -533,6 +533,7 @@ qakit build-app --device last                          # 기기에 앱만 빌드
 |---|---|---|
 | Time Profiler 기록 (`bench.trace`) | ❌ — 명령어(`xctrace`)로 시뮬레이터 앱에 붙으면 녹화가 시작되지 않고 멈춘다 | ✅ |
 | 함수별 CPU (요약의 상위 함수) | ✅ `sample`로 대신 기록 (`bench-sample.txt`) | ✅ Time Profiler에서 |
+| 호출 트리 텍스트 | ✅ `bench-sample.txt` (sample 원본) | ✅ `bench-calltree.txt` (Time Profiler 샘플로 만든 한글 트리, 0.5% 이상만) |
 | CPU % (1초 단위) | ✅ `ps` | ✅ Time Profiler 샘플로 계산 |
 | 메모리 (1초 단위) | ✅ `ps` | ✅ Activity Monitor (Time Profiler와 같이 녹화, Xcode 메모리 게이지와 같은 physical footprint) |
 
