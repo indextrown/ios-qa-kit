@@ -336,30 +336,58 @@ git push origin main develop --tags
 
 ### 배포 준비(release) 중에 다른 기능 만들기
 
-`release/0.2.0`을 점검하는 동안 다음 기능을 만들어야 할 때의 순서다.
+`release/0.2.0`을 점검하는 동안 다음 기능을 만들어야 할 때의 순서다. 새 기능이 **release에만 있는 코드에 의존하는지**에 따라 시작 방법이 다르다.
+
+#### 먼저 확인: release에만 있는 커밋
+
+```sh
+git fetch
+git log --oneline origin/develop..origin/release/0.2.0
+```
+
+release를 만든 뒤 release에 들어간 커밋(README·PLAN 정리, 점검 중 수정)이 나온다. 새 기능이 이 커밋의 코드(새 함수, 바뀐 CLI 옵션, 바뀐 ID 규칙)를 쓰는지 본다.
+
+| 새 기능이 release 코드에 | 시작 방법 |
+|---|---|
+| 의존하지 않음 | A. `develop`에서 바로 시작 |
+| 의존함 | B. release를 `develop`에 먼저 PR로 합치고 시작 |
+
+#### A. 의존하지 않을 때
+
+```sh
+git switch develop && git pull
+git flow feature start <이름>
+```
+
+- release 수정은 `git flow release finish`가 `develop`에도 반영한다. feature는 그 뒤에 `git flow update`로 받으면 된다.
+- 개발 중에 의존이 생기면 그때 B의 1을 하고, feature에서 `git flow update`를 한다.
+
+#### B. 의존할 때
+
+```sh
+# 1. release를 develop에 먼저 합친다 (develop에 직접 커밋하지 않으므로 PR로)
+git push origin release/0.2.0
+gh pr create --base develop --head release/0.2.0 --fill
+gh pr merge --merge                              # --delete-branch 를 붙이지 않는다
+
+# 2. 합쳐진 develop에서 시작
+git switch develop && git pull
+git flow feature start <이름>
+```
+
+- release 브랜치는 지우지 않는다. 점검은 release에서 계속하고, 끝나면 `release finish`한다.
+- 점검에서 또 수정이 나오고 feature에 필요하면 같은 순서를 되풀이한다: release 수정 → PR로 `develop`에 합치기 → feature에서 `git flow update`.
+- release에 아직 없는 코드(점검 중 고치는 중인 코드)에는 의존하지 않는다. release에 커밋되고 `develop`에 합쳐진 뒤에 쓴다.
+
+#### 둘 다 지킬 것
 
 | 단계 | 어디서 | 할 일 |
 |---|---|---|
-| 1 | `develop` | 최신으로 받고 `git flow feature start <이름>`. `release`에서 만들지 않는다 |
-| 2 | `release/0.2.0` | 점검에서 나온 버그는 여기에만 고친다. feature에서 고치지 않는다 |
-| 3 | `release` → `develop` | 기본은 `git flow release finish`가 `develop`에도 반영해 준다. feature에 그 수정이 급하게 필요할 때만 미리 PR(`release/0.2.0` → `develop`)로 합친다 |
-| 4 | `develop` → `feature` | feature에도 그 수정이 필요할 때만 `git flow update`로 받는다 |
+| 점검 중 수정 | `release/0.2.0` | 점검에서 나온 버그는 여기에만 고친다. feature에서 고치지 않는다 |
+| 수정 전달 | `release` → `develop` → `feature` | 이 순서로만 흐른다 |
 
 ```sh
-# 0. release에만 있는 커밋 확인 (버전 정리, 점검 중 수정)
-git fetch
-git log --oneline origin/develop..origin/release/0.2.0
-
-# 1. develop에서 기능 시작
-git switch develop && git pull
-git flow feature start <이름>
-
-# 3. 점검 중 수정을 develop에 미리 합치기 (필요할 때만)
-git push origin release/0.2.0
-gh pr create --base develop --head release/0.2.0 --fill
-gh pr merge --merge                              # release 브랜치는 지우지 않는다
-
-# 4. feature에 develop 받기 (필요할 때만)
+# feature에 develop 받기
 git switch develop && git pull
 git switch feature/<이름>
 git flow update
@@ -367,8 +395,6 @@ git push --force-with-lease                      # 이미 올린 feature 브랜�
 ```
 
 - **`release`를 `feature`에 바로 합치지 않는다.** 그러면 release 수정이 `develop`을 거치지 않고 feature를 통해 들어간다. 나중에 `develop`에 같은 수정이 두 경로로 들어오고, 어디서 온 수정인지 추적하기 어렵다.
-- 0에서 나온 커밋의 코드를 새 기능이 쓴다면, 3을 먼저 하고 1을 한다. 쓰지 않으면 바로 1부터 한다.
-- 3에서 `--delete-branch`를 붙이지 않는다. release는 점검이 끝나 `release finish`할 때까지 남아 있어야 한다.
 
 ### 배포된 버전의 급한 수정
 
