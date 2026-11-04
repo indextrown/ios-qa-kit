@@ -1710,9 +1710,32 @@ def dev_tools_enabled():
     return "enabled" in (r.stdout or "").lower()
 
 
+BENCH_UNITS = {"s": 1, "초": 1, "m": 60, "분": 60, "h": 3600, "시간": 3600}
+BENCH_MIN_SECONDS = 5
+
+
+def parse_duration(text):
+    """'30s'·'5분'·'1h30m'·'1시간30분'·'0.5m' → 초. 단위가 없거나 형식이 틀리면 ValueError."""
+    s = str(text).strip().lower().replace(" ", "")
+    parts = re.findall(r"(\d+(?:\.\d+)?)(시간|초|분|h|m|s)", s)
+    if not s or not parts or "".join(n + u for n, u in parts) != s:
+        raise ValueError(text)
+    return sum(float(n) * BENCH_UNITS[u] for n, u in parts)
+
+
+def human_duration(sec):
+    """5400 → '1시간 30분', 30 → '30초'."""
+    sec = int(round(sec))
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    out = [f"{h}시간"] * bool(h) + [f"{m}분"] * bool(m) + [f"{s}초"] * bool(s)
+    return " ".join(out) or "0초"
+
+
 def _mmss(sec):
     sec = int(sec)
-    return f"{sec // 60}:{sec % 60:02d}"
+    h, rem = divmod(sec, 3600)
+    return f"{h}:{rem // 60:02d}:{rem % 60:02d}" if h else f"{sec // 60}:{sec % 60:02d}"
 
 
 def _progress(msg, final=False):
@@ -1748,7 +1771,7 @@ class BenchSession(threading.Thread):
         pid = sim_app_pid(self.udid, ws.bundle_id)
         if not pid:
             return {"error": "실행 중인 앱의 PID를 찾지 못함"}
-        info(f"📈 성능 측정 시작: {ws.bundle_id} (PID {pid}), {seconds / 60:g}분 — Mac 절전 방지 중")
+        info(f"📈 성능 측정 시작: {ws.bundle_id} (PID {pid}), {human_duration(seconds)} — Mac 절전 방지 중")
         caffeinate = subprocess.Popen(["caffeinate", "-dimsu", "-t", str(int(seconds) + 120)])
         trace = Path(f"{self.base}.trace")
         xt_log = Path(f"{self.base}-xctrace.log")
@@ -1857,9 +1880,9 @@ def time_profile_top(trace, limit=15):
     return [(name, n, n * 100.0 / total) for name, n in sorted(counts.items(), key=lambda x: -x[1])[:limit]]
 
 
-def write_bench_summary(base, minutes, scenario, ws, s):
+def write_bench_summary(base, seconds, scenario, ws, s):
     lines = [f"# 성능 측정 요약", f"시나리오: {scenario}", f"앱: {ws.bundle_id} ({ws.configuration}, {ws.build})",
-             f"측정: {minutes:g}분 (시나리오 마지막 화면에서 그대로)", ""]
+             f"측정: {human_duration(seconds)} (시나리오 마지막 화면에서 그대로)", ""]
     if s.get("error"):
         lines.append(f"⚠️ {s['error']}")
     if "cpu_avg" in s:
@@ -1905,21 +1928,29 @@ def _cmd_run(ws, args):
     bench = None
     run_dir = None
     if args.bench:
-        if args.bench <= 0:
-            fail("--bench는 0보다 큰 분 단위입니다.", "예) --bench 30 (30분), --bench 1")
+        try:
+            bench_seconds = int(round(parse_duration(args.bench)))
+        except ValueError:
+            fail(f"--bench {args.bench}: 시간에 단위를 붙이세요.",
+                 "예) --bench 30s (30초) / --bench 30m (30분) / --bench 1h (1시간) / --bench 1h30m · 30초 · 5분도 됨")
+        if bench_seconds < BENCH_MIN_SECONDS:
+            fail(f"--bench는 {BENCH_MIN_SECONDS}초 이상이어야 합니다 (입력: {human_duration(bench_seconds)}).")
+        if bench_seconds > 3600 and not args.no_profile:
+            warn(f"{human_duration(bench_seconds)} Time Profiler 녹화는 trace 파일이 수 GB가 될 수 있습니다 "
+                 "(CPU·메모리만이면 --no-profile)")
         run_dir = new_run_dir(ws, "run", path.name.replace(".qa.yml", ""))
         base = run_dir / "bench"
         extra["BENCH_SIGNAL"] = str(base)
-        extra["BENCH_SECONDS"] = str(int(args.bench * 60))
+        extra["BENCH_SECONDS"] = str(bench_seconds)
         profile, skip_reason = not args.no_profile, "--no-profile로 실행함" if args.no_profile else None
         if profile and not dev_tools_enabled():
             warn("개발자 모드가 꺼져 있어 Time Profiler를 건너뜁니다 (CPU·메모리만 기록). "
                  "켜려면: sudo DevToolsSecurity -enable")
             profile, skip_reason = False, "개발자 모드가 꺼져 있음 — 켜려면 sudo DevToolsSecurity -enable"
-        bench = BenchSession(ws, ensure_booted(ws), int(args.bench * 60), base, profile=profile,
+        bench = BenchSession(ws, ensure_booted(ws), bench_seconds, base, profile=profile,
                              skip_reason=skip_reason)
         bench.start()
-        info(f"성능 측정 예약: 시나리오가 끝나면 {args.bench:g}분 동안 CPU·메모리"
+        info(f"성능 측정 예약: 시나리오가 끝나면 {human_duration(bench_seconds)} 동안 CPU·메모리"
              + (" + Time Profiler" if profile else "") + " 기록")
     info(f"시나리오 실행: {scenario.get('name')} ({path.name})")
     try:
@@ -1933,7 +1964,7 @@ def _cmd_run(ws, args):
         for suffix in (".ready", ".done"):   # 실행기와 주고받은 신호 파일
             Path(f"{base}{suffix}").unlink(missing_ok=True)
         if bench.summary:
-            summary_path, lines = write_bench_summary(base, args.bench, scenario.get("name"), ws, bench.summary)
+            summary_path, lines = write_bench_summary(base, bench_seconds, scenario.get("name"), ws, bench.summary)
             print()
             for line in lines[4:-1]:
                 if line:
@@ -2236,8 +2267,9 @@ def main():
     p.add_argument("scenario", help="scenarios/<이름>.qa.yml의 이름 또는 파일 경로")
     p.add_argument("--reset", action="store_true", help="실행 전 앱 재설치 + 키체인 초기화")
     p.add_argument("--no-check", action="store_true", help="ID 정적 검사 실패해도 실행")
-    p.add_argument("--bench", type=float, metavar="분",
-                   help="시나리오가 끝난 화면 그대로 N분 동안 CPU·메모리 기록 + Time Profiler 녹화 (results/bench-*)")
+    p.add_argument("--bench", metavar="시간",
+                   help="시나리오가 끝난 화면 그대로 이 시간 동안 CPU·메모리 기록 + Time Profiler 녹화. "
+                        "단위 필수: 30s·5m·1h·1h30m (30초·5분·1시간도 됨)")
     p.add_argument("--no-profile", action="store_true", help="--bench에서 Time Profiler 없이 CPU·메모리만 기록")
     p.add_argument("--var", action="append", metavar="KEY=VALUE",
                    help='시나리오 변수 지정 (vars 기본값을 덮어씀, 여러 번 가능). 예) --var ship="ULTRA FOREST"')

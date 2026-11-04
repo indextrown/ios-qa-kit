@@ -148,7 +148,7 @@ cp secrets.example.txt secrets.txt
 | 시나리오 파일 실행 | `qakit run <시나리오>` |
 | 값을 바꿔 실행 (매개변수) | `qakit run <시나리오> --var ship="선박명"` |
 | 마지막 실패 다시 보기 | `qakit summarize` |
-| 성능 측정 (시나리오 후 N분) | `qakit run <시나리오> --bench 30` |
+| 성능 측정 (시나리오 후 30분) | `qakit run <시나리오> --bench 30m` |
 | Release 빌드로 | `qakit run <시나리오> --build release` |
 | 도구 최신화 | `qakit update` |
 
@@ -909,7 +909,7 @@ worktree:
 |---|---|
 | `qakit test [클래스[/테스트]] [--reset]` | Swift 테스트 실행 (`--reset`: 앱 재설치+키체인 초기화 = 로그아웃 상태) |
 | `qakit run <시나리오> [--reset] [--var 키=값]` | 시나리오 파일 실행 (`--var`: `vars` 기본값 대신 이번 실행에 쓸 값. 여러 번 가능) |
-| `qakit run <시나리오> --bench <분> [--no-profile]` | 시나리오가 끝난 화면 그대로 N분 동안 CPU·메모리 + Time Profiler 기록 (Time Profiler는 개발자 모드 필요: `sudo DevToolsSecurity -enable`) |
+| `qakit run <시나리오> --bench <시간> [--no-profile]` | 시나리오가 끝난 화면 그대로 그 시간 동안 CPU·메모리 + Time Profiler 기록. 시간은 단위 필수: `30s`·`5m`·`1h`·`1h30m` (`30초`·`5분`·`1시간`도 됨, 최소 5초). Time Profiler는 개발자 모드 필요: `sudo DevToolsSecurity -enable` |
 | `qakit check` | 시나리오 형식·ID 정적 검사 |
 | `qakit summarize` | 마지막 실패 요약 다시 보기 |
 | `qakit history [-n 20]` | 실행 기록 |

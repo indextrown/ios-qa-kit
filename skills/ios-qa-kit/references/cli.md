@@ -15,7 +15,7 @@
 | `qakit dump-ui [--attach] [--wait-id ID] [--settle 초] [--print]` | 화면 구조 → `results/ui-dump.txt` |
 | `qakit test [필터...] [--reset]` | 테스트 실행. 필터 예: `LoginFlowTests`, `LoginFlowTests/test_x`. `--reset`: 앱 재설치+키체인 초기화 |
 | `qakit check [시나리오...]` | 시나리오 형식·ID 정적 검사 (실행 없이) |
-| `qakit run <시나리오> [--reset] [--var 키=값 ...] [--bench 분 [--no-profile]] [--no-check]` | 시나리오 파일 실행. `--var`: `vars` 기본값을 이번 실행 값으로 덮어씀 (예: `--var ship="ULTRA FOREST"`). `--bench N`: 시나리오가 끝난 화면 그대로 N분 동안 CPU·메모리(1초 단위) + Time Profiler 기록 → 실행 폴더의 `bench-*`. Time Profiler는 개발자 모드 필요(`sudo DevToolsSecurity -enable`, 꺼져 있으면 건너뜀). `--no-profile`: CPU·메모리만 |
+| `qakit run <시나리오> [--reset] [--var 키=값 ...] [--bench 시간 [--no-profile]] [--no-check]` | 시나리오 파일 실행. `--var`: `vars` 기본값을 이번 실행 값으로 덮어씀 (예: `--var ship="ULTRA FOREST"`). `--bench <시간>`: 시나리오가 끝난 화면 그대로 그 시간 동안 (단위 필수: `30s`·`5m`·`1h`·`1h30m`, `30초`·`5분`·`1시간`도 됨. 단위가 없으면 오류, 최소 5초) CPU·메모리(1초 단위) + Time Profiler 기록 → 실행 폴더의 `bench-*`. Time Profiler는 개발자 모드 필요(`sudo DevToolsSecurity -enable`, 꺼져 있으면 건너뜀). `--no-profile`: CPU·메모리만 |
 | `qakit summarize [xcresult]` | 실패 요약 (기본: 마지막 결과) |
 
 | 전역 옵션 | 설명 |
