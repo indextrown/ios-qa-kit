@@ -334,6 +334,42 @@ git push origin main develop --tags
 
 사용자는 `git switch main && git pull`(또는 `git checkout v0.2.0`)로 새 버전을 받는다. 설치는 링크라서 다시 `install-skill`을 할 필요가 없다.
 
+### 배포 준비(release) 중에 다른 기능 만들기
+
+`release/0.2.0`을 점검하는 동안 다음 기능을 만들어야 할 때의 순서다.
+
+| 단계 | 어디서 | 할 일 |
+|---|---|---|
+| 1 | `develop` | 최신으로 받고 `git flow feature start <이름>`. `release`에서 만들지 않는다 |
+| 2 | `release/0.2.0` | 점검에서 나온 버그는 여기에만 고친다. feature에서 고치지 않는다 |
+| 3 | `release` → `develop` | 기본은 `git flow release finish`가 `develop`에도 반영해 준다. feature에 그 수정이 급하게 필요할 때만 미리 PR(`release/0.2.0` → `develop`)로 합친다 |
+| 4 | `develop` → `feature` | feature에도 그 수정이 필요할 때만 `git flow update`로 받는다 |
+
+```sh
+# 0. release에만 있는 커밋 확인 (버전 정리, 점검 중 수정)
+git fetch
+git log --oneline origin/develop..origin/release/0.2.0
+
+# 1. develop에서 기능 시작
+git switch develop && git pull
+git flow feature start <이름>
+
+# 3. 점검 중 수정을 develop에 미리 합치기 (필요할 때만)
+git push origin release/0.2.0
+gh pr create --base develop --head release/0.2.0 --fill
+gh pr merge --merge                              # release 브랜치는 지우지 않는다
+
+# 4. feature에 develop 받기 (필요할 때만)
+git switch develop && git pull
+git switch feature/<이름>
+git flow update
+git push --force-with-lease                      # 이미 올린 feature 브랜치일 때
+```
+
+- **`release`를 `feature`에 바로 합치지 않는다.** 그러면 release 수정이 `develop`을 거치지 않고 feature를 통해 들어간다. 나중에 `develop`에 같은 수정이 두 경로로 들어오고, 어디서 온 수정인지 추적하기 어렵다.
+- 0에서 나온 커밋의 코드를 새 기능이 쓴다면, 3을 먼저 하고 1을 한다. 쓰지 않으면 바로 1부터 한다.
+- 3에서 `--delete-branch`를 붙이지 않는다. release는 점검이 끝나 `release finish`할 때까지 남아 있어야 한다.
+
 ### 배포된 버전의 급한 수정
 
 ```sh
