@@ -1726,9 +1726,10 @@ def _progress(msg, final=False):
 class BenchSession(threading.Thread):
     """시나리오가 끝나고 앱을 켜 둔 동안: 1초마다 CPU·메모리 기록 + Time Profiler 녹화 (권한이 있으면)."""
 
-    def __init__(self, ws, udid, seconds, base, profile=True):
+    def __init__(self, ws, udid, seconds, base, profile=True, skip_reason=None):
         super().__init__(daemon=True)
         self.ws, self.udid, self.seconds, self.base, self.profile = ws, udid, seconds, base, profile
+        self.skip_reason = skip_reason
         self.stop = threading.Event()       # xcodebuild가 끝나면 (실패 등) 기다리지 않는다
         self.summary = None
 
@@ -1782,7 +1783,7 @@ class BenchSession(threading.Thread):
             f"{s:.0f},{'' if c is None else f'{c:.1f}'},{'' if m is None else f'{m:.1f}'}\n" for s, c, m in rows))
         result = {"pid": pid, "csv": str(csv), "samples": len(rows)}
         if not self.profile:
-            result["profile_skipped"] = "--no-profile 또는 개발자 모드 꺼짐 — 켜려면 sudo DevToolsSecurity -enable"
+            result["profile_skipped"] = self.skip_reason or "건너뜀"
         cpus = sorted(c for _, c, _ in rows if c is not None)
         mems = [m for _, _, m in rows if m is not None]
         if cpus:
@@ -1910,12 +1911,13 @@ def _cmd_run(ws, args):
         base = run_dir / "bench"
         extra["BENCH_SIGNAL"] = str(base)
         extra["BENCH_SECONDS"] = str(int(args.bench * 60))
-        profile = not args.no_profile
+        profile, skip_reason = not args.no_profile, "--no-profile로 실행함" if args.no_profile else None
         if profile and not dev_tools_enabled():
             warn("개발자 모드가 꺼져 있어 Time Profiler를 건너뜁니다 (CPU·메모리만 기록). "
                  "켜려면: sudo DevToolsSecurity -enable")
-            profile = False
-        bench = BenchSession(ws, ensure_booted(ws), int(args.bench * 60), base, profile=profile)
+            profile, skip_reason = False, "개발자 모드가 꺼져 있음 — 켜려면 sudo DevToolsSecurity -enable"
+        bench = BenchSession(ws, ensure_booted(ws), int(args.bench * 60), base, profile=profile,
+                             skip_reason=skip_reason)
         bench.start()
         info(f"성능 측정 예약: 시나리오가 끝나면 {args.bench:g}분 동안 CPU·메모리"
              + (" + Time Profiler" if profile else "") + " 기록")
