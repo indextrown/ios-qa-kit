@@ -8,9 +8,70 @@
 
 ---
 
-## 왜 XCUITest를 바로 쓰지 않고 ios-qa-kit을 쓰나
+## 왜 ios-qa-kit인가
 
-ios-qa-kit은 XCUITest를 **대신하지 않습니다.** 테스트는 그대로 XCUITest로 돌아가고, ios-qa-kit은 XCUITest를 실제 앱에 붙이고 유지하는 데 드는 일을 줄여 줍니다.
+XCUITest는 Apple이 주는 **UI 테스트 엔진**입니다. 엔진은 좋지만, 실제 앱에 붙여 계속 쓰려면 준비할 게 많습니다. ios-qa-kit이 그 준비를 대신합니다.
+
+**같은 테스트("로그인하면 홈 화면이 뜬다")를 만들 때**
+
+```text
+XCUITest만   앱 코드에 ID 추가 → 앱에 UI 테스트 타깃 추가 → 테스트 코드 작성
+             → xcodebuild로 실행 → 실패하면 .xcresult를 열어 원인 찾기 → 고치고 다시 빌드
+
+ios-qa-kit   "/ios-qa-kit 로그인하면 홈이 뜨는지 확인해줘" (AI가 작성 → 실행 → 통과할 때까지 수정)
+             → 다음부터는 qakit run 한 줄
+```
+
+### 1. 앱 코드를 고치지 않아도 됩니다
+
+XCUITest로 버튼을 안정적으로 찾으려면 앱 코드에 ID를 붙여야 합니다.
+
+```swift
+// XCUITest만 쓸 때: 앱 코드(LoginView.swift)에 직접 추가
+loginButton.accessibilityIdentifier = "loginButton"
+```
+
+ios-qa-kit은 **프로퍼티 이름을 그대로 ID로** 붙입니다. 앱에는 아무것도 추가하지 않습니다.
+
+```swift
+// 앱 코드는 그대로
+let loginButton = UIButton()
+// → 테스트에서 QAID.LoginView.loginButton 으로 찾음
+```
+
+### 2. 앱이 바뀌면 깨진 곳을 바로 알려 줍니다
+
+앱에서 `loginButton`을 `signInButton`으로 바꾸면, 테스트를 돌리기 전에 위치까지 알려 줍니다.
+
+```text
+🔄 앱 변경 감지 → 재빌드
+   - LoginView.loginButton
+   + LoginView.signInButton
+❌ Pages/LoginPage.swift:5: 'QAID.LoginView' has no member 'loginButton'
+```
+
+### 3. 실패 원인을 텍스트로 바로 읽습니다
+
+`.xcresult`를 열지 않아도 됩니다. 사람도 AI도 이것만 보고 고칩니다.
+
+```text
+❌ LoginTests/test_login()
+   원인: 로그인 후 홈 화면이 뜨지 않음. 화면 안내: 팝업: 이미 다른 기기에서 로그인 중입니다…
+   마지막 단계: 로그인 입력
+```
+
+### 4. 한 번 만들면 AI 없이 계속 돌립니다
+
+- computer use(스크린샷 보며 조작)는 **돌릴 때마다** AI 비용이 듭니다.
+- ios-qa-kit은 AI가 **처음 한 번** 만들어 두면 이후는 `qakit run` 한 줄이고 **토큰 0**입니다.
+- 시나리오 파일은 [컴파일 없이](#시나리오-파일에-컴파일이-필요-없는-이유) 바로 돌고, 값만 바꿔 다시 실행할 수 있습니다.
+
+  ```bash
+  qakit run search-favorite --var item=라떼
+  ```
+
+<details>
+<summary>XCUITest만 쓸 때와 항목별 비교</summary>
 
 | XCUITest만 쓰면 | ios-qa-kit을 쓰면 |
 |---|---|
@@ -19,13 +80,9 @@ ios-qa-kit은 XCUITest를 **대신하지 않습니다.** 테스트는 그대로 
 | UI 테스트 타깃을 **앱 프로젝트 안에** 만들어야 해서 앱 레포에 QA 코드가 섞입니다 | 테스트용 Xcode 프로젝트가 **작업공간에 따로** 있습니다. 앱 레포는 읽기만 합니다 |
 | 실행·결과 확인이 `xcodebuild` 옵션과 `.xcresult` 분석이라 손이 많이 갑니다 | `qakit test` 한 줄로 빌드·설치·실행. 실패하면 **원인·마지막 단계·그 순간 화면 구조를 텍스트로** 요약합니다 |
 | 앱 브랜치가 바뀌면 다시 빌드하고 깨진 곳을 직접 찾아야 합니다 | 실행 전에 앱 변경을 감지해 **재빌드 → ID 재생성**을 먼저 하고, 바뀐 ID 목록을 보여 줍니다 |
-| 시나리오마다 Swift 코드를 짜고 컴파일해야 합니다 | **시나리오 파일(`.qa.yml`)** 로 쓸 수 있습니다. [컴파일이 필요 없고](#시나리오-파일에-컴파일이-필요-없는-이유), `--var`로 값(선박명 등)을 바꿔 실행합니다 |
+| 시나리오마다 Swift 코드를 짜고 컴파일해야 합니다 | **시나리오 파일(`.qa.yml`)** 로 쓸 수 있습니다. [컴파일이 필요 없고](#시나리오-파일에-컴파일이-필요-없는-이유), `--var`로 값(검색어 등)을 바꿔 실행합니다 |
 
-### AI와 함께 쓸 때
-
-- **computer use와 비교**: 스크린샷을 보며 조작하는 방식은 실행할 때마다 AI 비용이 듭니다. ios-qa-kit은 AI가 **처음 한 번 테스트로 만들어 두면** 이후 실행은 `qakit run` 한 줄이고 **토큰이 들지 않습니다.**
-- **AI가 읽기 쉬운 결과**: 실패 요약과 화면 덤프가 텍스트라 AI가 스크린샷 없이 읽고 고칩니다.
-- **스킬 제공**: Claude Code·Codex 스킬이 들어 있어 "이 시나리오 테스트 만들어줘"라고 요청하면, AI가 ID 찾기 → 작성 → 통과할 때까지 수정을 같은 규칙으로 진행합니다.
+</details>
 
 ### 그대로인 것
 
@@ -110,7 +167,7 @@ cp secrets.example.txt secrets.txt
 
 **시작하기**
 
-0. [왜 XCUITest를 바로 쓰지 않고 ios-qa-kit을 쓰나](#왜-xcuitest를-바로-쓰지-않고-ios-qa-kit을-쓰나) · [시나리오 파일에 컴파일이 필요 없는 이유](#시나리오-파일에-컴파일이-필요-없는-이유)
+0. [왜 ios-qa-kit인가](#왜-ios-qa-kit인가) · [시나리오 파일에 컴파일이 필요 없는 이유](#시나리오-파일에-컴파일이-필요-없는-이유)
 1. [빠른 실행](#빠른-실행)
 2. [준비물](#준비물)
 3. [단계별 시작 가이드](#단계별-시작-가이드)
