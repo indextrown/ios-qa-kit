@@ -525,8 +525,19 @@ qakit build-app --device last                          # 기기에 앱만 빌드
 | 시나리오 전달 | 파일 경로 | 기기 안 실행기는 Mac 파일을 못 읽어서 내용째(base64) 전달 |
 | `pref` 조건 (앱 설정 값) | Mac에서 설정 파일을 직접 읽음 | AutoID가 앱 설정 값을 보이지 않는 요소(`QAKit.prefs`)에 담아 두고 테스트가 읽음 |
 | 덤프 (`dump:`·`dump-ui`) | 결과 폴더에 바로 저장 | 테스트 첨부로 받아 결과 폴더로 꺼냄 |
-| `--bench` | `ps`(CPU·메모리) + `sample`(함수) | **Time Profiler** 하나로 CPU %와 함수 목록. `bench.trace`는 Instruments로 바로 열림 |
+| `--bench` | `ps`(CPU·메모리) + `sample`(함수) | **Time Profiler** 하나로 CPU %와 함수 목록. `bench.trace`는 Instruments로 바로 열림. 메모리는 아직 없음 |
 
+**성능 측정(`--bench`)은 어디서 무엇이 되나**
+
+| | 시뮬레이터 | 실기기 |
+|---|---|---|
+| Time Profiler 기록 (`bench.trace`) | ❌ — 명령어(`xctrace`)로 시뮬레이터 앱에 붙으면 녹화가 시작되지 않고 멈춘다 | ✅ |
+| 함수별 CPU (요약의 상위 함수) | ✅ `sample`로 대신 기록 (`bench-sample.txt`) | ✅ Time Profiler에서 |
+| CPU % (1초 단위) | ✅ `ps` | ✅ Time Profiler 샘플로 계산 |
+| 메모리 | ✅ `ps` | ❌ 아직 없음 (Time Profiler는 메모리를 기록하지 않음) |
+
+- **Time Profiler는 실기기에서만 된다.** 시뮬레이터 앱을 Time Profiler로 보려면 Instruments 앱에서 직접 녹화한다.
+- 실기기가 무선이면 Time Profiler가 앱에만 붙지 못해 기기 전체를 녹화하고 앱 샘플만 골라낸다 (기록이 1분에 200MB 안팎). 테스트와 녹화가 같이 무선을 쓰다 끊긴 적이 있어 긴 측정은 케이블을 권한다.
 - 권한(위치 등)은 미리 허용할 수 없다. 처음 한 번 기기에서 허용하거나 시나리오가 팝업을 누르게 한다.
 - `--reset`은 앱 재설치만 한다. 키체인은 지울 수 없어 저장된 로그인 정보가 남을 수 있다.
 - 서명 팀은 앱 빌드 설정의 `DEVELOPMENT_TEAM`을 쓴다. 다르게 하려면 `qakit.yml`에 `device: { team: <팀 ID> }`.
@@ -954,7 +965,7 @@ worktree:
 |---|---|
 | `qakit test [클래스[/테스트]] [--reset]` | Swift 테스트 실행 (`--reset`: 앱 재설치+키체인 초기화 = 로그아웃 상태) |
 | `qakit run <시나리오> [--reset] [--var 키=값]` | 시나리오 파일 실행 (`--var`: `vars` 기본값 대신 이번 실행에 쓸 값. 여러 번 가능) |
-| `qakit run <시나리오> --bench <시간> [--no-profile]` | 시나리오가 끝난 화면 그대로 그 시간 동안 CPU·메모리(1초 단위) + 함수별 CPU(`sample`) 기록. 시간은 단위 필수: `30s`·`5m`·`1h`·`1h30m` (`30초`·`5분`·`1시간`도 됨, 최소 5초). 1분 이하는 전체를, 더 길면 3분마다 20초씩 함수를 찍는다. 권한 불필요. `--no-profile`: CPU·메모리만 |
+| `qakit run <시나리오> --bench <시간> [--no-profile]` | 시나리오가 끝난 화면 그대로 그 시간 동안 CPU·메모리(1초 단위) + 함수별 CPU(`sample`) 기록. Time Profiler는 실기기(`--device`)에서만. 시간은 단위 필수: `30s`·`5m`·`1h`·`1h30m` (`30초`·`5분`·`1시간`도 됨, 최소 5초). 1분 이하는 전체를, 더 길면 3분마다 20초씩 함수를 찍는다. 권한 불필요. `--no-profile`: CPU·메모리만 |
 | `qakit run <시나리오> --device [select\|last\|이름]` | 실기기에서 실행. 값을 빼면 방향키 목록에서 고름. `--bench`와 같이 쓰면 Time Profiler로 측정 ([실기기에서 실행](#실기기에서-실행---device)) |
 | `qakit check` | 시나리오 형식·ID 정적 검사 |
 | `qakit summarize` | 마지막 실패 요약 다시 보기 |
