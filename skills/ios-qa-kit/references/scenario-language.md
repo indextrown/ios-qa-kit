@@ -26,6 +26,7 @@ steps:
 | scroll-to | `scroll-to: { target: <대상>, in: <대상>, max: 8, dir: up, required: false }` | 화면에 보일 때까지 스크롤 |
 | swipe | `swipe: { on: <대상>, dir: up }` | |
 | pinch | `pinch: { on: <대상>, scale: 2.5, velocity?, settle?: 0.5 }` | 1보다 크면 확대, 작으면 축소. 속도 부호 자동, 기본 속도 `max(4, scale 또는 1/scale)` (동작 1초 안팎). settle: 끝난 뒤 쉬는 초 |
+| two-finger-tap | `two-finger-tap: <대상>` 또는 `{ on: <대상>, count?: 1, settle?: 0.6 }` | 대상 **가운데**를 두 손가락으로 탭. 지도는 1단계 축소. 축소 핀치는 손가락이 대상 가장자리에서 시작해 가장자리 패널(아이패드 가로 화면의 오른쪽 패널 등)을 끌 수 있으므로, 지도 축소는 이쪽을 쓴다 |
 | snapshot | `snapshot: { of: <대상>, as: 이름 }` | 스크린샷 저장·첨부 (changed 조건용) |
 | expect | `expect: <조건>`, `timeout:`, `hold:`, `message:` | 판정. hold는 그 시간 동안 유지돼야 통과 |
 | repeat | `repeat: { until: <조건>, max: 5, wait: 3, watch?: 설정키, steps: [단계] }` | **처음 실행 전에 조건을 먼저 본다** — 이미 맞으면 한 번도 실행하지 않는다("반복 0번"). 맞을 때까지 최대 max번 반복, 끝까지 안 맞으면 실패 (`required: false`면 통과). `wait`: 매 반복 뒤 조건을 기다리는 최대 초. **`watch`**: 매 반복 뒤 그 앱 설정 값이 바뀌고 1초간 멈출 때까지 최대 `wait`초 기다렸다 판정 — 관성 확대·늦은 저장으로 목표를 넘치는 것을 막는다. 값이 안 바뀌면(한계 도달 등) `wait`초를 다 쓴다 |
@@ -117,11 +118,12 @@ steps:
 지도 줌처럼 앱 설정(UserDefaults)에 숫자로 저장되는 값을 목표까지 바꿀 때 쓴다. 지금 값에서 필요한 핀치 수를 계산해 **기다리지 않고 연달아** 한 뒤, 값이 멈출 때 한 번만 본다.
 
 ```yaml
-- pinch-to: { on: MainView.mapView, pref: zoom, target: 15, gain: 3.2, gain-out: 0.74 }
+- pinch-to: { on: MainView.mapView, pref: zoom, target: 15, gain: 3.2, out: two-finger-tap }
 ```
 
 - `gain`: scale 10 핀치 한 번에 오르는 양(앱마다 한 번 재서 적는다). 한 번에 scale 10까지만 쓴다 — 더 크게 해도 지도 SDK가 한 번에 오르는 양에는 한계가 있다.
 - `gain-out`: scale 0.5 핀치 한 번에 내려가는 양. 빠르게 크게 오므리는 축소는 거의 먹지 않아 축소는 0.5씩 여러 번 한다. 없으면 `gain`의 1/4.
+- `out: two-finger-tap`: 축소를 핀치 대신 **가운데 두 손가락 탭**으로 한다(한 번 = `gain-out`, 기본 1단계). 축소 핀치는 두 손가락이 대상의 양 끝(가장자리에서 50pt 안쪽)에서 시작해 가운데로 모이므로, 지도 위 가장자리에 패널·버튼이 있으면 그것을 끌어 버린다. 특히 아이패드 가로 화면은 손가락이 왼쪽·오른쪽 끝에서 시작한다. 확대 핀치는 가운데에서 벌리므로 괜찮다. 1단계 미만의 나머지는 반 이상일 때만 탭한다.
 - 값이 아직 없으면(한 번도 확대·축소하지 않은 앱) 한 번 핀치해서 값이 생기게 한 뒤 계산한다. `read-pref`도 `default:`로 값이 없을 때 쓸 글자를 줄 수 있다.
 - 계산은 근사라 목표 근처에서 멈춘다. 정확히 맞춰야 하면 뒤에 작은 `pinch` 반복(`watch:`)으로 보정한다.
 

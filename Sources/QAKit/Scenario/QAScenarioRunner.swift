@@ -16,7 +16,8 @@
 //    scroll-to: { target: <대상>, in: <대상>, dir: up, max: 8 }
 //    swipe: { on: <대상>, dir: up|down|left|right }
 //    pinch: { on: <대상>, scale: 2.5, velocity: 2 }
-//    pinch-to: { on: <대상>, pref: 키, target: 값, gain: scale 10 한 번의 변화량, gain-out?: scale 0.5 한 번의 변화량 }   필요한 핀치를 계산해 연달아
+//    pinch-to: { on: <대상>, pref: 키, target: 값, gain: scale 10 한 번의 변화량, gain-out?: 축소 한 번의 변화량, out?: pinch|two-finger-tap }   필요한 핀치를 계산해 연달아
+//    two-finger-tap: <대상> | { on: <대상>, count: 1, settle: 0.6 }   두 손가락 탭 (지도: 가운데 기준 1단계 축소)
 //    snapshot: { of: <대상>, as: 이름 }
 //    expect: <조건>, timeout?: 초, hold?: 초, message?: 글자
 //    hide-keyboard: true (키보드가 버튼을 가릴 때)
@@ -275,6 +276,18 @@ public final class QAScenarioRunner {
             element.pinch(withScale: scale, velocity: scale < 1 ? -speed : speed)
             RunLoop.current.run(until: Date().addingTimeInterval(number(spec["settle"]) ?? 0.5))
 
+        } else if let raw = step["two-finger-tap"] {
+            // 대상 가운데를 두 손가락으로 탭. 지도 SDK(Mapbox 등)는 1단계 축소.
+            // 축소 핀치는 손가락이 대상 가장자리에서 시작해, 가장자리에 패널이 있으면(아이패드 가로) 그 패널을 끈다 → 가운데만 누르는 이 방식이 안전
+            let spec = raw as? [String: Any]
+            let target = spec?["on"] ?? raw
+            let element = resolve(target)
+            try waitFor(element, timeout: 5, what: target)
+            for _ in 0..<Int(number(spec?["count"]) ?? 1) {
+                element.twoFingerTap()
+                RunLoop.current.run(until: Date().addingTimeInterval(number(spec?["settle"]) ?? 0.6))
+            }
+
         } else if let spec = step["pinch-to"] as? [String: Any] {
             // 숫자 앱 설정(예: 지도 줌)이 target이 되도록 필요한 핀치 수를 계산해 기다리지 않고 연달아 한 뒤, 값이 멈출 때 한 번만 본다.
             // gain = scale 10 핀치 한 번에 바뀌는 양(측정값). 핀치 한 번이 바꾸는 양 ≈ log2(scale) × gain / log2(10)
@@ -295,8 +308,10 @@ public final class QAScenarioRunner {
             guard let startValue = current else {
                 throw fail("앱 설정에 '\(key)' 숫자 값이 없음 (\(prefsPathNote))")
             }
-            // 축소는 빠르게 크게 오므리면 거의 안 먹는다 → scale 0.5 핀치 한 번의 변화량(gain-out)으로 횟수를 센다
-            let gainOut = number(spec["gain-out"]) ?? gain / 4
+            // 축소 방법 — pinch: scale 0.5 핀치 한 번 = gain-out (빠르게 크게 오므리면 거의 안 먹어 여러 번)
+            //            two-finger-tap: 가운데 두 손가락 탭 한 번 = gain-out(기본 1단계). 손가락이 가장자리를 누르지 않는다
+            let tapOut = (spec["out"] as? String) == "two-finger-tap"
+            let gainOut = number(spec["gain-out"]) ?? (tapOut ? 1 : gain / 4)
             let perLog2 = gain / log2(10)
             var remaining = target - startValue
             var pinches: [Double] = []
@@ -313,6 +328,12 @@ public final class QAScenarioRunner {
                 }
             }
             for scale in pinches {
+                if scale < 1 && tapOut {
+                    // 1단계를 다 못 채우는 나머지(예: 0.4단계)는 탭하면 넘치므로 반 이상일 때만 탭
+                    if log2(1 / scale) * gainOut >= gainOut / 2 { element.twoFingerTap() }
+                    RunLoop.current.run(until: Date().addingTimeInterval(0.6))   // 축소 애니메이션이 끝난 뒤 다음 탭
+                    continue
+                }
                 let speed = CGFloat(scale >= 1 ? max(4, scale) : 4)
                 element.pinch(withScale: CGFloat(scale), velocity: scale < 1 ? -speed : speed)
                 RunLoop.current.run(until: Date().addingTimeInterval(0.2))
@@ -327,7 +348,11 @@ public final class QAScenarioRunner {
                 if last != before && Date().timeIntervalSince(lastChange) >= 1.0 { break }
                 RunLoop.current.run(until: Date().addingTimeInterval(0.2))
             }
-            testCase.note("\(key) \(before) → \(last) (목표 \(formatPref(target as NSNumber)), 핀치 \(pinches.count)번 연달아)")
+            let outCount = pinches.filter { $0 < 1 }.count
+            let inCount = pinches.count - outCount
+            let how = !(tapOut && outCount > 0) ? "핀치 \(pinches.count)번 연달아"
+                : inCount == 0 ? "두 손가락 탭 \(outCount)번 연달아" : "핀치 \(inCount)번 + 두 손가락 탭 \(outCount)번 연달아"
+            testCase.note("\(key) \(before) → \(last) (목표 \(formatPref(target as NSNumber)), \(how))")
 
         } else if let spec = step["snapshot"] as? [String: Any] {
             let element = resolve(spec["of"] as Any)
