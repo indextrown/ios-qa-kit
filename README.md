@@ -537,7 +537,7 @@ qakit build-app --device last                          # 기기에 앱만 빌드
 | 메모리 (1초 단위) | ✅ `ps` | ✅ Activity Monitor (Time Profiler와 같이 녹화, Xcode 메모리 게이지와 같은 physical footprint) |
 
 - **Time Profiler는 실기기에서만 된다.** 시뮬레이터 앱을 Time Profiler로 보려면 Instruments 앱에서 직접 녹화한다.
-- 실기기가 무선이면 Time Profiler가 앱에만 붙지 못해 기기 전체를 녹화하고 앱 샘플만 골라낸다 (기록이 1분에 200MB 안팎). 테스트와 녹화가 같이 무선을 쓰다 끊긴 적이 있어 긴 측정은 케이블을 권한다.
+- **실기기 측정(`--bench`)은 케이블로 연결해서 한다.** 무선에서는 Time Profiler가 앱에 붙지 못하고(`Cannot find process`), 대신 하는 기기 전체 녹화도 테스트와 같이 돌면 몇 초 만에 끊긴다(`Device disconnected`). 시나리오 실행만은 무선으로 된다. 무선으로 측정을 시작하면 qakit이 미리 알리고, 녹화가 짧게 끊기면 요약에 적는다.
 - 권한(위치 등)은 미리 허용할 수 없다. 처음 한 번 기기에서 허용하거나 시나리오가 팝업을 누르게 한다.
 - `--reset`은 앱 재설치만 한다. 키체인은 지울 수 없어 저장된 로그인 정보가 남을 수 있다.
 - 서명 팀은 앱 빌드 설정의 `DEVELOPMENT_TEAM`을 쓴다. 다르게 하려면 `qakit.yml`에 `device: { team: <팀 ID> }`.
