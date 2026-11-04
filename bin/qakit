@@ -1622,6 +1622,8 @@ def app_state(ws):
         state["branch"] = branch
         state["commit"] = git(d, "rev-parse", "--short", "HEAD")
         spec = app_pathspec(ws)
+        # 앱 파일만의 내용 해시 (QA 폴더 등 제외 경로는 빠진다) — QA만 바뀐 커밋으로는 다시 빌드하지 않게
+        state["appTree"] = app_tree_hash(ws, "HEAD")
         status = git(d, "status", "--porcelain", "--untracked-files=normal", "--", *spec) or ""
         diff = git(d, "diff", "HEAD", "--", *spec) or ""
         state["dirty"] = hashlib.sha1((status + diff).encode()).hexdigest()[:12] if status else ""
@@ -1635,6 +1637,17 @@ def app_state(ws):
     return state
 
 
+def app_tree_hash(ws, rev):
+    """그 커밋에서 앱 파일만의 내용 해시 (작업공간인 QA 폴더 등 제외 경로는 뺀다). QA만 바뀐 커밋은 같은 값."""
+    excluded = [x.split(")", 1)[1].rstrip("/") + "/" for x in app_pathspec(ws) if x.startswith(":(exclude)")]
+    listing = git(ws.app_dir, "ls-tree", "-r", rev)
+    if listing is None:
+        return None
+    tree = "\n".join(l for l in listing.splitlines()
+                     if not any(l.split("\t", 1)[-1].startswith(e) for e in excluded))
+    return hashlib.sha1(tree.encode()).hexdigest()[:12]
+
+
 def app_pathspec(ws):
     """작업공간이 앱 레포 안(QA 폴더)이면 앱 변경 감지에서 제외한다."""
     try:
@@ -1644,7 +1657,7 @@ def app_pathspec(ws):
         return ["."]
 
 
-SAME_KEYS = ("appPath", "scheme", "configuration", "commit", "dirty", "sourceHash")
+SAME_KEYS = ("appPath", "scheme", "configuration", "appTree", "dirty", "sourceHash")
 
 
 def load_state(ws, name):
@@ -1666,7 +1679,7 @@ def describe_change(old, new):
         parts.append(f"앱 경로 {Path(old.get('appPath', '')).parent.name} → {Path(new['appPath']).parent.name}")
     if old.get("branch") != new.get("branch"):
         parts.append(f"브랜치 {old.get('branch') or '(git 아님)'} → {new.get('branch') or '(git 아님)'}")
-    elif old.get("commit") != new.get("commit"):
+    elif old.get("commit") != new.get("commit") and old.get("appTree") != new.get("appTree"):
         parts.append(f"커밋 {old.get('commit')} → {new.get('commit')}")
     if old.get("dirty") != new.get("dirty"):
         parts.append(f"미커밋 변경 {new.get('dirtyFiles', 0)}개 파일")
@@ -1681,7 +1694,12 @@ def describe_change(old, new):
 def app_changed(ws):
     old = load_state(ws, ws.state_name)
     new = app_state(ws)
-    changed = not old or any(old.get(k) != new.get(k) for k in SAME_KEYS)
+    def same(k):
+        if k == "appTree" and old and "appTree" not in old:
+            # 예전 기록(appTree 없음): 그 커밋의 앱 파일 해시를 구해 비교한다
+            return bool(old.get("commit")) and app_tree_hash(ws, old["commit"]) == new.get("appTree")
+        return old.get(k) == new.get(k)
+    changed = not old or not all(same(k) for k in SAME_KEYS)
     return changed, describe_change(old, new) if changed else "", new
 
 
