@@ -873,9 +873,12 @@ def test_env(ws, extra=None):
 
 
 def new_run_dir(ws, label, name=None):
-    """실행 한 번의 결과 폴더: results/<날짜>/<시각>-<종류>[-<이름>]/"""
+    """실행 한 번의 결과 폴더: results/<날짜>/<시-분-초>_<종류>[_<이름>][_<실기기>]/
+    예) results/2026-11-04/14-15-16_bench-1m_interpolation-setup_iphone-15/"""
     now = datetime.datetime.now()
-    folder = now.strftime("%H%M%S") + f"-{label}" + (f"-{slug(name)}" if name else "")
+    folder = now.strftime("%H-%M-%S") + f"_{label}" + (f"_{slug(name)}" if name and slug(name) else "")
+    if ws.device:
+        folder += f"_{slug(ws.device.get('model') or 'device') or 'device'}"
     d = ws.results_dir / now.strftime("%Y-%m-%d") / folder
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -2193,6 +2196,14 @@ def parse_duration(text):
     return sum(float(n) * BENCH_UNITS[u] for n, u in parts)
 
 
+def short_duration(sec):
+    """폴더 이름용: 90 → '1m30s', 3600 → '1h'."""
+    sec = int(round(sec))
+    h, rem = divmod(sec, 3600)
+    m, s = divmod(rem, 60)
+    return "".join(f"{v}{u}" for v, u in ((h, "h"), (m, "m"), (s, "s")) if v) or "0s"
+
+
 def human_duration(sec):
     """5400 → '1시간 30분', 30 → '30초'."""
     sec = int(round(sec))
@@ -2649,7 +2660,7 @@ def _cmd_run(ws, args):
                  "예) --bench 30s (30초) / --bench 30m (30분) / --bench 1h (1시간) / --bench 1h30m · 30초 · 5분도 됨")
         if bench_seconds < BENCH_MIN_SECONDS:
             fail(f"--bench는 {BENCH_MIN_SECONDS}초 이상이어야 합니다 (입력: {human_duration(bench_seconds)}).")
-        run_dir = new_run_dir(ws, "run", path.name.replace(".qa.yml", ""))
+        run_dir = new_run_dir(ws, f"bench-{short_duration(bench_seconds)}", path.name.replace(".qa.yml", ""))
         base = run_dir / "bench"
         extra["BENCH_SIGNAL"] = str(base)
         extra["BENCH_SECONDS"] = str(bench_seconds)

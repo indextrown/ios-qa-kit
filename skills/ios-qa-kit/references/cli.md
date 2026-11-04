@@ -53,7 +53,7 @@ worktree:                        # QA 워크트리(init --worktree)일 때
 
 ## 결과 파일 (results/, git 제외)
 
-실행 한 번이 폴더 하나다: `results/<날짜>/<시각>-<종류>[-<이름>]/` (예: `results/2026-11-04/104609-run-interpolation-setup/`)
+실행 한 번이 폴더 하나다: `results/<날짜>/<시-분-초>_<종류>[_<이름>][_<실기기>]/`. 종류는 `run`·`test`·`dump`, 성능 측정이면 `bench-<시간>` (예: `results/2026-11-04/14-15-16_run_interpolation-setup/`, `14-20-03_bench-1m_interpolation-setup_iphone-15/`)
 
 | 파일 (실행 폴더 안) | 내용 |
 |---|---|
