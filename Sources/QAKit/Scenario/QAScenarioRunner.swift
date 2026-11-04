@@ -349,8 +349,9 @@ public final class QAScenarioRunner {
                 RunLoop.current.run(until: Date().addingTimeInterval(0.2))
             }
             let outCount = pinches.filter { $0 < 1 }.count
-            let how = tapOut && outCount > 0
-                ? "핀치 \(pinches.count - outCount)번 + 두 손가락 탭 \(outCount)번 연달아" : "핀치 \(pinches.count)번 연달아"
+            let inCount = pinches.count - outCount
+            let how = !(tapOut && outCount > 0) ? "핀치 \(pinches.count)번 연달아"
+                : inCount == 0 ? "두 손가락 탭 \(outCount)번 연달아" : "핀치 \(inCount)번 + 두 손가락 탭 \(outCount)번 연달아"
             testCase.note("\(key) \(before) → \(last) (목표 \(formatPref(target as NSNumber)), \(how))")
 
         } else if let spec = step["snapshot"] as? [String: Any] {
