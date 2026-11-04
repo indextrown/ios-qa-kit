@@ -1704,10 +1704,115 @@ def _cpu_seconds(pid):
     return total + (int(days) * 86400 if days else 0), int(rss) / 1024.0
 
 
-def dev_tools_enabled():
-    """Time Profiler(xctrace)가 앱에 붙으려면 개발자 모드가 켜져 있어야 한다. 꺼져 있으면 승인을 기다리며 멈춘다."""
-    r = run(["DevToolsSecurity", "-status"], check=False)
-    return "enabled" in (r.stdout or "").lower()
+# 함수별 CPU: macOS 기본 명령 sample로 SAMPLE_INTERVAL_MS마다 앱의 호출 스택을 찍는다 (권한 불필요).
+# 측정이 1분 이하면 전체를, 더 길면 SAMPLE_EVERY초마다 SAMPLE_WINDOW초씩 찍는다.
+# 1ms로 찍으면 찍는 동안 앱 CPU가 7%p쯤 올라가 CPU·메모리 기록이 흐려진다 (10ms는 1%p 안팎)
+SAMPLE_INTERVAL_MS = 10
+SAMPLE_WINDOW = 20
+SAMPLE_EVERY = 180
+# 스택 맨 위가 이 함수면 그 스레드는 잠자며 기다리는 중 (CPU를 쓰지 않음)
+SAMPLE_IDLE = {
+    "__workq_kernreturn", "__psynch_cvwait", "__psynch_mutexwait", "mach_msg2_trap", "mach_msg_trap",
+    "semaphore_wait_trap", "semaphore_timedwait_trap", "__accept", "__select", "__pselect", "__semwait_signal",
+    "kevent", "kevent64", "kevent_id", "__ulock_wait", "__ulock_wait2", "poll", "__sigsuspend", "__wait4",
+    "__recvfrom", "__recvmsg", "__sleep", "nanosleep", "read", "__read_nocancel", "recv", "start_wqthread",
+}
+# 앱 코드 목록에서 뺄 것: 어떤 동작이든 거쳐 가는 시작점·접착 코드
+SAMPLE_APP_SKIP = ("main", "static AppDelegate.$main()", "static UIApplicationDelegate.main()")
+SAMPLE_APP_SKIP_PREFIX = ("thunk for ", "partial apply for ", "protocol witness for ", "DYLD-STUB$$", "__swift_",
+                          "merged ", "reabstraction thunk")
+_SAMPLE_LINE = re.compile(r"^([ +|!:]*?)(\d+) (.+)$")
+
+
+def sample_windows(seconds):
+    """측정 시간 → [(시작 초, 길이 초)]."""
+    if seconds <= 60:
+        return [(0, int(seconds))]
+    return [(t, min(SAMPLE_WINDOW, int(seconds) - t)) for t in range(0, int(seconds), SAMPLE_EVERY)
+            if int(seconds) - t >= 5]
+
+
+def parse_sample(path):
+    """sample 결과의 호출 트리 → 대기를 뺀 'CPU를 쓴' 샘플 집계.
+    self: 스택 맨 위(직접 CPU를 쓴) 함수별 개수, app: 앱 함수별로 그 아래 호출까지 포함한 개수."""
+    lines = Path(path).read_text(errors="replace").splitlines()
+    binary = next((l.split()[1] for l in lines[:5] if l.startswith("Process:")), "app")
+    try:
+        lines = lines[lines.index("Call graph:") + 1:]
+    except ValueError:
+        return None
+    depth, count, name, lib, src, parent = [], [], [], [], [], []
+    stack = []
+    for line in lines:
+        if not line.strip():
+            break
+        m = _SAMPLE_LINE.match(line)
+        if not m:
+            continue
+        d, rest = len(m.group(1)), m.group(3)
+        fn, _, tail = rest.partition("  (in ")
+        while stack and depth[stack[-1]] >= d:
+            stack.pop()
+        parent.append(stack[-1] if stack else None)
+        stack.append(len(depth))
+        depth.append(d)
+        count.append(int(m.group(2)))
+        name.append(fn.strip())
+        lib.append(tail.split(")", 1)[0] if tail else "")
+        src.append(rest.rsplit("]  ", 1)[1].strip() if "]  " in rest else "")
+    n = len(depth)
+    active = list(count)                      # 자기 자신 = 개수 − 자식 개수 합
+    for i in range(n):
+        if parent[i] is not None:
+            active[parent[i]] -= count[i]
+    for i in range(n):
+        if not lib[i] or name[i] in SAMPLE_IDLE:
+            active[i] = 0                     # 스레드 머리줄 / 잠자며 대기
+    incl = list(active)                       # 아래 호출까지 포함한 CPU 샘플
+    for i in reversed(range(n)):
+        if parent[i] is not None:
+            incl[parent[i]] += incl[i]
+    self_counts, app_counts, app_src = {}, {}, {}
+    for i in range(n):
+        if active[i]:
+            key = name[i] if name[i] != "???" else f"??? ({lib[i]})"
+            self_counts[(key, lib[i])] = self_counts.get((key, lib[i]), 0) + active[i]
+        if incl[i] and lib[i] == binary and name[i] not in SAMPLE_APP_SKIP \
+                and not name[i].startswith(SAMPLE_APP_SKIP_PREFIX):
+            a = parent[i]                     # 재귀로 위에 같은 함수가 있으면 두 번 세지 않는다
+            while a is not None and name[a] != name[i]:
+                a = parent[a]
+            if a is None:
+                app_counts[name[i]] = app_counts.get(name[i], 0) + incl[i]
+                if src[i] and not src[i].startswith("/<compiler"):
+                    app_src.setdefault(name[i], src[i])
+    return {"active": sum(active), "self": self_counts, "app": app_counts, "src": app_src, "binary": binary}
+
+
+def sample_top(files, limit=10):
+    """여러 sample 결과를 합쳐 상위 목록."""
+    total, selfc, appc, srcs, binary = 0, {}, {}, {}, "app"
+    for f in files:
+        r = parse_sample(f)
+        if not r:
+            continue
+        total += r["active"]
+        binary = r["binary"]
+        for k, v in r["self"].items():
+            selfc[k] = selfc.get(k, 0) + v
+        for k, v in r["app"].items():
+            appc[k] = appc.get(k, 0) + v
+        for k, v in r["src"].items():
+            srcs.setdefault(k, v)
+    if not total:
+        return None
+    pct = lambda v: v * 100.0 / total
+    return {
+        "active": total, "binary": binary,
+        "self": [(fn, "앱" if lb == binary else lb, pct(v)) for (fn, lb), v in
+                 sorted(selfc.items(), key=lambda x: -x[1])[:limit]],
+        "app": [(fn, srcs.get(fn, ""), pct(v)) for fn, v in sorted(appc.items(), key=lambda x: -x[1])[:limit]],
+    }
 
 
 BENCH_UNITS = {"s": 1, "초": 1, "m": 60, "분": 60, "h": 3600, "시간": 3600}
@@ -1747,12 +1852,11 @@ def _progress(msg, final=False):
 
 
 class BenchSession(threading.Thread):
-    """시나리오가 끝나고 앱을 켜 둔 동안: 1초마다 CPU·메모리 기록 + Time Profiler 녹화 (권한이 있으면)."""
+    """시나리오가 끝나고 앱을 켜 둔 동안: 1초마다 CPU·메모리 기록 + sample로 함수별 CPU 기록."""
 
-    def __init__(self, ws, udid, seconds, base, profile=True, skip_reason=None):
+    def __init__(self, ws, udid, seconds, base, profile=True):
         super().__init__(daemon=True)
         self.ws, self.udid, self.seconds, self.base, self.profile = ws, udid, seconds, base, profile
-        self.skip_reason = skip_reason
         self.stop = threading.Event()       # xcodebuild가 끝나면 (실패 등) 기다리지 않는다
         self.summary = None
 
@@ -1773,14 +1877,22 @@ class BenchSession(threading.Thread):
             return {"error": "실행 중인 앱의 PID를 찾지 못함"}
         info(f"📈 성능 측정 시작: {ws.bundle_id} (PID {pid}), {human_duration(seconds)} — Mac 절전 방지 중")
         caffeinate = subprocess.Popen(["caffeinate", "-dimsu", "-t", str(int(seconds) + 120)])
-        trace = Path(f"{self.base}.trace")
-        xt_log = Path(f"{self.base}-xctrace.log")
-        xt = None
+        samples, sampler = [], None
         if self.profile:
-            xt = subprocess.Popen(["xcrun", "xctrace", "record", "--template", "Time Profiler",
-                                   "--device", self.udid, "--attach", str(pid),
-                                   "--time-limit", f"{int(seconds)}s", "--output", str(trace)],
-                                  stdout=open(xt_log, "w"), stderr=subprocess.STDOUT)
+            windows = sample_windows(seconds)
+            t_start = time.monotonic()
+
+            def take_samples():
+                for idx, (t, dur) in enumerate(windows):
+                    if self.stop.wait(max(0, t_start + t - time.monotonic())):
+                        return
+                    out = Path(f"{self.base}-sample.txt" if len(windows) == 1 else f"{self.base}-sample-{idx + 1:02d}.txt")
+                    subprocess.run(["sample", str(pid), str(dur), str(SAMPLE_INTERVAL_MS), "-mayDie", "-file", str(out)],
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    if out.exists():
+                        samples.append(out)
+            sampler = threading.Thread(target=take_samples, daemon=True)
+            sampler.start()
         # 1초마다 CPU 사용률(누적 CPU 시간의 증가량 / 경과 시간)과 메모리
         rows = []
         start = time.monotonic()
@@ -1806,7 +1918,7 @@ class BenchSession(threading.Thread):
             f"{s:.0f},{'' if c is None else f'{c:.1f}'},{'' if m is None else f'{m:.1f}'}\n" for s, c, m in rows))
         result = {"pid": pid, "csv": str(csv), "samples": len(rows)}
         if not self.profile:
-            result["profile_skipped"] = self.skip_reason or "건너뜀"
+            result["profile_skipped"] = "--no-profile로 실행함"
         cpus = sorted(c for _, c, _ in rows if c is not None)
         mems = [m for _, _, m in rows if m is not None]
         if cpus:
@@ -1816,68 +1928,18 @@ class BenchSession(threading.Thread):
             result.update(mem_start=mems[0], mem_end=mems[-1], mem_max=max(mems))
         if rows and rows[-1][1] is None:
             result["error"] = f"측정 중 앱이 종료됨 ({rows[-1][0]:.0f}초)"
-        # Time Profiler: 녹화가 끝나면 xctrace가 기록을 정리해 .trace로 저장한다 (긴 측정일수록 오래 걸림).
-        # 정리 시간을 기다리고, 안 끝나면 지금까지 저장하라고(SIGINT) 한 뒤 그래도 안 끝나면 멈춘다
-        if xt:
-            def wait_with_progress(limit, label):
-                t0 = time.monotonic()
-                while xt.poll() is None and time.monotonic() - t0 < limit:
-                    _progress(f"🧹 {label} {_mmss(time.monotonic() - t0)} (최대 {_mmss(limit)})")
-                    time.sleep(1 if sys.stdout.isatty() else 15)
-                if xt.poll() is None:
-                    _progress(f"🧹 {label} — 시간 초과", final=True)
-                    return False
-                _progress(f"🧹 {label} 끝 ({_mmss(time.monotonic() - t0)})", final=True)
-                return True
-            if not wait_with_progress(max(120, seconds // 3), "측정 완료 → Time Profiler 정리 중"):
-                xt.send_signal(2)   # SIGINT = 지금까지 저장하고 종료
-                if not wait_with_progress(max(60, seconds // 10), "Time Profiler 저장을 마무리하는 중"):
-                    xt.kill()
-                    xt.wait()
-            log = xt_log.read_text(errors="replace") if xt_log.exists() else ""
-            if xt.returncode == 0 and trace.exists():
-                result["trace"] = str(trace)
-                info("🔎 Time Profiler 결과에서 CPU를 많이 쓴 함수 정리 중…")
-                result["top"] = time_profile_top(trace)
-            else:
-                shutil.rmtree(trace, ignore_errors=True)   # 녹화가 안 된 조각은 지운다
-                result["trace_error"] = (log.strip().splitlines() or ["(출력 없음)"])[-1]
-                if "Starting recording" in log and "Recording completed" not in log:
-                    result["trace_hint"] = ("Time Profiler가 권한 승인을 기다리다 멈췄을 수 있습니다 → "
-                                            "터미널에서 sudo DevToolsSecurity -enable 후 다시")
+        # sample은 찍은 뒤 함수 이름을 붙이는(심볼 정리) 데 시간이 조금 더 걸린다
+        if sampler:
+            t0 = time.monotonic()
+            while sampler.is_alive() and time.monotonic() - t0 < 300:
+                _progress(f"🔎 함수별 CPU 기록 정리 중 {_mmss(time.monotonic() - t0)}")
+                sampler.join(1 if sys.stdout.isatty() else 15)
+            _progress(f"🔎 함수별 CPU 기록 정리 끝 ({_mmss(time.monotonic() - t0)})", final=True)
+            result["samples_files"] = [str(f) for f in samples]
+            result["sample_windows"] = sample_windows(seconds)
+            result["sample_top"] = sample_top(samples) if samples else None
         caffeinate.terminate()
         return result
-
-
-def time_profile_top(trace, limit=15):
-    """Time Profiler 결과에서 CPU 샘플이 많은 함수(맨 위 프레임) 상위 목록."""
-    r = run(["xcrun", "xctrace", "export", "--input", str(trace), "--xpath",
-             '/trace-toc/run[@number="1"]/data/table[@schema="time-profile"]'], check=False)
-    if r.returncode != 0 or "<" not in (r.stdout or ""):
-        return []
-    try:
-        root = ET.fromstring(r.stdout[r.stdout.index("<"):])
-    except ET.ParseError:
-        return []
-    names, leaves, counts = {}, {}, {}
-    for el in root.iter():
-        if el.tag == "frame" and el.get("id"):
-            names[el.get("id")] = el.get("name") or "?"
-    for row in root.iter("row"):
-        bt = row.find("backtrace")
-        if bt is None:
-            continue
-        if bt.get("ref"):
-            leaf = leaves.get(bt.get("ref"))
-        else:
-            first = bt.find("frame")
-            leaf = None if first is None else names.get(first.get("ref") or first.get("id"), first.get("name"))
-            if bt.get("id"):
-                leaves[bt.get("id")] = leaf
-        if leaf:
-            counts[leaf] = counts.get(leaf, 0) + 1
-    total = sum(counts.values()) or 1
-    return [(name, n, n * 100.0 / total) for name, n in sorted(counts.items(), key=lambda x: -x[1])[:limit]]
 
 
 def write_bench_summary(base, seconds, scenario, ws, s):
@@ -1890,15 +1952,23 @@ def write_bench_summary(base, seconds, scenario, ws, s):
                   f"(100% = 코어 1개, 샘플 {s['samples']}개)",
                   f"메모리 시작 {s['mem_start']:.0f}MB → 끝 {s['mem_end']:.0f}MB (최대 {s['mem_max']:.0f}MB)",
                   f"1초 단위 기록: {s['csv']}"]
-    if s.get("trace"):
-        lines += ["", f"Time Profiler: {s['trace']} (Instruments로 열기: open <파일>)"]
-        if s.get("top"):
-            lines.append("CPU를 많이 쓴 함수 (맨 위 프레임 기준, 샘플 비율):")
-            lines += [f"  {pct:5.1f}%  {name}" for name, _, pct in s["top"]]
+    top, wins = s.get("sample_top"), s.get("sample_windows") or []
+    if top:
+        covered = sum(d for _, d in wins)
+        how = "측정 전체" if len(wins) == 1 else f"{_mmss(SAMPLE_EVERY)}마다 {SAMPLE_WINDOW}초씩 {len(wins)}번, 합계 {human_duration(covered)}"
+        lines += ["", f"함수별 CPU (sample, {SAMPLE_INTERVAL_MS}ms 간격, {how}) — 기다리는 스레드는 빼고 CPU를 쓴 샘플 {top['active']:,}개 기준",
+                  "직접 CPU를 쓴 함수 (스택 맨 위):"]
+        short = lambda t: t if len(t) <= 90 else t[:87] + "…"
+        lines += [f"  {pct:5.1f}%  {short(fn)}  [{lb}]" for fn, lb, pct in top["self"]]
+        if top["app"]:
+            lines.append("앱 코드 기준 (그 함수가 부른 것까지 포함):")
+            lines += [f"  {pct:5.1f}%  {short(fn)}" + (f"  — {src}" if src else "") for fn, src, pct in top["app"]]
+        files = s.get("samples_files") or []
+        lines.append(f"원본 호출 트리: {files[0] if len(files) == 1 else Path(files[0]).parent / 'bench-sample-*.txt'}")
     elif s.get("profile_skipped"):
-        lines += ["", "Time Profiler: 건너뜀 (" + s["profile_skipped"] + ")"]
-    elif s.get("trace_error"):
-        lines += ["", f"Time Profiler 녹화 실패: {s['trace_error']}"] + ([f"→ {s['trace_hint']}"] if s.get("trace_hint") else [])
+        lines += ["", "함수별 CPU: 건너뜀 (" + s["profile_skipped"] + ")"]
+    elif "sample_top" in s:
+        lines += ["", "함수별 CPU: sample 기록을 얻지 못함"]
     lines.append("")
     lines.append("주의: 시뮬레이터(Mac CPU) 측정이라 실제 기기와 절대값이 다르다. 같은 조건끼리 비교할 때 쓴다.")
     path = Path(f"{base}-summary.txt")
@@ -1935,23 +2005,15 @@ def _cmd_run(ws, args):
                  "예) --bench 30s (30초) / --bench 30m (30분) / --bench 1h (1시간) / --bench 1h30m · 30초 · 5분도 됨")
         if bench_seconds < BENCH_MIN_SECONDS:
             fail(f"--bench는 {BENCH_MIN_SECONDS}초 이상이어야 합니다 (입력: {human_duration(bench_seconds)}).")
-        if bench_seconds > 3600 and not args.no_profile:
-            warn(f"{human_duration(bench_seconds)} Time Profiler 녹화는 trace 파일이 수 GB가 될 수 있습니다 "
-                 "(CPU·메모리만이면 --no-profile)")
         run_dir = new_run_dir(ws, "run", path.name.replace(".qa.yml", ""))
         base = run_dir / "bench"
         extra["BENCH_SIGNAL"] = str(base)
         extra["BENCH_SECONDS"] = str(bench_seconds)
-        profile, skip_reason = not args.no_profile, "--no-profile로 실행함" if args.no_profile else None
-        if profile and not dev_tools_enabled():
-            warn("개발자 모드가 꺼져 있어 Time Profiler를 건너뜁니다 (CPU·메모리만 기록). "
-                 "켜려면: sudo DevToolsSecurity -enable")
-            profile, skip_reason = False, "개발자 모드가 꺼져 있음 — 켜려면 sudo DevToolsSecurity -enable"
-        bench = BenchSession(ws, ensure_booted(ws), bench_seconds, base, profile=profile,
-                             skip_reason=skip_reason)
+        profile = not args.no_profile
+        bench = BenchSession(ws, ensure_booted(ws), bench_seconds, base, profile=profile)
         bench.start()
         info(f"성능 측정 예약: 시나리오가 끝나면 {human_duration(bench_seconds)} 동안 CPU·메모리"
-             + (" + Time Profiler" if profile else "") + " 기록")
+             + (" + 함수별 CPU(sample)" if profile else "") + " 기록")
     info(f"시나리오 실행: {scenario.get('name')} ({path.name})")
     try:
         success, xcresult, _ = run_scenario_runner(ws, "test_run", extra, label="run",
@@ -2268,9 +2330,9 @@ def main():
     p.add_argument("--reset", action="store_true", help="실행 전 앱 재설치 + 키체인 초기화")
     p.add_argument("--no-check", action="store_true", help="ID 정적 검사 실패해도 실행")
     p.add_argument("--bench", metavar="시간",
-                   help="시나리오가 끝난 화면 그대로 이 시간 동안 CPU·메모리 기록 + Time Profiler 녹화. "
+                   help="시나리오가 끝난 화면 그대로 이 시간 동안 CPU·메모리 + 함수별 CPU(sample) 기록. "
                         "단위 필수: 30s·5m·1h·1h30m (30초·5분·1시간도 됨)")
-    p.add_argument("--no-profile", action="store_true", help="--bench에서 Time Profiler 없이 CPU·메모리만 기록")
+    p.add_argument("--no-profile", action="store_true", help="--bench에서 함수별 CPU(sample) 없이 CPU·메모리만 기록")
     p.add_argument("--var", action="append", metavar="KEY=VALUE",
                    help='시나리오 변수 지정 (vars 기본값을 덮어씀, 여러 번 가능). 예) --var ship="ULTRA FOREST"')
     p.set_defaults(func=cmd_run)

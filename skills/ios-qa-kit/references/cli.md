@@ -15,7 +15,7 @@
 | `qakit dump-ui [--attach] [--wait-id ID] [--settle 초] [--print]` | 화면 구조 → `results/ui-dump.txt` |
 | `qakit test [필터...] [--reset]` | 테스트 실행. 필터 예: `LoginFlowTests`, `LoginFlowTests/test_x`. `--reset`: 앱 재설치+키체인 초기화 |
 | `qakit check [시나리오...]` | 시나리오 형식·ID 정적 검사 (실행 없이) |
-| `qakit run <시나리오> [--reset] [--var 키=값 ...] [--bench 시간 [--no-profile]] [--no-check]` | 시나리오 파일 실행. `--var`: `vars` 기본값을 이번 실행 값으로 덮어씀 (예: `--var ship="ULTRA FOREST"`). `--bench <시간>`: 시나리오가 끝난 화면 그대로 그 시간 동안 (단위 필수: `30s`·`5m`·`1h`·`1h30m`, `30초`·`5분`·`1시간`도 됨. 단위가 없으면 오류, 최소 5초) CPU·메모리(1초 단위) + Time Profiler 기록 → 실행 폴더의 `bench-*`. Time Profiler는 개발자 모드 필요(`sudo DevToolsSecurity -enable`, 꺼져 있으면 건너뜀). `--no-profile`: CPU·메모리만 |
+| `qakit run <시나리오> [--reset] [--var 키=값 ...] [--bench 시간 [--no-profile]] [--no-check]` | 시나리오 파일 실행. `--var`: `vars` 기본값을 이번 실행 값으로 덮어씀 (예: `--var ship="ULTRA FOREST"`). `--bench <시간>`: 시나리오가 끝난 화면 그대로 그 시간 동안 (단위 필수: `30s`·`5m`·`1h`·`1h30m`, `30초`·`5분`·`1시간`도 됨. 단위가 없으면 오류, 최소 5초) CPU·메모리(1초 단위, `ps`) + 함수별 CPU(macOS `sample`, 10ms 간격. 1분 이하는 전체, 더 길면 3분마다 20초씩. 권한 불필요) → 실행 폴더의 `bench-*`. 요약에 직접 CPU를 쓴 함수·앱 코드 기준 상위 10개. `--no-profile`: CPU·메모리만 |
 | `qakit summarize [xcresult]` | 실패 요약 (기본: 마지막 결과) |
 
 | 전역 옵션 | 설명 |
@@ -60,7 +60,7 @@ worktree:                        # QA 워크트리(init --worktree)일 때
 | `result.xcresult` | Xcode 결과 |
 | `result-attachments/` | 실패 시점 화면 구조·스크린샷 (`qakit summarize` 때) |
 | `build.log` | Swift 테스트 Runner 빌드 로그 (`qakit test`) |
-| `bench-summary.txt`, `bench-cpu.csv`, `bench.trace` | `--bench` 성능 측정 요약·1초 단위 CPU/메모리·Time Profiler |
+| `bench-summary.txt`, `bench-cpu.csv`, `bench-sample.txt` (긴 측정은 `bench-sample-01.txt`…) | `--bench` 성능 측정 요약·1초 단위 CPU/메모리·함수 호출 트리 원본 |
 
 | 파일 (results/ 바로 아래) | 내용 |
 |---|---|
