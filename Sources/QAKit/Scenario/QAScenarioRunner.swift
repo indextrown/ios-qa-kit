@@ -45,6 +45,8 @@ import XCTest
 public final class QAScenarioRunner {
 
     private let testCase: QATestCase
+    /// false면 실패를 XCTFail로 기록하지 않고 오류로만 던진다 (상주 실행기: 실패해도 테스트가 끝나면 안 됨)
+    public var recordsFailures = true
     private var vars: [String: String] = [:]
     private var snapshots: [String: Data] = [:]
     private var app: XCUIApplication { testCase.app }
@@ -106,6 +108,12 @@ public final class QAScenarioRunner {
             RunLoop.current.run(until: Date().addingTimeInterval(2))
         }
         testCase.note("성능 측정 끝")
+    }
+
+    /// 단계 하나 실행 (상주 실행기의 /step). 변수·스냅샷은 같은 실행기 인스턴스 안에서 이어진다.
+    public func runStep(json data: Data) throws {
+        let raw = try JSONSerialization.jsonObject(with: data)
+        try runStep(raw)
     }
 
     // MARK: - Steps
@@ -699,7 +707,7 @@ public final class QAScenarioRunner {
     }
 
     private func fail(_ message: String) -> QAError {
-        XCTFail(message)
-        return .timeout(message)
+        if recordsFailures { XCTFail(message) }
+        return .failed(message)
     }
 }
