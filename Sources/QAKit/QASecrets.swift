@@ -54,11 +54,13 @@ public enum QASecrets {
 public enum QAError: Error, CustomStringConvertible {
     case missingSecret(String)
     case timeout(String)
+    case failed(String)
 
     public var description: String {
         switch self {
         case .missingSecret(let key): return "missing secret: \(key)"
         case .timeout(let what): return "timeout: \(what)"
+        case .failed(let message): return message
         }
     }
 }
