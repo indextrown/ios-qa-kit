@@ -898,6 +898,7 @@ def run_tests(ws, only, extra_env=None, label="test", quiet=False):
     if not app_installed(udid, ws.bundle_id):
         fail(f"시뮬레이터에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app")
 
+    serve_stop(udid, reason=f"qakit {label}")
     ts = timestamp()
     rd = new_run_dir(ws, label, "-".join(o.split("/")[0] for o in only[:2]) if only else None)
     build_runner(ws, udid, rd / "build.log")
@@ -1971,14 +1972,20 @@ def verify_ids(ws, trees, model):
 
 # ─────────────────────────────── 시나리오 실행 (파일만으로) ───────────────────────────────
 
-def ensure_scenario_runner(udid):
-    """도구의 범용 시나리오 실행기를 필요할 때만 빌드한다 (앱마다 프로젝트를 만들지 않음)."""
+def scenario_runner_source_hash():
+    """실행기 소스(QAKit + ScenarioRunner)의 해시. Xcode 버전은 빼서 빠르다 (상주 실행기의 재시작 판단용)."""
     h = hashlib.sha1()
     for base in (KIT_DIR / "Sources" / "QAKit", KIT_DIR / "ScenarioRunner"):
         for f in sorted(base.rglob("*")):
             if f.is_file() and ".xcodeproj" not in str(f):
                 h.update(str(f.relative_to(KIT_DIR)).encode())
                 h.update(f.read_bytes())
+    return h.hexdigest()
+
+
+def ensure_scenario_runner(udid):
+    """도구의 범용 시나리오 실행기를 필요할 때만 빌드한다 (앱마다 프로젝트를 만들지 않음)."""
+    h = hashlib.sha1(scenario_runner_source_hash().encode())
     h.update(run(["xcodebuild", "-version"], check=False).stdout.encode())
     stamp = SCENARIO_BUILD / ".stamp"
     xctestruns = list((SCENARIO_BUILD / "Build" / "Products").glob("*.xctestrun"))
@@ -1994,6 +2001,156 @@ def ensure_scenario_runner(udid):
         fail("시나리오 실행기 빌드 실패", "\n   ".join(dict.fromkeys(errors[:10])))
     stamp.write_text(h.hexdigest())
     return list((SCENARIO_BUILD / "Build" / "Products").glob("*.xctestrun"))[0]
+
+
+# ─────────────────────────────── 상주 실행기 (docs/PLAN.md) ───────────────────────────────
+
+SERVE_DIR = Path.home() / ".qakit" / "serve"
+
+
+def serve_state_file(udid):
+    return SERVE_DIR / f"{udid}.json"
+
+
+def serve_load(udid):
+    try:
+        return json.loads(serve_state_file(udid).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+class ServeTimeout(Exception):
+    pass
+
+
+def serve_request(st, path, body=None, timeout=120):
+    """상주 실행기에 요청. 응답 JSON. 제한 시간을 넘기면 ServeTimeout, 연결 실패는 ConnectionError."""
+    import socket
+    import urllib.error
+    import urllib.request
+    data = json.dumps(body if body is not None else {}, ensure_ascii=False).encode()
+    req = urllib.request.Request(f"http://127.0.0.1:{st['port']}{path}", data=data, method="POST",
+                                 headers={"X-Qakit-Token": st["token"], "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        try:
+            return json.loads(e.read().decode("utf-8"))
+        except ValueError:
+            return {"ok": False, "message": f"HTTP {e.code}"}
+    except (socket.timeout, TimeoutError):
+        raise ServeTimeout(path)
+    except urllib.error.URLError as e:
+        if isinstance(e.reason, (socket.timeout, TimeoutError)):
+            raise ServeTimeout(path)
+        raise ConnectionError(str(e.reason))
+
+
+def serve_alive(st):
+    if not st or not _pid_alive(st.get("pid")):
+        return False
+    try:
+        return bool(serve_request(st, "/ping", timeout=10).get("ok"))
+    except (ServeTimeout, ConnectionError):
+        return False
+
+
+def serve_stop(udid, reason=None, quiet=False, force=False):
+    """상주 실행기를 멈춘다. 없으면 아무것도 안 한다. force: 응답 없는 실행기 — 정상 종료를 기다리지 않고 바로 끝낸다."""
+    st = serve_load(udid)
+    if not st:
+        return False
+    pid = st.get("pid")
+    if _pid_alive(pid):
+        if reason and not quiet:
+            info(f"상주 실행기를 멈춥니다 ({reason}와 같은 시뮬레이터를 쓰므로)")
+        if not force:
+            try:
+                serve_request(st, "/stop", timeout=10)
+            except (ServeTimeout, ConnectionError):
+                pass
+        for _ in range(0 if force else 30):
+            if not _pid_alive(pid):
+                break
+            time.sleep(1)
+        if _pid_alive(pid):
+            try:
+                os.killpg(int(pid), 15)   # start_new_session으로 띄웠으므로 프로세스 그룹째
+            except OSError:
+                pass
+    serve_state_file(udid).unlink(missing_ok=True)
+    return True
+
+
+def serve_start(ws, udid, idle=1800, launch=True):
+    """test_serve를 백그라운드로 띄우고 포트·토큰을 받을 때까지 기다린다."""
+    SERVE_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_autoid(ws)
+    if not app_installed(udid, ws.bundle_id):
+        fail(f"시뮬레이터에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app")
+    xctestrun = ensure_scenario_runner(udid)
+    token = hashlib.sha1(os.urandom(32)).hexdigest()
+    ready_file = SERVE_DIR / f"{udid}.runner.json"
+    ready_file.unlink(missing_ok=True)
+    extra = {"SERVE_STATE": ready_file, "SERVE_TOKEN": token, "SERVE_IDLE": int(idle),
+             "SERVE_LAUNCH": "1" if launch else "0"}
+    prefs = app_prefs_path(udid, ws.bundle_id)
+    if prefs:
+        extra["APP_PREFS"] = prefs
+    xcresult = SERVE_DIR / f"{udid}.xcresult"
+    shutil.rmtree(xcresult, ignore_errors=True)
+    log = SERVE_DIR / f"{udid}.log"
+    cmd = ["xcodebuild", "test-without-building", "-xctestrun", str(xctestrun), "-destination", f"id={udid}",
+           "-resultBundlePath", str(xcresult), "-only-testing", "ScenarioTests/ScenarioTests/test_serve"]
+    info("상주 실행기 시작 중 (앱 실행 포함 30초 안팎)...")
+    with open(log, "w") as out:
+        proc = subprocess.Popen(cmd, env=test_env(ws, extra), stdout=out, stderr=subprocess.STDOUT,
+                                start_new_session=True)
+    deadline = time.time() + 180
+    while time.time() < deadline:
+        if ready_file.exists() and ready_file.stat().st_size:
+            break
+        if proc.poll() is not None:
+            tail = "\n   ".join(log.read_text(errors="replace").splitlines()[-15:])
+            fail("상주 실행기가 시작되지 않았습니다.", tail or f"로그: {log}")
+        time.sleep(0.5)
+    else:
+        os.killpg(proc.pid, 15)
+        fail("상주 실행기가 180초 안에 준비되지 않았습니다.", f"로그: {log}")
+    runner = json.loads(ready_file.read_text())
+    st = {"udid": udid, "pid": proc.pid, "port": runner["port"], "token": runner["token"],
+          "workspace": str(ws.root), "bundleId": ws.bundle_id, "runnerHash": scenario_runner_source_hash(),
+          "started": datetime.datetime.now().isoformat(timespec="seconds"), "log": str(log)}
+    serve_state_file(udid).write_text(json.dumps(st, ensure_ascii=False, indent=2))
+    ok(f"상주 실행기 준비됨 (포트 {st['port']})")
+    return st
+
+
+def serve_ensure(ws, udid):
+    """살아 있는 상주 실행기를 돌려준다. 없거나, 죽었거나, 실행기 코드·작업공간이 바뀌었으면 다시 띄운다."""
+    st = serve_load(udid)
+    if st:
+        why = None
+        if st.get("runnerHash") != scenario_runner_source_hash():
+            why = "실행기 코드가 바뀜"
+        elif st.get("workspace") != str(ws.root):
+            why = f"다른 작업공간({st.get('workspace')})의 실행기"
+        elif not serve_alive(st):
+            why = "응답 없음"
+        if why is None:
+            return st
+        info(f"상주 실행기를 다시 띄웁니다: {why}")
+        serve_stop(udid, quiet=True)
+    return serve_start(ws, udid)
 
 
 def app_prefs_path(udid, bundle_id):
@@ -2020,6 +2177,8 @@ def run_scenario_runner(ws, method, extra_env, label, quiet=False, history_name=
         udid = ensure_booted(ws)
         if not app_installed(udid, ws.bundle_id):
             fail(f"시뮬레이터에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app")
+        if method != "test_serve":
+            serve_stop(udid, reason=f"qakit {label}")
         xctestrun = ensure_scenario_runner(udid)
         prefs = app_prefs_path(udid, ws.bundle_id)
         if prefs:
@@ -2968,6 +3127,108 @@ def cmd_install_skill(args):
         warn("~/.local/bin이 PATH에 없습니다. 셸 설정에 추가하세요: export PATH=\"$HOME/.local/bin:$PATH\"")
 
 
+# ─────────────────────────────── 명령: serve · do ───────────────────────────────
+
+def _serve_udid(ws):
+    if ws.device:
+        fail("상주 실행기는 아직 시뮬레이터만 지원합니다 (실기기는 docs/PLAN.md R5).", "--device 없이 실행")
+    return ensure_booted(ws)
+
+
+def cmd_serve(args):
+    ws = find_workspace(args.workspace)
+    udid = _serve_udid(ws)
+    st = serve_load(udid)
+    if args.status:
+        if st and serve_alive(st):
+            stale = st.get("runnerHash") != scenario_runner_source_hash()
+            ok(f"상주 실행기 실행 중: {ws.simulator} · 포트 {st['port']} · {st['started']} 시작 · {st['workspace']}"
+               + (" (실행기 코드가 바뀜 → 다음 명령 때 다시 띄움)" if stale else ""))
+        else:
+            info("상주 실행기 없음" + (" (기록만 남아 있어 정리함)" if st else ""))
+            if st:
+                serve_stop(udid, quiet=True)
+        return
+    if args.stop:
+        if serve_stop(udid):
+            ok("상주 실행기를 멈췄습니다")
+        else:
+            info("상주 실행기 없음")
+        return
+    with sim_lock(ws, "qakit serve"):
+        if st and serve_alive(st) and st.get("workspace") == str(ws.root) \
+                and st.get("runnerHash") == scenario_runner_source_hash():
+            ok(f"이미 실행 중입니다 (포트 {st['port']}). 멈추려면 qakit serve --stop")
+            return
+        serve_stop(udid, quiet=True)
+        serve_start(ws, udid, idle=args.idle, launch=not args.no_launch)
+    info("이제 qakit do '<단계>' 로 바로 실행합니다. 예) qakit do 'tap: <ID>'  ·  qakit do dump")
+
+
+SERVE_COMMANDS = {"dump": "/dump", "launch": "/launch", "ping": "/ping", "reset": "/reset"}
+
+
+def cmd_do(args):
+    """시나리오 단계 하나를 상주 실행기로 바로 실행 (없으면 띄운다)."""
+    ws = find_workspace(args.workspace)
+    udid = _serve_udid(ws)
+    text = " ".join(args.step).strip()
+    if not text:
+        fail("실행할 단계가 필요합니다.", "예) qakit do 'tap: home_search_button'  ·  qakit do dump")
+    path, body = SERVE_COMMANDS.get(text), {}
+    if path == "/dump":
+        body = {"settle": args.settle}
+    if path is None:
+        path = "/step"
+        try:
+            step = scenario_tools.parse_yaml(text)
+        except Exception as e:  # noqa: BLE001 — 사용자 입력 오류를 그대로 보여 준다
+            fail(f"단계를 읽지 못했습니다: {e}", "시나리오 단계 문법 그대로: 'tap: X', 'wait: { for: X, timeout: 10 }'")
+        if isinstance(step, list) and len(step) == 1:
+            step = step[0]
+        if not isinstance(step, dict):
+            fail(f"단계는 '이름: 값' 형식이어야 합니다: {text}")
+        try:
+            steps = scenario_tools._expand([step], ws.root, ["qakit do"])   # use: 공통 단계 펼치기
+        except ValueError as e:
+            fail(str(e))
+        body = steps[0] if len(steps) == 1 else {"group": "qakit do", "steps": steps}
+
+    with sim_lock(ws, f"qakit do {text[:40]}"):
+        st = serve_ensure(ws, udid)
+        try:
+            res = serve_request(st, path, body, timeout=args.timeout)
+        except ServeTimeout:
+            serve_stop(udid, quiet=True, force=True)
+            fail(f"{args.timeout}초 안에 끝나지 않아 상주 실행기를 멈췄습니다 (다음 명령 때 다시 띄움).",
+                 "앱이 계속 움직이는 화면(애니메이션)이면 XCUITest가 멈출 수 있습니다. --timeout 으로 늘릴 수 있습니다")
+        except ConnectionError as e:
+            serve_stop(udid, quiet=True)
+            fail(f"상주 실행기에 연결하지 못했습니다: {e}", "다시 실행하면 새로 띄웁니다")
+
+    secs = (res.get("durationMs") or 0) / 1000
+    dump = res.get("dump")
+    if res.get("ok"):
+        if path == "/dump" and dump:
+            text_out = masker(ws.secrets())(dump)
+            (ws.results_dir).mkdir(exist_ok=True)
+            (ws.results_dir / "ui-dump.txt").write_text(text_out, encoding="utf-8")
+            print(text_out, end="" if text_out.endswith("\n") else "\n")
+        elif path == "/ping":
+            ok(f"응답 {secs:.2f}초 · 앱 상태 {res.get('appState')}")
+        else:
+            ok(f"{secs:.1f}초")
+        return
+    msg = masker(ws.secrets())(res.get("message") or "실패")
+    print(f"❌ {msg}  ({secs:.1f}초)")
+    if dump:
+        out = ws.results_dir / "do-fail-dump.txt"
+        ws.results_dir.mkdir(exist_ok=True)
+        out.write_text(masker(ws.secrets())(dump), encoding="utf-8")
+        print(f"   실패 시점 화면 구조: {out}")
+    sys.exit(1)
+
+
 # ─────────────────────────────── 명령: update ───────────────────────────────
 
 def cmd_update(args):
@@ -3060,6 +3321,20 @@ def main():
     p = sub.add_parser("install-skill", help="AI 스킬(Claude Code·Codex)과 qakit 명령 설치")
     p.add_argument("--uninstall", action="store_true", help="설치한 링크 제거")
     p.set_defaults(func=cmd_install_skill)
+
+    p = sub.add_parser("serve", help="상주 실행기: 실행기를 띄워 두고 qakit do로 바로 실행 (시뮬레이터)")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--stop", action="store_true", help="멈추기")
+    g.add_argument("--status", action="store_true", help="상태 보기")
+    p.add_argument("--idle", type=int, default=1800, help="명령이 없으면 스스로 끝내는 시간(초, 기본 1800)")
+    p.add_argument("--no-launch", action="store_true", help="시작할 때 앱을 띄우지 않음")
+    p.set_defaults(func=cmd_serve)
+
+    p = sub.add_parser("do", help="시나리오 단계 하나를 바로 실행 (상주 실행기, 없으면 띄움). 예) qakit do 'tap: X' / dump / launch / reset")
+    p.add_argument("step", nargs="+", help="단계(시나리오 문법) 또는 dump · launch · ping · reset")
+    p.add_argument("--timeout", type=int, default=120, help="이 시간(초) 안에 안 끝나면 실행기를 멈춤 (기본 120)")
+    p.add_argument("--settle", type=float, default=0.5, help="dump 전에 기다릴 시간(초)")
+    p.set_defaults(func=cmd_do)
 
     p = sub.add_parser("update", help="도구를 최신 버전으로 받기 (설치 폴더 git fast-forward)")
     p.add_argument("--check", action="store_true", help="새 버전이 있는지만 확인")

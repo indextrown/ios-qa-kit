@@ -85,6 +85,11 @@ final class ScenarioTests: QATestCase {
         case "/ping":
             json["appState"] = app.map { Int($0.state.rawValue) } ?? 0
         case "/step":
+            if let app, app.state != .runningForeground {
+                ok = false
+                message = "대상 앱이 화면 맨 앞에 없음 (상태 \(app.state.rawValue)). 다른 앱이 시뮬레이터를 쓰는지 확인하거나 qakit do launch"
+                break
+            }
             do {
                 try runner.runStep(json: request.body)
             } catch {
@@ -103,6 +108,8 @@ final class ScenarioTests: QATestCase {
         case "/launch":
             launchApp()
             runner = makeServeRunner()
+        case "/reset":
+            runner = makeServeRunner()   // 변수·스냅샷만 비운다 (앱은 그대로)
         case "/stop":
             stop = true
         default:

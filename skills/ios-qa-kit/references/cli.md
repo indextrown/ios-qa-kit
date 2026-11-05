@@ -13,6 +13,8 @@
 | `qakit gen-ids [--verify]` | ID 상수 생성 (SwiftUI ID 포함). `--verify`: 저장된 덤프와 비교 |
 | `qakit swiftui-ids --list \| --insert \| --restore` | SwiftUI ID 삽입 도구. `--list`: 삽입될 ID 목록. `--insert`: 워크트리 소스에 삽입한 채 둠(diff 확인용). `--restore`: 되돌림. `build-app`은 자동으로 삽입→빌드→복원 |
 | `qakit dump-ui [--attach] [--wait-id ID] [--settle 초] [--print]` | 화면 구조 → `results/ui-dump.txt` |
+| `qakit serve [--stop\|--status] [--idle 초] [--no-launch]` | 상주 실행기 (시뮬레이터). 실행기를 띄워 두고 `qakit do`로 바로 실행. 일반 `run`·`test`·`dump-ui`는 시작 전에 상주 실행기를 멈춘다 |
+| `qakit do '<단계>' [--timeout 초]` / `qakit do dump\|launch\|reset\|ping` | 시나리오 단계 하나를 바로 실행 (없으면 상주 실행기를 띄움). 단계 문법은 시나리오와 같다 (`use:` 포함). 실패하면 `results/do-fail-dump.txt` |
 | `qakit test [필터...] [--reset]` | 테스트 실행. 필터 예: `LoginFlowTests`, `LoginFlowTests/test_x`. `--reset`: 앱 재설치+키체인 초기화 |
 | `qakit check [시나리오...]` | 시나리오 형식·ID 정적 검사 (실행 없이) |
 | `qakit run <시나리오> [--reset] [--var 키=값 ...] [--bench 시간 [--no-profile]] [--no-check]` | 시나리오 파일 실행. `--var`: `vars` 기본값을 이번 실행 값으로 덮어씀 (예: `--var ship="ULTRA FOREST"`). `--bench <시간>`: 시나리오가 끝난 화면 그대로 그 시간 동안 (단위 필수: `30s`·`5m`·`1h`·`1h30m`, `30초`·`5분`·`1시간`도 됨. 단위가 없으면 오류, 최소 5초) CPU·메모리(1초 단위, `ps`) + 함수별 CPU(macOS `sample`, 10ms 간격. 1분 이하는 전체, 더 길면 3분마다 20초씩. 권한 불필요) → 실행 폴더의 `bench-*`. 요약에 직접 CPU를 쓴 함수·앱 코드 기준 상위 10개. `--no-profile`: CPU·메모리만 |
