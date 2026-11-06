@@ -21,7 +21,7 @@
 | `qakit run <시나리오> [--serve\|--no-serve] [--timeout 초]` | 이 작업공간용 상주 실행기가 떠 있으면 자동으로 그쪽으로 돈다 (xcodebuild 준비 생략, 시나리오당 약 8초 빠름). `--serve`: 없으면 띄워서. `--no-serve`: 떠 있어도 xcodebuild로 (상주 실행기는 멈춤). `--timeout`: 상주 실행기로 돌 때 제한 시간(기본 600초). `--reset`이면 실행기를 새로 띄운다. `--bench`·`--device`는 늘 xcodebuild. 결과 폴더·`latest`·실행 기록(`"via": "serve"`)·실패 요약은 같고, xcresult 대신 `failure.png`·`failure-dump.txt`를 남긴다 |
 | `qakit run <시나리오> [--reset] [--var 키=값 ...] [--bench 시간 [--no-profile]] [--no-check]` | 시나리오 파일 실행. `--var`: `vars` 기본값을 이번 실행 값으로 덮어씀 (예: `--var ship="ULTRA FOREST"`). `--bench <시간>`: 시나리오가 끝난 화면 그대로 그 시간 동안 (단위 필수: `30s`·`5m`·`1h`·`1h30m`, `30초`·`5분`·`1시간`도 됨. 단위가 없으면 오류, 최소 5초) CPU·메모리(1초 단위, `ps`) + 함수별 CPU(macOS `sample`, 10ms 간격. 1분 이하는 전체, 더 길면 3분마다 20초씩. 권한 불필요) → 실행 폴더의 `bench-*`. 요약에 직접 CPU를 쓴 함수·앱 코드 기준 상위 10개. `--no-profile`: CPU·메모리만 |
 | `qakit run <시나리오> --device [select\|last\|<이름>]` | 실기기에서 실행 (`build-app`·`dump-ui`도 됨). 값을 빼면 방향키 목록(터미널에서만, AI는 이름으로 지정). 앱·실행기를 앱의 개발자 팀으로 서명, AutoID를 앱 `Frameworks/`에 넣고 다시 서명해 `devicectl`로 설치. 시나리오는 base64로 전달, `pref`는 AutoID의 숨은 요소 `QAKit.prefs`로 읽고, 덤프는 첨부로 받아 결과 폴더로 꺼낸다. `--bench`는 Time Profiler + Activity Monitor로 CPU %·메모리·함수 목록(`bench.trace`, `bench-cpu.csv`). Time Profiler는 실기기에서만 — 시뮬레이터는 `sample`. 권한 미리 허용 불가, `--reset`은 재설치만(키체인 유지), `qakit test`는 시뮬레이터만 |
-| `qakit summarize [xcresult]` | 실패 요약 (기본: 마지막 결과) |
+| `qakit summarize [xcresult \| 실행 폴더]` | 실패 요약 (기본: 마지막 실행). 상주 실행기로 돈 `run`은 그 실행 폴더의 `summary.txt` |
 
 | 전역 옵션 | 설명 |
 |---|---|
@@ -63,6 +63,7 @@ worktree:                        # QA 워크트리(init --worktree)일 때
 |---|---|
 | `output.log` | 테스트 출력 (비밀값 가림) |
 | `result.xcresult` | Xcode 결과 (상주 실행기로 돈 `run`은 없음) |
+| `summary.txt` | 상주 실행기로 돈 `run`의 요약 (`qakit summarize`가 보여 줌) |
 | `failure.png`, `failure-dump.txt` | 상주 실행기로 돈 `run`이 실패했을 때: 실패 시점 스크린샷·화면 구조 (`output.log`에는 메모·지나간 단계) |
 | `result-attachments/` | 실패 시점 화면 구조·스크린샷 (`qakit summarize` 때) |
 | `build.log` | Swift 테스트 Runner 빌드 로그 (`qakit test`) |
@@ -71,7 +72,7 @@ worktree:                        # QA 워크트리(init --worktree)일 때
 
 | 파일 (results/ 바로 아래) | 내용 |
 |---|---|
-| `latest` → 마지막 실행 폴더, `latest.xcresult` → 그 결과 | 바로가기 (`qakit summarize`가 씀) |
+| `latest` → 마지막 실행 폴더, `latest.xcresult` → 그 결과 | 바로가기 (`qakit summarize`가 씀). 마지막 실행이 상주 실행기로 돈 `run`이면 `latest.xcresult`는 없다 |
 | `ui-dump.txt`, `dumps/` | 화면 덤프 (마지막 덤프 / 모아 둔 덤프·시나리오 `dump:`). `qakit do dump`도 `ui-dump.txt`에 쓴다 |
 | `do-fail-dump.txt` | 마지막으로 실패한 `qakit do` 단계의 실패 시점 화면 구조 |
 | `build-app.log` | 앱 빌드 로그 |

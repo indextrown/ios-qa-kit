@@ -335,7 +335,6 @@ qakit serve --stop                   → POST /stop   → 테스트가 끝나고
 - XCTest가 오래 도는 테스트를 끊는 제한이 있는지 (`executionTimeAllowance`, xctestrun 설정).
 - 가끔 멈추던 `xcodebuild`가 실행 시작 단계 문제인지, 앱이 조용해지지 않는 문제인지. 상주 실행기는 전자를 피하고, 후자는 요청 제한 시간으로만 막는다.
 - `qakit test`(Swift Page 테스트)는 컴파일이 필요해 이 길을 타지 않는다. 그대로 둔다.
-- 상주 실행기로 돈 `run`은 `results/latest.xcresult`를 바꾸지 않아 `qakit summarize`가 예전 결과를 보여 준다. 지금은 문서로 안내. `latest.xcresult`를 지우거나 `summarize`가 결과 폴더의 `failure-dump.txt`를 읽게 할지.
 - qakit 쪽 사전 작업(약 6~7초)을 줄일지: 앱 변경 확인(git status·diff)과 ID 정적 검사 결과를 캐시하는 방안.
 
 ## 단계와 결과

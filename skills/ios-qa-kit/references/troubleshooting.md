@@ -37,5 +37,4 @@
 | "단계는 '이름: 값' 형식이어야 합니다" | 한 번에 단계 여러 개, 또는 YAML 형식 오류 | `qakit do`는 단계 하나씩. 따옴표로 감싼다: `qakit do 'wait: { for: X, timeout: 10 }'` |
 | "상주 실행기는 아직 시뮬레이터만 지원합니다" | `--device`로 `serve`·`do` 실행 | 시뮬레이터로 탐색하고, 실기기는 `qakit run --device`로 확인 |
 | `qakit run`이 상주 실행기와 xcodebuild에서 결과가 다름 | 상주 실행기 쪽 문제일 수 있음 | `qakit run <시나리오> --no-serve`로 비교하고, 다르면 도구 버그로 보고 |
-| `qakit summarize`가 방금 실행이 아닌 예전 결과를 보여 줌 | 상주 실행기로 돈 `run`은 xcresult가 없음 | 출력된 요약과 `results/latest/`의 `output.log`·`failure-dump.txt`·`failure.png`를 본다 |
 | 상주 실행기가 남아 있는지 모르겠음 | — | `qakit serve --status`, 멈추려면 `qakit serve --stop` |

@@ -584,7 +584,7 @@ qakit serve --stop                           # 멈추기 (30분 동안 명령이
 - 명령이 제한 시간(`qakit do` 120초, `qakit run` 600초, `--timeout`)을 넘기면 실행기를 멈추고 실패로 알립니다. 다음 명령이 다시 띄웁니다.
 - `qakit test`·`dump-ui`는 시작 전에 상주 실행기를 멈춥니다. `--bench`·`--device`는 늘 기본 방식으로 돕니다. 실기기 상주 실행기는 아직 없습니다.
 - 실행기는 `127.0.0.1`에만 열리고 요청마다 무작위 토큰을 확인합니다. 상태 파일: `~/.qakit/serve/<시뮬레이터 udid>.json`.
-- 상주 실행기로 돈 `run`은 xcresult가 없습니다 → 실패 내용은 결과 폴더의 `output.log`·`failure-dump.txt`·`failure.png`.
+- 상주 실행기로 돈 `run`은 xcresult 대신 결과 폴더에 `summary.txt`·`failure-dump.txt`·`failure.png`를 남깁니다. `qakit summarize`는 어느 쪽이든 마지막 실행의 요약을 보여 줍니다.
 
 <sub>[↑ 목차](#목차)</sub>
 
@@ -1074,7 +1074,7 @@ worktree:
 | `qakit serve [--stop\|--status]` | 상주 실행기 띄우기·멈추기·상태 (시뮬레이터만) ([설명](#빠르게-돌리고-눌러-보기-qakit-serve--qakit-do)) |
 | `qakit do '<단계>'` · `qakit do dump\|launch\|reset` | 시나리오 단계 하나를 바로 실행 (1~2초) · 화면 구조 · 앱 다시 실행 · 변수 비우기 |
 | `qakit check` | 시나리오 형식·ID 정적 검사 |
-| `qakit summarize` | 마지막 실패 요약 다시 보기 (xcodebuild로 돈 실행) |
+| `qakit summarize` | 마지막 실패 요약 다시 보기 |
 | `qakit history [-n 20]` | 실행 기록 |
 
 **저장·문서**

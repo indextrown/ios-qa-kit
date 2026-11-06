@@ -161,7 +161,7 @@ qakit test --reset FreshLoginTests            # 앱 재설치+키체인 초기�
 ```
 
 - **상주 실행기가 떠 있으면 `qakit run`은 자동으로 그쪽으로 돈다** (시나리오당 약 8초 빠름, 결과 폴더·실패 요약 형식은 같다). 시나리오를 여러 번 고쳐 돌릴 때는 `qakit run <이름> --serve`(없으면 띄움)로 돌린다. 상주 실행기 쪽 문제로 의심되면 `--no-serve`로 xcodebuild 경로와 비교한다. `--bench`·`--device`는 늘 xcodebuild로 돈다.
-- 상주 실행기로 돈 실행은 xcresult가 없다. 실패 내용은 출력된 요약과 결과 폴더의 `output.log`·`failure-dump.txt`·`failure.png`로 본다 (`qakit summarize`는 xcodebuild로 돈 마지막 결과를 보여 준다).
+- 상주 실행기로 돈 실행은 xcresult 대신 결과 폴더에 `summary.txt`(요약)·`failure-dump.txt`·`failure.png`·`output.log`를 남긴다. `qakit summarize`는 두 경로 모두 마지막 실행의 요약을 보여 준다.
 - 앱 소스가 바뀌었으면 `qakit test`가 먼저 알아서 재빌드·ID 재생성한다.
 - 실패하면 출력된 요약(원인 / 마지막 단계 / 실패 시점 화면 구조)을 읽고 고친다. 더 필요하면 `qakit summarize`.
 - 컴파일 에러는 테스트 실행 전에 원인만 출력된다 → 그대로 고친다.
