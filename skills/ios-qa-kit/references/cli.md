@@ -13,7 +13,7 @@
 | `qakit gen-ids [--verify]` | ID 상수 생성 (SwiftUI ID 포함). `--verify`: 저장된 덤프와 비교 |
 | `qakit swiftui-ids --list \| --insert \| --restore` | SwiftUI ID 삽입 도구. `--list`: 삽입될 ID 목록. `--insert`: 워크트리 소스에 삽입한 채 둠(diff 확인용). `--restore`: 되돌림. `build-app`은 자동으로 삽입→빌드→복원 |
 | `qakit dump-ui [--attach] [--wait-id ID] [--settle 초] [--print]` | 화면 구조 → `results/ui-dump.txt` |
-| `qakit serve [--stop\|--status] [--idle 초] [--no-launch]` | 상주 실행기 (시뮬레이터). 실행기를 띄워 두고 `qakit do`로 바로 실행. 일반 `run`·`test`·`dump-ui`는 시작 전에 상주 실행기를 멈춘다 |
+| `qakit serve [--stop\|--status] [--idle 초] [--no-launch]` | 상주 실행기 (시뮬레이터). 실행기를 띄워 두고 `qakit do`로 바로 실행. 떠 있으면 `qakit run`이 자동으로 이쪽으로 돈다(시나리오당 약 8초 빠름, `--serve`는 없으면 띄움, `--no-serve`는 xcodebuild로). `test`·`dump-ui`는 시작 전에 상주 실행기를 멈춘다 |
 | `qakit do '<단계>' [--timeout 초]` / `qakit do dump\|launch\|reset\|ping` | 시나리오 단계 하나를 바로 실행 (없으면 상주 실행기를 띄움). 단계 문법은 시나리오와 같다 (`use:` 포함). 실패하면 `results/do-fail-dump.txt` |
 | `qakit test [필터...] [--reset]` | 테스트 실행. 필터 예: `LoginFlowTests`, `LoginFlowTests/test_x`. `--reset`: 앱 재설치+키체인 초기화 |
 | `qakit check [시나리오...]` | 시나리오 형식·ID 정적 검사 (실행 없이) |

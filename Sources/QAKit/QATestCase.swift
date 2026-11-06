@@ -15,6 +15,9 @@ open class QATestCase: XCTestCase {
     /// 테스트 중인 앱. setUp 이후 launchApp()/attachApp()으로 채운다.
     public var app: XCUIApplication!
 
+    /// note()를 받아 갈 곳 (상주 실행기: 응답에 메모를 담는다)
+    public var noteSink: ((String) -> Void)?
+
     private var attachedFailureContext = false
 
     override open func setUp() async throws {
@@ -43,6 +46,7 @@ open class QATestCase: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         print("[qakit-note] \(text)")
+        noteSink?(text)
     }
 
     override open func record(_ issue: XCTIssue) {

@@ -47,6 +47,8 @@ public final class QAScenarioRunner {
     private let testCase: QATestCase
     /// false면 실패를 XCTFail로 기록하지 않고 오류로만 던진다 (상주 실행기: 실패해도 테스트가 끝나면 안 됨)
     public var recordsFailures = true
+    /// 지나간 단계 이름 (상주 실행기의 실패 요약 "마지막 단계". 일반 실행은 xcresult의 활동 기록을 쓴다)
+    public private(set) var trail: [String] = []
     private var vars: [String: String] = [:]
     private var snapshots: [String: Data] = [:]
     private var app: XCUIApplication { testCase.app }
@@ -128,6 +130,8 @@ public final class QAScenarioRunner {
             try handleInterrupts(before: step)
             currentStep = step
         }
+        trail.append(describe(step))
+        if trail.count > 50 { trail.removeFirst(trail.count - 50) }
         try XCTContext.runActivity(named: describe(step)) { _ in try execute(step) }
     }
 
