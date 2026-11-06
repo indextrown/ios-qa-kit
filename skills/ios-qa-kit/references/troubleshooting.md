@@ -23,3 +23,19 @@
 | "워크트리의 Swift 소스에 커밋되지 않은 변경" | 워크트리에서 소스를 직접 고침 | 워크트리는 개발 브랜치와 같아야 한다. `git -C <워크트리> checkout -- .` 또는 커밋 |
 | 같은 SwiftUI ID가 여러 요소에 | 동적 라벨 버튼(`X.Button.0`)이 반복 컴포넌트 안에, 또는 행(`X.row`) | 라벨·index로 고른다 (`{ id, label }`, `.element(boundBy:)`) |
 | 빌드 에러가 `.accessibilityIdentifier(` 줄을 가리킴 | 삽입 도구가 수식어를 붙일 수 없는 자리에 붙임 | `qakit swiftui-ids --insert` 뒤 `git diff`로 위치 확인 → 도구 버그로 보고. 임시로 `swiftui: off` |
+
+## 상주 실행기 (`qakit serve` · `qakit do`)
+
+| 증상 | 원인 | 해결 |
+|---|---|---|
+| 첫 `qakit do`가 20~40초 걸림 | 상주 실행기를 띄우는 중 (실행기 코드가 바뀌었으면 빌드까지) | 정상. 다음 명령부터 1~2초 |
+| `qakit do`가 갑자기 다시 20초 걸림 | `qakit test`·`dump-ui`·`run --no-serve`가 상주 실행기를 멈췄거나, 30분 동안 명령이 없어 스스로 끝남, 또는 `qakit update`로 실행기 코드가 바뀜 | 정상. 알아서 다시 띄운다 |
+| "N초 안에 끝나지 않아 상주 실행기를 멈췄습니다" | 앱이 계속 움직이는 화면(애니메이션·로딩)이라 XCUITest가 조용해지길 기다리며 멈춤 | 다음 명령이 다시 띄운다. 정말 오래 걸리는 단계면 `--timeout`을 늘린다. 반복되면 그 화면을 사용자에게 보고 |
+| "대상 앱이 화면 맨 앞에 없음" | 다른 앱이나 시스템 화면이 앞에 있음, 또는 앱이 꺼짐 (`build-app`으로 재설치 등) | `qakit do launch` |
+| `qakit do`의 결과가 예상과 다름 (이미 로그인됨, 이전 화면에 있음) | 앱 상태·변수가 이전 `qakit do`에서 이어진다 | 처음부터 보려면 `qakit do launch`, 변수만 비우려면 `qakit do reset`. 로그아웃 상태가 필요하면 `qakit run <시나리오> --reset` 또는 `qakit test --reset` 뒤에 `qakit do` |
+| `qakit do`에서 통과한 단계가 `qakit run`에서 실패 | 시나리오는 앱을 새로 실행해 처음부터 돈다. `qakit do`는 그 전 상태에 기대고 있었음 | 시나리오 시작(`reset`, `use: login` 등)과 화면 대기(`wait`)를 넣는다 |
+| "단계는 '이름: 값' 형식이어야 합니다" | 한 번에 단계 여러 개, 또는 YAML 형식 오류 | `qakit do`는 단계 하나씩. 따옴표로 감싼다: `qakit do 'wait: { for: X, timeout: 10 }'` |
+| "상주 실행기는 아직 시뮬레이터만 지원합니다" | `--device`로 `serve`·`do` 실행 | 시뮬레이터로 탐색하고, 실기기는 `qakit run --device`로 확인 |
+| `qakit run`이 상주 실행기와 xcodebuild에서 결과가 다름 | 상주 실행기 쪽 문제일 수 있음 | `qakit run <시나리오> --no-serve`로 비교하고, 다르면 도구 버그로 보고 |
+| `qakit summarize`가 방금 실행이 아닌 예전 결과를 보여 줌 | 상주 실행기로 돈 `run`은 xcresult가 없음 | 출력된 요약과 `results/latest/`의 `output.log`·`failure-dump.txt`·`failure.png`를 본다 |
+| 상주 실행기가 남아 있는지 모르겠음 | — | `qakit serve --status`, 멈추려면 `qakit serve --stop` |

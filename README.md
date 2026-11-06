@@ -206,6 +206,8 @@ cp secrets.example.txt secrets.txt
 | 전체 테스트 실행 (토큰 0) | `qakit test` |
 | 테스트 하나만 | `qakit test LoginTests` |
 | 시나리오 파일 실행 | `qakit run <시나리오>` |
+| 시나리오를 빠르게 반복 실행 | `qakit run <시나리오> --serve` ([상주 실행기](#빠르게-돌리고-눌러-보기-qakit-serve--qakit-do)) |
+| 화면을 한 단계씩 눌러 보기 | `qakit do 'tap: <ID>'` · `qakit do dump` |
 | 값을 바꿔 실행 (매개변수) | `qakit run <시나리오> --var ship="선박명"` |
 | 마지막 실패 다시 보기 | `qakit summarize` |
 | 성능 측정 (시나리오 후 30분) | `qakit run <시나리오> --bench 30m` |
@@ -237,6 +239,7 @@ cp secrets.example.txt secrets.txt
    - [5단계 첫 테스트](#5단계-첫-테스트-만들기) · [6단계 실패 고치기](#6단계-실패-읽고-고치기) · [7단계 앱 변경 체험](#7단계-앱-변경-체험-선택) · [8단계 정리](#8단계-정리)
    - [처음 쓸 때 알아 둘 것](#처음-쓸-때-알아-둘-것)
 4. [시나리오 파일로 QA (Swift 없이)](#시나리오-파일로-qa-swift-없이)
+   - [빠르게 돌리고 눌러 보기 (`qakit serve` · `qakit do`)](#빠르게-돌리고-눌러-보기-qakit-serve--qakit-do)
    - [실기기에서 실행 (`--device`)](#실기기에서-실행---device)
 5. [저장과 복구 (AI 없이)](#저장과-복구-ai-없이)
 
@@ -543,6 +546,45 @@ qakit run search-favorite --var item=라떼   # vars 값을 바꿔서 실행 (�
 
 - 전체 문법: [scenario-language.md](skills/ios-qa-kit/references/scenario-language.md)
 - 언어로 표현이 안 되는 계산·판정만 Swift(`QA/Runner/UITests/Flows`)로 씁니다. **두 방식은 같은 작업공간에서 함께** 씁니다.
+
+<sub>[↑ 목차](#목차)</sub>
+
+---
+
+### 빠르게 돌리고 눌러 보기 (`qakit serve` · `qakit do`)
+
+`qakit run`은 시나리오마다 `xcodebuild`로 실행기(XCUITest)를 새로 띄웁니다. 컴파일은 없지만 실행기 설치·연결을 매번 다시 합니다.
+**상주 실행기**는 실행기를 시뮬레이터에 한 번 띄워 두고 명령만 주고받습니다 (Maestro·Appium과 같은 구조).
+
+| 방식 | 실행기 | 한 번 실행 비용 |
+|---|---|---|
+| `qakit run` (기본) | 매번 새로 | 준비 + 앱 실행 + 단계 |
+| `qakit run` (상주 실행기가 떠 있을 때) | 계속 떠 있음 | 앱 실행 + 단계 (시범 앱 기준 시나리오당 약 8초, 23% 빠름) |
+| `qakit do '<단계>'` | 계속 떠 있음 | 단계 하나 (1~2초) |
+
+```bash
+qakit serve                                  # 띄우기 (안 해도 qakit do / run --serve가 알아서 띄움)
+qakit do launch                              # 앱 새로 실행
+qakit do 'use: login'                        # 공통 단계 그대로
+qakit do 'tap: HomeView.menuButton'          # 시나리오 단계 하나 (문법이 .qa.yml과 같다)
+qakit do dump                                # 지금 화면 구조 → results/ui-dump.txt
+qakit run home-search                        # 떠 있으면 자동으로 상주 실행기로 실행
+qakit run home-search --no-serve             # 지금처럼 xcodebuild로
+qakit serve --stop                           # 멈추기 (30분 동안 명령이 없으면 스스로 끝남)
+```
+
+**어디에 쓰나**
+
+- **화면 탐색** — AI는 시나리오를 쓰기 전에 `qakit do`로 한 단계씩 눌러 보고 `qakit do dump`로 화면을 읽습니다. 탐색용 시나리오를 만들어 20~40초씩 돌리는 일을 반복하지 않습니다. 통과한 단계는 그대로 `.qa.yml`에 옮깁니다.
+- **고치며 반복 실행** — 시나리오를 여러 번 고쳐 돌릴 때 `qakit run --serve`. 결과 폴더·실패 요약(원인·마지막 단계·실패 시점 화면 구조·스크린샷)·실행 기록은 기본 방식과 같습니다.
+
+**알아 둘 것**
+
+- `qakit do`는 앱 상태와 변수를 다음 명령으로 이어 갑니다. 처음부터는 `qakit do launch`. `qakit run`은 지금처럼 앱을 새로 실행해 처음부터 돕니다.
+- 명령이 제한 시간(`qakit do` 120초, `qakit run` 600초, `--timeout`)을 넘기면 실행기를 멈추고 실패로 알립니다. 다음 명령이 다시 띄웁니다.
+- `qakit test`·`dump-ui`는 시작 전에 상주 실행기를 멈춥니다. `--bench`·`--device`는 늘 기본 방식으로 돕니다. 실기기 상주 실행기는 아직 없습니다.
+- 실행기는 `127.0.0.1`에만 열리고 요청마다 무작위 토큰을 확인합니다. 상태 파일: `~/.qakit/serve/<시뮬레이터 udid>.json`.
+- 상주 실행기로 돈 `run`은 xcresult가 없습니다 → 실패 내용은 결과 폴더의 `output.log`·`failure-dump.txt`·`failure.png`.
 
 <sub>[↑ 목차](#목차)</sub>
 
@@ -925,7 +967,7 @@ Button #LoginView.loginButton "로그인" @16,682 370x56
 |---|---|---|
 | 1 | `QAIDs.swift`에서 화면 enum만 grep → 순위 1 상수 확보 | 매우 적음 |
 | 2 | 앱 소스에서 버튼 → 액션 → 화면 전환 확인 (push / 시트 / 탭, 토글 여부, 위험한 버튼 위치) | 적음 |
-| 3 | `qakit dump-ui` 텍스트 덤프 → 실제 ID·글자·좌표·커버리지 (순위 2~6이 필요한 화면) | 적음 (스크린샷보다 훨씬 작음) |
+| 3 | `qakit do`로 한 단계씩 눌러 가며 `qakit do dump` 텍스트 덤프 → 실제 ID·글자·좌표·커버리지·화면 전환 (순위 2~6이 필요한 화면) | 적음 (단계당 1~2초, 스크린샷보다 훨씬 작음) |
 | 4 | 실패 요약 속 스크린샷 | 큼 (덤프로 판단이 안 될 때만) |
 
 ### 찾은 뒤 상태 판정하기
@@ -1028,8 +1070,11 @@ worktree:
 | `qakit run <시나리오> [--reset] [--var 키=값]` | 시나리오 파일 실행 (`--var`: `vars` 기본값 대신 이번 실행에 쓸 값. 여러 번 가능) |
 | `qakit run <시나리오> --bench <시간> [--no-profile]` | 시나리오가 끝난 화면 그대로 그 시간 동안 CPU·메모리(1초 단위) + 함수별 CPU(`sample`) 기록. Time Profiler는 실기기(`--device`)에서만. 시간은 단위 필수: `30s`·`5m`·`1h`·`1h30m` (`30초`·`5분`·`1시간`도 됨, 최소 5초). 1분 이하는 전체를, 더 길면 3분마다 20초씩 함수를 찍는다. 권한 불필요. `--no-profile`: CPU·메모리만 |
 | `qakit run <시나리오> --device [select\|last\|이름]` | 실기기에서 실행. 값을 빼면 방향키 목록에서 고름. `--bench`와 같이 쓰면 Time Profiler로 측정 ([실기기에서 실행](#실기기에서-실행---device)) |
+| `qakit run <시나리오> --serve \| --no-serve` | 상주 실행기로 / xcodebuild로 실행 (기본: 상주 실행기가 떠 있으면 그쪽으로) |
+| `qakit serve [--stop\|--status]` | 상주 실행기 띄우기·멈추기·상태 (시뮬레이터만) ([설명](#빠르게-돌리고-눌러-보기-qakit-serve--qakit-do)) |
+| `qakit do '<단계>'` · `qakit do dump\|launch\|reset` | 시나리오 단계 하나를 바로 실행 (1~2초) · 화면 구조 · 앱 다시 실행 · 변수 비우기 |
 | `qakit check` | 시나리오 형식·ID 정적 검사 |
-| `qakit summarize` | 마지막 실패 요약 다시 보기 |
+| `qakit summarize` | 마지막 실패 요약 다시 보기 (xcodebuild로 돈 실행) |
 | `qakit history [-n 20]` | 실행 기록 |
 
 **저장·문서**
@@ -1080,7 +1125,7 @@ worktree:
 | 외부 SDK가 내부에서 만든 뷰 (예: 지도 SDK의 버튼) | 화면 글자 또는 좌표 |
 | 지도·차트·캔버스처럼 그려지는 영역 | 좌표로 조작, 결과는 그 위의 UI로 확인 |
 | SwiftUI 화면 | `qakit init --worktree`로 만든 QA 워크트리에서만 ID가 붙음 (개발 폴더 소스는 안 건드림). 시스템 기본 뒤로가기·동적 라벨 버튼은 라벨·순서 번호로 |
-| 실기기 | `--device`로 시나리오·`--bench`는 된다 ([실기기에서 실행](#실기기에서-실행---device)). Swift 테스트(`qakit test`)와 권한 미리 허용은 아직 시뮬레이터만 |
+| 실기기 | `--device`로 시나리오·`--bench`는 된다 ([실기기에서 실행](#실기기에서-실행---device)). Swift 테스트(`qakit test`), 권한 미리 허용, 상주 실행기(`qakit serve`·`qakit do`)는 아직 시뮬레이터만 |
 
 문제가 생기면: [troubleshooting.md](skills/ios-qa-kit/references/troubleshooting.md)
 

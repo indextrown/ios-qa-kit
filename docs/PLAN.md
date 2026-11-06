@@ -175,7 +175,7 @@ S1~S3은 SwiftUI 시범 앱의 QA 워크트리에서 마쳤다. 다음은 S4: �
 
 ## 상주 실행기 설계 (다음 단계)
 
-> 상태: R1(PoC)·R2(CLI)·R3(run 통합) 완료 (2026-11-06). 다음 R4 문서. 시뮬레이터 먼저, 실기기는 나중.
+> 상태: R1(PoC)·R2(CLI)·R3(run 통합) 완료 (2026-11-06). R4 문서 작성 (2026-11-07), 새 AI 세션 확인 남음. 시뮬레이터 먼저, 실기기는 나중.
 
 ### 왜 필요한가
 
@@ -326,7 +326,7 @@ qakit serve --stop                   → POST /stop   → 테스트가 끝나고
 | R1. PoC | `test_serve` + `/ping`·`/step`·`/dump`·`/launch`·`/stop`. 임시 스크립트로 띄우고 `curl`로 명령 | ✅ `127.0.0.1` 연결, 탭 0.2~1초, 실패 뒤 서버 유지 |
 | R2. CLI | `qakit serve`/`--stop`/상태, `qakit do`, 상태 파일, 토큰, ping 재시작, 요청 제한 시간 | ✅ 서버를 죽여도 다음 `qakit do`가 다시 띄움, 제한 시간 초과 6초 안 정리 |
 | R3. run 통합 | `qakit run`이 서버로 감, 결과 폴더·요약·실패 화면 구조, `--no-serve` | ✅ 홈 11개 같은 결과, 시나리오당 약 8초(23%) 단축 |
-| R4. 문서 | README, cli.md, SKILL.md(탐색은 `qakit do`), troubleshooting | 새 AI 세션이 `qakit do`로 탐색해 시나리오를 만든다 |
+| R4. 문서 | README, cli.md, SKILL.md(탐색은 `qakit do`), troubleshooting | 문서 ✅. 남은 확인: 새 AI 세션이 `qakit do`로 탐색해 시나리오를 만든다 |
 | R5. 실기기 | 포트 전달 방식 조사·적용 | 실기기에서 `qakit do` 동작 |
 
 ### 미결
@@ -335,6 +335,7 @@ qakit serve --stop                   → POST /stop   → 테스트가 끝나고
 - XCTest가 오래 도는 테스트를 끊는 제한이 있는지 (`executionTimeAllowance`, xctestrun 설정).
 - 가끔 멈추던 `xcodebuild`가 실행 시작 단계 문제인지, 앱이 조용해지지 않는 문제인지. 상주 실행기는 전자를 피하고, 후자는 요청 제한 시간으로만 막는다.
 - `qakit test`(Swift Page 테스트)는 컴파일이 필요해 이 길을 타지 않는다. 그대로 둔다.
+- 상주 실행기로 돈 `run`은 `results/latest.xcresult`를 바꾸지 않아 `qakit summarize`가 예전 결과를 보여 준다. 지금은 문서로 안내. `latest.xcresult`를 지우거나 `summarize`가 결과 폴더의 `failure-dump.txt`를 읽게 할지.
 - qakit 쪽 사전 작업(약 6~7초)을 줄일지: 앱 변경 확인(git status·diff)과 ID 정적 검사 결과를 캐시하는 방안.
 
 ## 단계와 결과
@@ -350,7 +351,7 @@ qakit serve --stop                   → POST /stop   → 테스트가 끝나고
 | 6. 정기 실행 | — | 하지 않음 |
 | 이후 | QA 워크트리, 시나리오 언어, AI 없는 저장·복구, 시뮬레이터 잠금, 앱 설정값 판정(pref/repeat/watch), QA README 자동 생성 | ✅ v0.2.0 ~ v0.4.0 |
 | 7. SwiftUI | QA 빌드 직전 소스에 ID 삽입 ([설계](#swiftui-지원-설계-다음-단계)) | S1 ✅ S2 ✅ S3 ✅ (시범 앱 로그인 화면 100%, `build-app`이 삽입·복원 자동). 다음 S4 둘째 앱 |
-| 8. 상주 실행기 | 실행기를 한 번 띄워 두고 명령만 주고받기 ([설계](#상주-실행기-설계-다음-단계)) | R1 ✅ R2 ✅ R3 ✅ (`qakit do` 1~2초, `qakit run` 약 8초 단축). 다음 R4 문서 |
+| 8. 상주 실행기 | 실행기를 한 번 띄워 두고 명령만 주고받기 ([설계](#상주-실행기-설계-다음-단계)) | R1 ✅ R2 ✅ R3 ✅ (`qakit do` 1~2초, `qakit run` 약 8초 단축). R4 문서 ✅, 새 AI 세션 확인 남음 |
 
 ## 주요 결정과 배운 것
 
