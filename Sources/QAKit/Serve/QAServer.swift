@@ -48,10 +48,11 @@ public final class QAServer {
 
     /// 리스너를 열고 포트가 정해질 때까지 기다린다. port 0이면 빈 포트 (시뮬레이터: 상태 파일로 알림).
     /// 실기기는 Mac이 상태 파일을 못 읽으므로 Mac이 정한 포트로 연다 (Mac은 usbmuxd로 그 포트에 붙는다).
-    public func start(port requested: UInt16 = 0, timeout: TimeInterval = 10) throws {
+    /// host: 기본 127.0.0.1. Wi-Fi 실기기는 CoreDevice 터널의 기기 쪽 주소에만 연다 (같은 Wi-Fi의 다른 기기에서는 안 보임).
+    public func start(host: String = "127.0.0.1", port requested: UInt16 = 0, timeout: TimeInterval = 10) throws {
         let params = NWParameters.tcp
         let endpointPort = requested == 0 ? NWEndpoint.Port.any : (NWEndpoint.Port(rawValue: requested) ?? .any)
-        params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: endpointPort)
+        params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(host), port: endpointPort)
         params.allowLocalEndpointReuse = true
         let listener = try NWListener(using: params)
         let ready = DispatchSemaphore(value: 0)
@@ -73,6 +74,25 @@ public final class QAServer {
         }
         if let startError { throw startError }
         port = listener.port?.rawValue ?? 0
+    }
+
+    /// 이 기기의 IP 주소 목록 (터널 주소에 열지 못했을 때 원인 확인용)
+    public static func localAddresses() -> [String] {
+        var result: [String] = []
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0 else { return result }
+        defer { freeifaddrs(head) }
+        var cursor = head
+        while let ifa = cursor?.pointee {
+            if let addr = ifa.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET6) || addr.pointee.sa_family == UInt8(AF_INET) {
+                var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                if getnameinfo(addr, socklen_t(addr.pointee.sa_len), &buf, socklen_t(buf.count), nil, 0, NI_NUMERICHOST) == 0 {
+                    result.append("\(String(cString: ifa.ifa_name))=\(String(cString: buf))")
+                }
+            }
+            cursor = ifa.ifa_next
+        }
+        return result
     }
 
     public func stop() {

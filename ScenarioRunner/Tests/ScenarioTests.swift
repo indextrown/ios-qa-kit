@@ -33,7 +33,13 @@ final class ScenarioTests: QATestCase {
     func test_serve() throws {
         continueAfterFailure = true
         let server = QAServer(token: QAConfig.value("SERVE_TOKEN") ?? UUID().uuidString)
-        try server.start(port: UInt16(QAConfig.value("SERVE_PORT") ?? "") ?? 0)
+        let host = QAConfig.value("SERVE_HOST") ?? "127.0.0.1"
+        do {
+            try server.start(host: host, port: UInt16(QAConfig.value("SERVE_PORT") ?? "") ?? 0)
+        } catch {
+            print("[qakit-serve] \(host)에 열지 못함: \(error). 이 기기 주소: \(QAServer.localAddresses().joined(separator: ", "))")
+            throw error
+        }
         if let path = QAConfig.value("SERVE_STATE") {
             let state: [String: Any] = ["port": Int(server.port), "token": server.token,
                                         "pid": Int(ProcessInfo.processInfo.processIdentifier),

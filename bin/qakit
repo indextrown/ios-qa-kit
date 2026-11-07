@@ -2100,9 +2100,27 @@ def usbmux_connect(udid, port, timeout):
     return sock
 
 
+def device_tunnel_address(udid):
+    """CoreDevice 터널의 기기 쪽 IPv6 주소 (Wi-Fi 실기기). 터널이 없으면 None. devicectl 명령을 한 번 보내면 터널이 열린다."""
+    out = Path(tempfile.mkstemp(suffix=".json")[1])
+    try:
+        run(["xcrun", "devicectl", "list", "devices", "--json-output", str(out)], check=False)
+        for d in json.loads(out.read_text()).get("result", {}).get("devices", []):
+            if d.get("hardwareProperties", {}).get("udid") == udid or d.get("identifier") == udid:
+                c = d.get("connectionProperties", {})
+                if c.get("tunnelState") == "connected" and c.get("tunnelIPAddress"):
+                    return c["tunnelIPAddress"]
+    except (OSError, ValueError):
+        pass
+    finally:
+        out.unlink(missing_ok=True)
+    return None
+
+
 def serve_request(st, path, body=None, timeout=120):
     """상주 실행기에 요청. 응답 JSON. 제한 시간을 넘기면 ServeTimeout, 연결 실패는 ConnectionError.
-    시뮬레이터는 Mac의 127.0.0.1, 실기기(st["usbmux"])는 usbmuxd로 기기 안 127.0.0.1에 붙는다."""
+    시뮬레이터는 Mac의 127.0.0.1, USB 실기기(st["usbmux"])는 usbmuxd로 기기 안 127.0.0.1,
+    Wi-Fi 실기기(st["host"])는 CoreDevice 터널의 기기 주소로 붙는다."""
     import http.client
     import socket
 
@@ -2111,7 +2129,8 @@ def serve_request(st, path, body=None, timeout=120):
             self.sock = usbmux_connect(st["usbmux"], st["port"], timeout)
 
     data = json.dumps(body if body is not None else {}, ensure_ascii=False).encode()
-    conn = (MuxConnection if st.get("usbmux") else http.client.HTTPConnection)("127.0.0.1", st["port"], timeout=timeout)
+    conn = (MuxConnection if st.get("usbmux") else http.client.HTTPConnection)(
+        st.get("host") or "127.0.0.1", st["port"], timeout=timeout)
     try:
         conn.request("POST", path, body=data,
                      headers={"X-Qakit-Token": st["token"], "Content-Type": "application/json"})
@@ -2173,16 +2192,25 @@ def serve_start(ws, udid, idle=1800, launch=True):
     extra = {"SERVE_TOKEN": token, "SERVE_IDLE": int(idle), "SERVE_LAUNCH": "1" if launch else "0"}
     ready_file = SERVE_DIR / f"{udid}.runner.json"
     ready_file.unlink(missing_ok=True)
+    transport = {}
     if ws.device:
-        # 기기 안 실행기는 Mac 파일에 못 쓴다 → 포트를 Mac이 정하고, 준비는 usbmuxd로 /ping 해서 안다
-        if usbmux_device_id(udid) is None:
-            fail(f"{ws.device['name']}이(가) USB로 연결되어 있지 않습니다.",
-                 "상주 실행기는 USB 포트 전달(usbmuxd)로 붙습니다. 케이블로 연결하고 잠금을 풀어 주세요")
+        # 기기 안 실행기는 Mac 파일에 못 쓴다 → 포트를 Mac이 정하고, 준비는 /ping 해서 안다.
+        # USB면 usbmuxd로 기기 안 127.0.0.1에, Wi-Fi면 CoreDevice 터널의 기기 주소에만 열고 그 주소로 붙는다.
         if not device_app_installed(ws):
             fail(f"{ws.device['name']}에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app --device ...")
         xctestrun = ensure_device_runner(device_team(ws))
         device_port = 20000 + int.from_bytes(os.urandom(2), "big") % 20000
         extra["SERVE_PORT"] = device_port
+        if usbmux_device_id(udid) is not None:
+            transport = {"usbmux": udid}
+        else:
+            tunnel = device_tunnel_address(udid)
+            if not tunnel:
+                fail(f"{ws.device['name']}에 연결할 길이 없습니다 (USB 아님, CoreDevice 터널 없음).",
+                     "USB로 연결하거나, 같은 Wi-Fi에서 잠금을 풀고 다시 실행하세요")
+            extra["SERVE_HOST"] = tunnel
+            transport = {"host": tunnel}
+            info(f"Wi-Fi 연결: CoreDevice 터널 {tunnel}")
     else:
         if not app_installed(udid, ws.bundle_id):
             fail(f"시뮬레이터에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app")
@@ -2203,7 +2231,7 @@ def serve_start(ws, udid, idle=1800, launch=True):
                                 start_new_session=True)
     wait = 240 if ws.device else 180   # 실기기는 실행기 설치·실행이 더 걸린다
     deadline = time.time() + wait
-    probe = {"port": extra.get("SERVE_PORT"), "token": token, "usbmux": udid} if ws.device else None
+    probe = dict(transport, port=extra.get("SERVE_PORT"), token=token) if ws.device else None
     while time.time() < deadline:
         if probe:
             try:
@@ -2215,8 +2243,13 @@ def serve_start(ws, udid, idle=1800, launch=True):
         elif ready_file.exists() and ready_file.stat().st_size:
             break
         if proc.poll() is not None:
-            tail = "\n   ".join(log.read_text(errors="replace").splitlines()[-15:])
-            fail("상주 실행기가 시작되지 않았습니다.", tail or f"로그: {log}")
+            lines = log.read_text(errors="replace").splitlines()
+            kept = SERVE_DIR / f"{udid}.failed.log"   # 다음 시작이 로그를 덮어써도 원인을 볼 수 있게
+            shutil.copyfile(log, kept)
+            # 실행기 메시지·오류 줄을 먼저, 그다음 끝부분
+            key = [l for l in lines if "[qakit-serve]" in l or "error" in l.lower() or "failed" in l.lower()][-10:]
+            tail = "\n   ".join(dict.fromkeys(key + lines[-10:]))
+            fail("상주 실행기가 시작되지 않았습니다. 다시 실행하면 새로 띄웁니다.", (tail or "") + f"\n   전체 로그: {kept}")
         time.sleep(0.5)
     else:
         os.killpg(proc.pid, 15)
@@ -2225,8 +2258,7 @@ def serve_start(ws, udid, idle=1800, launch=True):
     st = {"udid": udid, "pid": proc.pid, "port": runner["port"], "token": runner["token"],
           "workspace": str(ws.root), "bundleId": ws.bundle_id, "runnerHash": scenario_runner_source_hash(),
           "started": datetime.datetime.now().isoformat(timespec="seconds"), "log": str(log)}
-    if ws.device:
-        st["usbmux"] = udid
+    st.update(transport)
     serve_state_file(udid).write_text(json.dumps(st, ensure_ascii=False, indent=2))
     ok(f"상주 실행기 준비됨 (포트 {st['port']}, {time.time() - started_at:.0f}초)")
     return st
@@ -3324,7 +3356,7 @@ def cmd_serve(args):
     if args.status:
         if st and serve_alive(st):
             stale = st.get("runnerHash") != scenario_runner_source_hash()
-            where = f"실기기 {ws.device['name']} (USB)" if ws.device else ws.simulator
+            where = f"실기기 {ws.device['name']} ({'USB' if st.get('usbmux') else 'Wi-Fi'})" if ws.device else ws.simulator
             ok(f"상주 실행기 실행 중: {where} · 포트 {st['port']} · {st['started']} 시작 · {st['workspace']}"
                + (" (실행기 코드가 바뀜 → 다음 명령 때 다시 띄움)" if stale else ""))
         else:
