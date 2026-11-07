@@ -316,7 +316,8 @@ def collect_ids(node, out=None, key=None):
 def check_ids(scenario, known_ids, extra_ok=()):
     """(알 수 없는 ID 목록). 위치 규칙 ID, 외부 SDK 접두어(extra_ok)는 통과."""
     unknown = []
-    for i in sorted(collect_ids(scenario.get("steps", []) + (scenario.get("interrupts") or []))):
+    start = [{"expect": scenario["start"]}] if scenario.get("start") else []   # launch: reuse의 시작 화면 조건
+    for i in sorted(collect_ids(scenario.get("steps", []) + (scenario.get("interrupts") or []) + start)):
         if i in known_ids or RULE_ID.search(i) or any(i.startswith(p) for p in extra_ok):
             continue
         unknown.append(i)

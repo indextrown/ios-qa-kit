@@ -3255,6 +3255,10 @@ def _cmd_run(ws, args):
     if overrides:
         scenario["vars"] = dict(scenario.get("vars") or {}, **overrides)
         info("변수: " + ", ".join(f"{k}={v}" for k, v in overrides.items()))
+    if args.reuse_app:
+        scenario["launch"] = "reuse"
+    if scenario.get("launch") == "reuse" and not scenario.get("start"):
+        warn("앱 재사용(launch: reuse)은 시나리오에 start: (시작 화면 조건)가 있어야 합니다 → 이번에는 앱을 다시 켭니다")
     out = ws.root / ".qakit" / "scenarios" / (path.name.replace(".qa.yml", "") + ".json")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(scenario_tools.to_json(scenario), encoding="utf-8")
@@ -3810,6 +3814,8 @@ def main():
     g.add_argument("--serve", action="store_true", help="상주 실행기로 실행 (없으면 띄움). 떠 있으면 지정하지 않아도 씀")
     g.add_argument("--no-serve", action="store_true", help="상주 실행기가 떠 있어도 xcodebuild로 실행 (상주 실행기는 멈춤)")
     p.add_argument("--timeout", type=int, default=600, help="상주 실행기로 돌 때 이 시간(초) 안에 안 끝나면 멈춤 (기본 600)")
+    p.add_argument("--reuse-app", action="store_true",
+                   help="앱이 이미 시작 화면(시나리오의 start: 조건)이면 다시 켜지 않음 (= launch: reuse). --reset이면 무시")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("check", help="시나리오 형식·ID 정적 검사 (실행 없이)")

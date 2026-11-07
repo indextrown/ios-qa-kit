@@ -6,6 +6,8 @@ Swift 테스트를 쓰지 않고 파일만으로 QA를 실행한다. `qakit run 
 ```yaml
 name: 시나리오 이름
 reset: true                       # 실행 전 앱 재설치 + 키체인 초기화 (= qakit run --reset)
+# launch: reuse                   # 앱이 이미 시작 화면이면 다시 켜지 않음 (아래 "앱 재실행 생략")
+# start: { visible: HomeView.title }   # 시작 화면 조건 (launch: reuse·--reuse-app일 때만 씀)
 vars: { item: 커피 }               # {item}으로 사용. 비밀값은 {secret:KEY} (secrets.txt)
 steps:
   - use: login                    # steps/login.qa.yml을 펼침 (with: { 변수: 값 }로 넘김 가능)
@@ -155,6 +157,26 @@ steps:
     - expect: { visible: ItemListView.Button.둘러보기 }
       message: 빈 화면 안내 버튼이 보여야 함
 ```
+
+## 앱 재실행 생략 (`launch: reuse` + `start:`)
+
+시나리오는 보통 시작할 때 앱을 다시 켠다(앱마다 몇 초). 앞 시나리오가 끝난 화면에서 그대로 시작해도 되는 시나리오는 다시 켜지 않을 수 있다.
+
+```yaml
+name: 홈 정렬 바꾸기
+launch: reuse                          # 또는 실행할 때 qakit run <이름> --reuse-app
+start: { all: [ { visible: HomeView.sortButton }, { visible: { type: text, label: 추천 } } ] }   # 시작 화면 조건 (expect와 같은 문법)
+steps:
+  - use: home
+  - ...
+```
+
+- 앱이 떠 있고 `start:` 조건이 2초 안에 맞으면 다시 켜지 않는다. 앱이 꺼져 있거나, 조건이 안 맞거나, `start:`가 없으면 지금처럼 다시 켠다. 어느 쪽이었는지 note와 `output.log`의 `timing:`에 남는다.
+- `reset: true`·`--reset`이면 늘 다시 켠다.
+- 효과: 앱을 켜는 시간(몇 초)뿐 아니라 첫 화면이 데이터를 다시 불러오는 시간까지 빠진다. 시범 앱 홈 시나리오 11개 254초 → 98초 (시나리오당 3~10초).
+- **`start:`는 시작 위치까지 판정한다.** 화면 위쪽에 고정된 요소(헤더·정렬 버튼 등)만 보면, 앞 시나리오가 목록을 스크롤해 둔 상태도 "시작 화면"으로 판정해 맨 위 요소를 못 찾고 실패한다. 화면 맨 위에만 있는 요소(첫 섹션 제목 등)를 함께 넣는다 (`all: [...]`). 시범 앱에서 고정 헤더만 본 조건은 홈 11개 중 3개가 실패했고, 첫 섹션 제목을 더하자 22번 모두 통과했다.
+- **화면만 본다.** 앱 안 상태(이전 시나리오가 바꾼 필터·로그인·스크롤 위치 등)는 그대로 이어진다. 그 상태에 영향받는 시나리오에는 쓰지 않거나, `start:`에 그 상태까지 넣는다 (`all: [...]`).
+- 시나리오 하나를 고쳐 가며 반복 실행할 때, 여러 시나리오를 차례로 돌릴 때 효과가 크다.
 
 ## 변수
 
