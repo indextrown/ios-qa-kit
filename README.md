@@ -6,6 +6,68 @@
 > **한 줄 요약** — AI가 시나리오를 한 번 테스트로 만들어 두면, 이후에는 `qakit test` 한 줄로 **토큰 없이** 계속 돌립니다.
 > computer use(스크린샷 보며 조작)처럼 매번 AI 비용이 들지 않습니다.
 
+
+## 구조 한눈에 보기
+
+### 기존 방식 (XCUITest만)
+
+```mermaid
+flowchart TD
+    APP["앱 레포"] -- "① 화면마다 accessibilityIdentifier 추가<br/>(앱 코드 수정·리뷰·브랜치 충돌)" --> TGT["앱 안 UI 테스트 타깃<br/>Swift 테스트 작성"]
+    TGT -- "② 고칠 때마다 컴파일" --> BUILD["xcodebuild build"]
+    BUILD -- "③ 실행할 때마다 테스트 실행기를 새로 띄움" --> SIM["시뮬레이터"]
+    SIM -- "④ 결과" --> XCR[".xcresult"]
+    XCR -- "⑤ 열어서 원인 찾기 → 고치고 다시 ②" --> TGT
+    LOOK["화면 파악: 스크린샷·Xcode로 직접 확인"] -.-> TGT
+```
+
+### ios-qa-kit
+
+```mermaid
+flowchart TD
+    APP["앱 레포<br/>(읽기만, 수정 없음)"] -- "① 앱이 바뀌면 자동 재빌드·설치" --> SIM
+    AUTO["AutoID<br/>실행할 때 프로퍼티 이름으로 ID 자동 부여<br/>(LoginView.loginButton)"] -.->|"주입"| SIM
+    SIM["시뮬레이터 / 실기기 (USB·Wi-Fi)"]
+    RUNNER["상주 실행기<br/>미리 빌드한 범용 XCUITest 실행기를 띄워 둠"] <-->|"조작·화면 구조"| SIM
+
+    AI["AI (Claude Code / Codex + 스킬)"] -- "② qakit do '단계' (1~2초)<br/>한 단계씩 눌러 보며 탐색" --> RUNNER
+    RUNNER -- "화면 구조 텍스트" --> AI
+    AI -- "③ 통과한 단계를 그대로 옮김" --> YML["scenarios/*.qa.yml<br/>(컴파일 없음)"]
+    YML -- "④ qakit check: ID가 앱에 있는지 검사" --> RUN["qakit run<br/>(--reuse-app: 시작 화면이면 앱 재실행 생략)"]
+    RUN --> RUNNER
+    RUNNER -- "⑤ 실패 요약 텍스트<br/>(원인·마지막 단계·화면 구조)" --> AI
+    PEOPLE["사람·정기 실행"] -- "⑥ 이후로는 qakit run 한 줄 (AI 토큰 0)" --> RUN
+```
+
+<details>
+<summary>그림이 안 보이는 환경(터미널 등)이면 펼치기</summary>
+
+**기존 방식 (XCUITest만)**
+
+1. 앱 코드의 화면마다 `accessibilityIdentifier`를 붙입니다. 앱 코드 수정·리뷰가 필요하고 브랜치마다 충돌합니다.
+2. 앱 안에 UI 테스트 타깃을 만들고 Swift로 테스트를 씁니다. 고칠 때마다 컴파일합니다.
+3. 실행할 때마다 `xcodebuild`가 테스트 실행기를 새로 띄웁니다.
+4. 실패하면 `.xcresult`를 열어 원인을 찾고, 고치고, 다시 빌드합니다.
+
+**ios-qa-kit**
+
+1. 앱 레포는 읽기만 합니다. 앱이 바뀌면 qakit이 다시 빌드·설치하고, 실행할 때 AutoID가 프로퍼티 이름으로 ID를 붙입니다.
+2. AI가 `qakit do '단계'`로 떠 있는 실행기(상주 실행기)에 한 단계씩 보내며 화면을 탐색합니다 (단계당 1~2초, 화면 구조는 텍스트).
+3. 통과한 단계를 그대로 시나리오 파일(`.qa.yml`)에 옮깁니다. 컴파일하지 않습니다.
+4. `qakit check`가 ID가 앱에 있는지 검사하고, `qakit run`이 같은 실행기로 돌립니다. `--reuse-app`이면 앱이 이미 시작 화면일 때 다시 켜지 않습니다.
+5. 실패하면 원인·마지막 단계·그 순간 화면 구조를 텍스트로 돌려줍니다. AI는 이것만 보고 고칩니다.
+6. 만든 뒤에는 사람이나 정기 실행이 `qakit run` 한 줄로 돌립니다. AI 토큰은 들지 않습니다.
+
+</details>
+
+**시범 앱(SwiftUI) 홈 시나리오 11개를 차례로 돌린 시간** (시뮬레이터, 2026-11-07)
+
+| 방식 | 합계 |
+|---|---|
+| 시나리오마다 `xcodebuild`로 실행기를 새로 띄움 (qakit 0.12, XCUITest를 그대로 돌리는 방식) | 322초 |
+| 상주 실행기 (qakit 0.14.2) | 252초 |
+| 상주 실행기 + `--reuse-app` (qakit 0.16) | 82초 |
+
 ---
 
 ## 왜 ios-qa-kit인가
@@ -231,7 +293,7 @@ cp secrets.example.txt secrets.txt
 
 **시작하기**
 
-0. [왜 ios-qa-kit인가](#왜-ios-qa-kit인가) · [AI가 ID를 직접 붙이면 되지 않나?](#ai가-브랜치에서-accessibilityidentifier를-붙이면-되지-않나) · [시나리오 파일에 컴파일이 필요 없는 이유](#시나리오-파일에-컴파일이-필요-없는-이유)
+0. [구조 한눈에 보기](#구조-한눈에-보기) · [왜 ios-qa-kit인가](#왜-ios-qa-kit인가) · [AI가 ID를 직접 붙이면 되지 않나?](#ai가-브랜치에서-accessibilityidentifier를-붙이면-되지-않나) · [시나리오 파일에 컴파일이 필요 없는 이유](#시나리오-파일에-컴파일이-필요-없는-이유)
 1. [빠른 실행](#빠른-실행)
 2. [준비물](#준비물)
 3. [단계별 시작 가이드](#단계별-시작-가이드)
