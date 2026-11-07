@@ -73,7 +73,9 @@ public final class QAScenarioRunner {
         mergeVars(root["vars"])
         interrupts = flattenInterrupts(root["interrupts"] as? [Any] ?? [])
         testCase.note("시나리오: \(root["name"] as? String ?? "(이름 없음)")")
-        if (root["launch"] as? Bool) != false {
+        if (root["launch"] as? String) == "reuse", QAConfig.value("RESET") != "1" {
+            try reuseOrLaunch(start: root["start"])
+        } else if (root["launch"] as? Bool) != false {
             let t = Date()
             testCase.launchApp()
             timings.append(["kind": "launch", "name": "앱 실행", "seconds": Date().timeIntervalSince(t), "depth": 0])
@@ -82,6 +84,33 @@ public final class QAScenarioRunner {
         if let signal = QAConfig.value("BENCH_SIGNAL"), let seconds = Double(QAConfig.value("BENCH_SECONDS") ?? "") {
             try benchHold(signal: signal, seconds: seconds)
         }
+    }
+
+    /// launch: reuse — 앱이 이미 떠 있고 시작 화면(start: 조건)이 맞으면 다시 켜지 않는다 (앱 실행 몇 초 절약).
+    /// 조건이 없거나, 앱이 꺼져 있거나, 시작 화면이 아니면 지금처럼 다시 켠다.
+    private func reuseOrLaunch(start: Any?) throws {
+        let t = Date()
+        var reason = "start: 조건이 없음"
+        if let start {
+            let candidate = QAApp.make()
+            switch candidate.state {
+            case .runningForeground, .runningBackground, .runningBackgroundSuspended:
+                if candidate.state != .runningForeground { candidate.activate() }
+                testCase.app = candidate
+                if try evaluate(start, timeout: 2) {
+                    testCase.note("앱 재실행 생략: 시작 화면 확인 (\(compact(start)))")
+                    timings.append(["kind": "launch", "name": "앱 재실행 생략 (시작 화면 확인)",
+                                    "seconds": Date().timeIntervalSince(t), "depth": 0])
+                    return
+                }
+                reason = "시작 화면이 아님"
+            default:
+                reason = "앱이 실행 중이 아님"
+            }
+        }
+        testCase.note("앱 다시 실행 (\(reason))")
+        testCase.launchApp()
+        timings.append(["kind": "launch", "name": "앱 실행 (\(reason))", "seconds": Date().timeIntervalSince(t), "depth": 0])
     }
 
     /// qakit run --bench: 마지막 단계 뒤 앱을 그 상태로 켜 둔 채, qakit이 측정을 끝낼 때까지 기다린다.
