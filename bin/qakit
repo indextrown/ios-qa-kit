@@ -2243,8 +2243,13 @@ def serve_start(ws, udid, idle=1800, launch=True):
         elif ready_file.exists() and ready_file.stat().st_size:
             break
         if proc.poll() is not None:
-            tail = "\n   ".join(log.read_text(errors="replace").splitlines()[-15:])
-            fail("상주 실행기가 시작되지 않았습니다.", tail or f"로그: {log}")
+            lines = log.read_text(errors="replace").splitlines()
+            kept = SERVE_DIR / f"{udid}.failed.log"   # 다음 시작이 로그를 덮어써도 원인을 볼 수 있게
+            shutil.copyfile(log, kept)
+            # 실행기 메시지·오류 줄을 먼저, 그다음 끝부분
+            key = [l for l in lines if "[qakit-serve]" in l or "error" in l.lower() or "failed" in l.lower()][-10:]
+            tail = "\n   ".join(dict.fromkeys(key + lines[-10:]))
+            fail("상주 실행기가 시작되지 않았습니다. 다시 실행하면 새로 띄웁니다.", (tail or "") + f"\n   전체 로그: {kept}")
         time.sleep(0.5)
     else:
         os.killpg(proc.pid, 15)
