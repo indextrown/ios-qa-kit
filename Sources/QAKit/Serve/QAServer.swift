@@ -46,10 +46,12 @@ public final class QAServer {
         self.token = token
     }
 
-    /// 빈 포트에 리스너를 열고, 포트가 정해질 때까지 기다린다.
-    public func start(timeout: TimeInterval = 10) throws {
+    /// 리스너를 열고 포트가 정해질 때까지 기다린다. port 0이면 빈 포트 (시뮬레이터: 상태 파일로 알림).
+    /// 실기기는 Mac이 상태 파일을 못 읽으므로 Mac이 정한 포트로 연다 (Mac은 usbmuxd로 그 포트에 붙는다).
+    public func start(port requested: UInt16 = 0, timeout: TimeInterval = 10) throws {
         let params = NWParameters.tcp
-        params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let endpointPort = requested == 0 ? NWEndpoint.Port.any : (NWEndpoint.Port(rawValue: requested) ?? .any)
+        params.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: endpointPort)
         params.allowLocalEndpointReuse = true
         let listener = try NWListener(using: params)
         let ready = DispatchSemaphore(value: 0)
