@@ -560,7 +560,7 @@ qakit run search-favorite --var item=라떼   # vars 값을 바꿔서 실행 (�
 |---|---|---|
 | `qakit run` (기본) | 매번 새로 | 준비 + 앱 실행 + 단계 |
 | `qakit run` (상주 실행기가 떠 있을 때) | 계속 떠 있음 | 앱 실행 + 단계 (시범 앱 기준 시나리오당 약 8초, 23% 빠름) |
-| `qakit do '<단계>'` | 계속 떠 있음 | 단계 하나 (1~2초) |
+| `qakit do '<단계>'` | 계속 떠 있음 | 단계 하나 (1~2초, 실행기를 처음 띄울 때만 1분 안팎) |
 
 ```bash
 qakit serve                                  # 띄우기 (안 해도 qakit do / run --serve가 알아서 띄움)
@@ -1081,7 +1081,7 @@ worktree:
 
 | 명령 | 하는 일 |
 |---|---|
-| `qakit save -m "…"` | 결과물 저장 |
+| `qakit save -m "…"` | 결과물 저장 (보관소 복사, git 커밋은 안 함) |
 | `qakit restore [--from 이름 --to QA]` | AI 없이 복구 |
 | `qakit readme` | QA 폴더 README.md의 QA 목록 갱신 (run·test·check·save 때 자동) |
 

@@ -2120,7 +2120,8 @@ def serve_start(ws, udid, idle=1800, launch=True):
     log = SERVE_DIR / f"{udid}.log"
     cmd = ["xcodebuild", "test-without-building", "-xctestrun", str(xctestrun), "-destination", f"id={udid}",
            "-resultBundlePath", str(xcresult), "-only-testing", "ScenarioTests/ScenarioTests/test_serve"]
-    info("상주 실행기 시작 중 (앱 실행 포함 30초 안팎)...")
+    info("상주 실행기 시작 중 (앱 실행 포함 1분 안팎)...")
+    started_at = time.time()
     with open(log, "w") as out:
         proc = subprocess.Popen(cmd, env=test_env(ws, extra), stdout=out, stderr=subprocess.STDOUT,
                                 start_new_session=True)
@@ -2140,7 +2141,7 @@ def serve_start(ws, udid, idle=1800, launch=True):
           "workspace": str(ws.root), "bundleId": ws.bundle_id, "runnerHash": scenario_runner_source_hash(),
           "started": datetime.datetime.now().isoformat(timespec="seconds"), "log": str(log)}
     serve_state_file(udid).write_text(json.dumps(st, ensure_ascii=False, indent=2))
-    ok(f"상주 실행기 준비됨 (포트 {st['port']})")
+    ok(f"상주 실행기 준비됨 (포트 {st['port']}, {time.time() - started_at:.0f}초)")
     return st
 
 
@@ -3288,6 +3289,7 @@ def cmd_do(args):
             fail(str(e))
         body = steps[0] if len(steps) == 1 else {"group": "qakit do", "steps": steps}
 
+    t0 = time.time()
     with sim_lock(ws, f"qakit do {text[:40]}"):
         st = serve_ensure(ws, udid)
         try:
@@ -3301,6 +3303,9 @@ def cmd_do(args):
             fail(f"상주 실행기에 연결하지 못했습니다: {e}", "다시 실행하면 새로 띄웁니다")
 
     secs = (res.get("durationMs") or 0) / 1000
+    total = time.time() - t0
+    # 실행기 시간만 보이면 첫 명령(실행기 시작)이 짧아 보인다 → 차이가 크면 명령 전체 시간도
+    extra_time = f" · 실행기 시작 포함 전체 {total:.0f}초" if total - secs > 5 else ""
     dump = res.get("dump")
     if res.get("ok"):
         if path == "/dump" and dump:
@@ -3309,12 +3314,12 @@ def cmd_do(args):
             (ws.results_dir / "ui-dump.txt").write_text(text_out, encoding="utf-8")
             print(text_out, end="" if text_out.endswith("\n") else "\n")
         elif path == "/ping":
-            ok(f"응답 {secs:.2f}초 · 앱 상태 {res.get('appState')}")
+            ok(f"응답 {secs:.2f}초 · 앱 상태 {res.get('appState')}{extra_time}")
         else:
-            ok(f"{secs:.1f}초")
+            ok(f"{secs:.1f}초{extra_time}")
         return
     msg = masker(ws.secrets())(res.get("message") or "실패")
-    print(f"❌ {msg}  ({secs:.1f}초)")
+    print(f"❌ {msg}  ({secs:.1f}초{extra_time})")
     if dump:
         out = ws.results_dir / "do-fail-dump.txt"
         ws.results_dir.mkdir(exist_ok=True)

@@ -14,13 +14,15 @@
 | `qakit swiftui-ids --list \| --insert \| --restore` | SwiftUI ID 삽입 도구. `--list`: 삽입될 ID 목록. `--insert`: 워크트리 소스에 삽입한 채 둠(diff 확인용). `--restore`: 되돌림. `build-app`은 자동으로 삽입→빌드→복원 |
 | `qakit dump-ui [--attach] [--wait-id ID] [--settle 초] [--print]` | 화면 구조 → `results/ui-dump.txt` |
 | `qakit serve [--stop\|--status] [--idle 초] [--no-launch]` | 상주 실행기 (시뮬레이터만). 실행기(XCUITest)를 백그라운드로 띄워 두고 명령만 주고받는다. 상태 파일 `~/.qakit/serve/<udid>.json`. `--status`: 떠 있는지, `--stop`: 멈춤, `--idle`: 명령이 없으면 스스로 끝내는 시간(기본 1800초), `--no-launch`: 시작할 때 앱을 띄우지 않음. 떠 있으면 `qakit run`이 자동으로 이쪽으로 돈다. `test`·`dump-ui`는 시작 전에 상주 실행기를 멈춘다 |
-| `qakit do '<단계>' [--timeout 초]` | 시나리오 단계 하나를 바로 실행 (1~2초, 없으면 상주 실행기를 띄움 20~40초). 단계 문법은 `.qa.yml`과 같다 (`use:`는 펼쳐 실행). 한 번에 단계 하나. 앱 상태·변수는 다음 `qakit do`로 이어진다. 실패하면 ❌ 원인 + `results/do-fail-dump.txt`, 종료 코드 1, 실행기는 유지. `--timeout`(기본 120초)을 넘기면 실행기를 멈춘다(다음 명령 때 다시 띄움) |
+| `qakit do '<단계>' [--timeout 초]` | 시나리오 단계 하나를 바로 실행 (1~2초, 없으면 상주 실행기를 띄움 1분 안팎. 그때는 "실행기 시작 포함 전체 N초"도 출력). 단계 문법은 `.qa.yml`과 같다 (`use:`는 펼쳐 실행). 한 번에 단계 하나. 앱 상태·변수는 다음 `qakit do`로 이어진다. 실패하면 ❌ 원인 + `results/do-fail-dump.txt`, 종료 코드 1, 실행기는 유지. `--timeout`(기본 120초)을 넘기면 실행기를 멈춘다(다음 명령 때 다시 띄움) |
 | `qakit do dump [--settle 초]` / `launch` / `reset` / `ping` | `dump`: 지금 화면 구조 출력 + `results/ui-dump.txt`. `launch`: 앱 다시 실행 + 변수 비움. `reset`: 변수만 비움(앱 그대로). `ping`: 응답 시간·앱 상태 |
 | `qakit test [필터...] [--reset]` | 테스트 실행. 필터 예: `LoginFlowTests`, `LoginFlowTests/test_x`. `--reset`: 앱 재설치+키체인 초기화 |
 | `qakit check [시나리오...]` | 시나리오 형식·ID 정적 검사 (실행 없이) |
 | `qakit run <시나리오> [--serve\|--no-serve] [--timeout 초]` | 이 작업공간용 상주 실행기가 떠 있으면 자동으로 그쪽으로 돈다 (xcodebuild 준비 생략, 시나리오당 약 8초 빠름). `--serve`: 없으면 띄워서. `--no-serve`: 떠 있어도 xcodebuild로 (상주 실행기는 멈춤). `--timeout`: 상주 실행기로 돌 때 제한 시간(기본 600초). `--reset`이면 실행기를 새로 띄운다. `--bench`·`--device`는 늘 xcodebuild. 결과 폴더·`latest`·실행 기록(`"via": "serve"`)·실패 요약은 같고, xcresult 대신 `failure.png`·`failure-dump.txt`를 남긴다 |
 | `qakit run <시나리오> [--reset] [--var 키=값 ...] [--bench 시간 [--no-profile]] [--no-check]` | 시나리오 파일 실행. `--var`: `vars` 기본값을 이번 실행 값으로 덮어씀 (예: `--var ship="ULTRA FOREST"`). `--bench <시간>`: 시나리오가 끝난 화면 그대로 그 시간 동안 (단위 필수: `30s`·`5m`·`1h`·`1h30m`, `30초`·`5분`·`1시간`도 됨. 단위가 없으면 오류, 최소 5초) CPU·메모리(1초 단위, `ps`) + 함수별 CPU(macOS `sample`, 10ms 간격. 1분 이하는 전체, 더 길면 3분마다 20초씩. 권한 불필요) → 실행 폴더의 `bench-*`. 요약에 직접 CPU를 쓴 함수·앱 코드 기준 상위 10개. `--no-profile`: CPU·메모리만 |
 | `qakit run <시나리오> --device [select\|last\|<이름>]` | 실기기에서 실행 (`build-app`·`dump-ui`도 됨). 값을 빼면 방향키 목록(터미널에서만, AI는 이름으로 지정). 앱·실행기를 앱의 개발자 팀으로 서명, AutoID를 앱 `Frameworks/`에 넣고 다시 서명해 `devicectl`로 설치. 시나리오는 base64로 전달, `pref`는 AutoID의 숨은 요소 `QAKit.prefs`로 읽고, 덤프는 첨부로 받아 결과 폴더로 꺼낸다. `--bench`는 Time Profiler + Activity Monitor로 CPU %·메모리·함수 목록(`bench.trace`, `bench-cpu.csv`). Time Profiler는 실기기에서만 — 시뮬레이터는 `sample`. 권한 미리 허용 불가, `--reset`은 재설치만(키체인 유지), `qakit test`는 시뮬레이터만 |
+| `qakit save -m "…"` | 결과물 목록·해시(`qa.lock.json`) + 보관소 `~/.qakit/archive/<이름>/` 복사. git 커밋은 하지 않음 |
+| `qakit restore [--from 이름 --to QA]` | 보관소에서 AI 없이 복구 |
 | `qakit summarize [xcresult \| 실행 폴더]` | 실패 요약 (기본: 마지막 실행). 상주 실행기로 돈 `run`은 그 실행 폴더의 `summary.txt` |
 
 | 전역 옵션 | 설명 |
