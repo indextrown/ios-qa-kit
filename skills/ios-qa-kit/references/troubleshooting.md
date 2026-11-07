@@ -4,6 +4,7 @@
 |---|---|---|
 | 요소를 못 찾음 (있는데) | 팝업·시트가 위에 떠서 아래 요소가 접근성 구조에서 가려짐 | 실패 요약의 화면 구조 끝부분(최상단 요소)을 본다 → 팝업 처리 |
 | 요소를 못 찾음 (ID 없음) | 지역 변수로 만든 뷰, 외부 SDK 뷰 | 라벨(`text("…")`)이나 덤프의 좌표 사용 |
+| 실기기에서 `dump-ui --device`·시나리오 `dump:` 단계를 돌려도 `results/ui-dump.txt`·`results/dumps/`가 그대로 (qakit 0.14.0 이하) | 새 Xcode가 첨부 이름의 `:`·`/`를 지워 qakit이 덤프를 꺼내지 못함 | `qakit update` (0.14.1부터 고침) |
 | 덤프에 ID가 하나도 없음 | 앱이 qakit 밖에서 실행됨 (`--attach`) | `qakit dump-ui` (새로 실행) 또는 테스트를 먼저 돌린 뒤 `--attach` |
 | 같은 ID가 여러 개 | 셀·반복 컴포넌트 | `page.cell(QAID.X.id, labelID: QAID.X.titleLabel, label: "…")` 또는 `.element(boundBy: i)` |
 | 닫았는데 계속 `exists == true` | 시트·드로어가 화면 밖에 남음 | `page.waitUntilGone()` / `isVisibleOnScreen` |
