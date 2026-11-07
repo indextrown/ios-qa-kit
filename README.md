@@ -15,9 +15,9 @@
 
 ### ios-qa-kit
 
-<p align="center"><img src="docs/images/architecture-qakit.png" alt="ios-qa-kit: 앱 레포는 읽기만, AutoID가 ID 자동 부여, AI가 qakit do로 상주 실행기에 한 단계씩 보내 탐색, 통과한 단계를 .qa.yml로, qakit check·run, 실패 요약 텍스트, 이후 qakit run 한 줄" width="100%"></p>
+<p align="center"><img src="docs/images/architecture-qakit-flow.png" alt="ios-qa-kit 흐름: AI가 처음 한 번 ① qakit do로 화면 탐색 → ② 통과한 단계를 .qa.yml로 → ③ qakit check·run (실패하면 요약을 보고 ②로) → 그다음부터 ④ qakit run 한 줄(AI 토큰 0). 밑바탕: 상주 실행기, 시뮬레이터/실기기, 앱 레포(읽기만), AutoID" width="100%"></p>
 
-그림 원본: [`docs/images/architecture-before.drawio`](docs/images/architecture-before.drawio), [`architecture-qakit.drawio`](docs/images/architecture-qakit.drawio) (draw.io로 열어 고친 뒤 PNG로 내보냄)
+그림 원본: [`docs/images/architecture-before.drawio`](docs/images/architecture-before.drawio), [`architecture-qakit-flow.drawio`](docs/images/architecture-qakit-flow.drawio) (draw.io로 열어 고친 뒤 PNG로 내보냄)
 
 <!-- Mermaid 원본 (그림은 docs/images/*.drawio에서 PNG로 바꿈). HTML 주석은 대시 두 개와 꺾쇠가 붙은 곳에서 끝나므로, 화살표는 같은 뜻의 굵은 화살표(==>)로 적어 둠.
 
