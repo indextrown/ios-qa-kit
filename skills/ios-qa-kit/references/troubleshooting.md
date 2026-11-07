@@ -37,7 +37,8 @@
 | `qakit do`의 결과가 예상과 다름 (이미 로그인됨, 이전 화면에 있음) | 앱 상태·변수가 이전 `qakit do`에서 이어진다 | 처음부터 보려면 `qakit do launch`, 변수만 비우려면 `qakit do reset`. 로그아웃 상태가 필요하면 `qakit run <시나리오> --reset` 또는 `qakit test --reset` 뒤에 `qakit do` |
 | `qakit do`에서 통과한 단계가 `qakit run`에서 실패 | 시나리오는 앱을 새로 실행해 처음부터 돈다. `qakit do`는 그 전 상태에 기대고 있었음 | 시나리오 시작(`reset`, `use: login` 등)과 화면 대기(`wait`)를 넣는다 |
 | "단계는 '이름: 값' 형식이어야 합니다" | 한 번에 단계 여러 개, 또는 YAML 형식 오류 | `qakit do`는 단계 하나씩. 따옴표로 감싼다: `qakit do 'wait: { for: X, timeout: 10 }'` |
-| "…이(가) USB로 연결되어 있지 않습니다" | 실기기 상주 실행기는 usbmuxd(USB 포트 전달)로 붙는다. Wi-Fi로만 연결됨 | 케이블로 연결하고 잠금을 푼다. 안 되면 `qakit run --device … --no-serve` |
+| "…에 연결할 길이 없습니다 (USB 아님, CoreDevice 터널 없음)" | 케이블도 없고 Wi-Fi 터널도 열리지 않음 (기기 잠김·다른 네트워크·잠자기) | 기기 잠금을 풀고 같은 Wi-Fi인지 확인, 또는 USB 연결. `xcrun devicectl list devices`에서 기기가 보여야 한다 |
+| Wi-Fi 실기기에서 상주 실행기가 시작되지 않고 로그에 "…에 열지 못함" | 터널 주소가 기기 안에서 바뀜 (터널이 다시 연결됨) | 다시 실행하면 새 주소로 띄운다. 로그(`~/.qakit/serve/<udid>.log`)에 기기 주소 목록이 있다 |
 | 실기기 `qakit do`가 "기기 포트 …에 연결 거부" | 기기 안 실행기가 끝났거나(잠금·앱 전환·케이블 뺌) 아직 준비 전 | 다시 실행하면 새로 띄운다. 반복되면 `qakit serve --stop --device …` 뒤 다시 |
 | 실기기 첫 `qakit run`이 몇 분 걸림 | 앱 소스가 바뀌어 자동 동기화가 앱을 다시 빌드·설치 (`results/build-app.log`) | 정상. 상주 실행기와는 무관하고, 다음부터는 몇 초 |
 | `qakit run`이 상주 실행기와 xcodebuild에서 결과가 다름 | 상주 실행기 쪽 문제일 수 있음 | `qakit run <시나리오> --no-serve`로 비교하고, 다르면 도구 버그로 보고 |
