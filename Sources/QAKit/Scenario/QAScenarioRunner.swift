@@ -49,6 +49,9 @@ public final class QAScenarioRunner {
     public var recordsFailures = true
     /// 지나간 단계 이름 (상주 실행기의 실패 요약 "마지막 단계". 일반 실행은 xcresult의 활동 기록을 쓴다)
     public private(set) var trail: [String] = []
+    /// 걸린 시간 기록 (상주 실행기 응답 → qakit의 output.log·QAKIT_TIMING). kind: launch / step / group, depth: 묶음 안 깊이
+    public private(set) var timings: [[String: Any]] = []
+    private var depth = 0
     private var vars: [String: String] = [:]
     private var snapshots: [String: Data] = [:]
     private var app: XCUIApplication { testCase.app }
@@ -71,7 +74,9 @@ public final class QAScenarioRunner {
         interrupts = flattenInterrupts(root["interrupts"] as? [Any] ?? [])
         testCase.note("시나리오: \(root["name"] as? String ?? "(이름 없음)")")
         if (root["launch"] as? Bool) != false {
+            let t = Date()
             testCase.launchApp()
+            timings.append(["kind": "launch", "name": "앱 실행", "seconds": Date().timeIntervalSince(t), "depth": 0])
         }
         try runSteps(root["steps"] as? [Any] ?? [])
         if let signal = QAConfig.value("BENCH_SIGNAL"), let seconds = Double(QAConfig.value("BENCH_SECONDS") ?? "") {
@@ -126,12 +131,25 @@ public final class QAScenarioRunner {
 
     private func runStep(_ raw: Any) throws {
         guard let step = raw as? [String: Any] else { throw fail("단계 형식 오류: \(raw)") }
+        let started = Date()
+        var interruptSeconds = 0.0
         if step["group"] == nil {
             try handleInterrupts(before: step)
+            interruptSeconds = Date().timeIntervalSince(started)
             currentStep = step
         }
         trail.append(describe(step))
         if trail.count > 50 { trail.removeFirst(trail.count - 50) }
+        let index = timings.count
+        timings.append([:])   // 자리를 먼저 잡아 묶음이 안쪽 단계보다 앞에 오게
+        depth += 1
+        defer {
+            depth -= 1
+            var row: [String: Any] = ["kind": step["group"] == nil ? "step" : "group", "name": describe(step),
+                                      "seconds": Date().timeIntervalSince(started), "depth": depth]
+            if interruptSeconds >= 0.05 { row["interrupts"] = interruptSeconds }
+            timings[index] = row
+        }
         try XCTContext.runActivity(named: describe(step)) { _ in try execute(step) }
     }
 

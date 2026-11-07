@@ -131,6 +131,7 @@ final class ScenarioTests: QATestCase {
             runner = scenarioRunner
             json["notes"] = notes
             json["steps"] = Array(scenarioRunner.trail.suffix(8))
+            json["timings"] = scenarioRunner.timings
         case "/launch":
             launchApp()
             runner = makeServeRunner()
