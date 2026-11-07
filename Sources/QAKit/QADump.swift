@@ -22,7 +22,7 @@ public enum QADump {
     ///   - app: 대상 앱
     ///   - settle: 덤프 전 기다릴 시간 (화면 전환/애니메이션 대기)
     ///   - name: 지정하면 results/ui-dump.txt 대신 results/dumps/<name>.txt에 저장 (시나리오 `dump:` 단계용)
-    public static func run(app: XCUIApplication, settle: TimeInterval = 2, name: String? = nil) throws -> String {
+    public static func run(app: XCUIApplication, settle: TimeInterval = 2, name: String? = nil, save: Bool = true) throws -> String {
         RunLoop.current.run(until: Date().addingTimeInterval(settle))
 
         let snapshot = try app.snapshot()
@@ -67,7 +67,9 @@ public enum QADump {
         }
         let output = (header + [""] + lines).joined(separator: "\n") + "\n"
 
-        if QAConfig.isDevice {
+        if !save {
+            // 저장하지 않고 돌려주기만 (상주 실행기의 실패 시점 화면 구조)
+        } else if QAConfig.isDevice {
             // 실기기: Mac 폴더에 쓸 수 없다 → 첨부로 남기면 qakit이 결과 폴더로 꺼낸다
             let attachment = XCTAttachment(string: output)
             attachment.name = "qakit-file:" + (name.map { "dumps/\($0).txt" } ?? "ui-dump.txt")

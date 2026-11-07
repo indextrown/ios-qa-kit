@@ -2135,6 +2135,75 @@ def serve_start(ws, udid, idle=1800, launch=True):
     return st
 
 
+def serve_ready_for(ws, udid):
+    """이 작업공간용 상주 실행기가 지금 바로 쓸 수 있게 떠 있는가 (qakit run이 자동으로 서버를 쓸지)."""
+    st = serve_load(udid)
+    return bool(st and st.get("workspace") == str(ws.root)
+                and st.get("runnerHash") == scenario_runner_source_hash() and serve_alive(st))
+
+
+def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
+    """qakit run을 상주 실행기로. 결과 폴더·latest·실행 기록·실패 요약은 xcodebuild 경로와 같은 모양으로 남긴다."""
+    mask = masker(ws.secrets())
+    name = path.name.replace(".qa.yml", "")
+    st = serve_ensure(ws, udid)
+    rd = new_run_dir(ws, "run", name)
+    info("상주 실행기로 실행 (xcodebuild 준비 생략)")
+    started = time.time()
+    try:
+        res = serve_request(st, "/run", json.loads(scenario_json.read_text(encoding="utf-8")), timeout=timeout)
+    except ServeTimeout:
+        serve_stop(udid, quiet=True, force=True)
+        res = {"ok": False, "message": f"{timeout}초 안에 끝나지 않아 상주 실행기를 멈춤 (다음 실행 때 다시 띄움)"}
+    except ConnectionError as e:
+        serve_stop(udid, quiet=True, force=True)
+        res = {"ok": False, "message": f"상주 실행기 연결 실패: {e}"}
+    seconds = round(time.time() - started, 1)
+    success = bool(res.get("ok"))
+
+    log = [f"[qakit-note] 시나리오: {scenario.get('name')}"] + [f"[qakit-note] {n}" for n in res.get("notes") or []]
+    for line in log[1:]:
+        print("  " + mask(line))
+    shot_path = None
+    if res.get("screenshot"):
+        shot_path = rd / "failure.png"
+        shot_path.write_bytes(base64.b64decode(res["screenshot"]))
+    if res.get("dump"):
+        (rd / "failure-dump.txt").write_text(mask(res["dump"]), encoding="utf-8")
+    (rd / "output.log").write_text(mask("\n".join(log + [
+        f"via: qakit serve · {seconds}초 · {'통과' if success else '실패'}",
+        f"message: {res.get('message', '')}", "steps:"] + [f"  - {x}" for x in res.get("steps") or []])) + "\n",
+        encoding="utf-8")
+    _relink(ws.results_dir / "latest", rd)
+    state = app_state(ws)
+    with open(ws.root / "history.jsonl", "a", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "at": datetime.datetime.now().isoformat(timespec="seconds"), "kind": "run", "test": name,
+            "result": "Passed" if success else "Failed", "seconds": seconds, "via": "serve",
+            "app": {k: state.get(k) for k in ("branch", "commit", "dirtyFiles") if k in state},
+            "kit": kit_version(),
+        }, ensure_ascii=False) + "\n")
+
+    print()
+    if success:
+        ok(f"통과 ({seconds}초, 상주 실행기) — 결과: {rd}")
+        return
+    out = ["── 결과: 통과 0 / 실패 1 / 전체 1", f"\n❌ {name}", f"   원인: {res.get('message', '')}"]
+    if res.get("steps"):
+        out.append("   마지막 단계:")
+        out += [f"     - {x}" for x in res["steps"]]
+    if res.get("dump"):
+        lines = [l.strip() for l in res["dump"].splitlines() if l.startswith("#") is False and ("#" in l or '"' in l)]
+        if len(lines) > 60:   # 팝업 등 최상단 요소는 보통 끝에 있으므로 뒤쪽을 남긴다
+            lines = ["...(앞 %d줄 생략)" % (len(lines) - 60)] + lines[-60:]
+        out.append("   실패 시점 화면 구조 (ID/라벨 있는 요소):")
+        out += ["     " + l for l in lines]
+    if shot_path:
+        out.append(f"   스크린샷: {shot_path}")
+    print(mask("\n".join(out)))
+    fail("실패", f"자세한 결과: {rd}")
+
+
 def serve_ensure(ws, udid):
     """살아 있는 상주 실행기를 돌려준다. 없거나, 죽었거나, 실행기 코드·작업공간이 바뀌었으면 다시 띄운다."""
     st = serve_load(udid)
@@ -2949,6 +3018,13 @@ def _cmd_run(ws, args):
              + ("CPU + 함수별 CPU (Time Profiler)" if ws.device else
                 "CPU·메모리" + (" + 함수별 CPU(sample)" if profile else "")) + " 기록")
     info(f"시나리오 실행: {scenario.get('name')} ({path.name})")
+    if not bench and not ws.device and not args.no_serve:
+        udid = ensure_booted(ws)
+        if args.serve or serve_ready_for(ws, udid):
+            if extra.get("RESET"):
+                serve_stop(udid, quiet=True)   # 재설치로 앱 데이터 경로가 바뀌므로 실행기를 새로 띄운다
+            run_via_serve(ws, udid, out, path, scenario, args.timeout)
+            return
     try:
         success, xcresult, _ = run_scenario_runner(ws, "test_run", extra, label="run",
                                                    on_line=bench.on_line if isinstance(bench, DeviceBenchSession) else None,
@@ -3389,6 +3465,10 @@ def main():
     p.add_argument("--no-profile", action="store_true", help="--bench에서 함수별 CPU(sample) 없이 CPU·메모리만 기록")
     p.add_argument("--var", action="append", metavar="KEY=VALUE",
                    help='시나리오 변수 지정 (vars 기본값을 덮어씀, 여러 번 가능). 예) --var ship="ULTRA FOREST"')
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--serve", action="store_true", help="상주 실행기로 실행 (없으면 띄움). 떠 있으면 지정하지 않아도 씀")
+    g.add_argument("--no-serve", action="store_true", help="상주 실행기가 떠 있어도 xcodebuild로 실행 (상주 실행기는 멈춤)")
+    p.add_argument("--timeout", type=int, default=600, help="상주 실행기로 돌 때 이 시간(초) 안에 안 끝나면 멈춤 (기본 600)")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("check", help="시나리오 형식·ID 정적 검사 (실행 없이)")

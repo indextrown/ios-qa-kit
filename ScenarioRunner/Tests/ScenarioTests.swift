@@ -105,6 +105,21 @@ final class ScenarioTests: QATestCase {
                 ok = false
                 message = "앱이 실행되지 않음 (/launch 먼저)"
             }
+        case "/run":
+            // 시나리오 전체 (qakit run). 새 실행기로 돌리고, 끝난 뒤 qakit do가 그 변수 그대로 이어 갈 수 있게 남긴다
+            var notes: [String] = []
+            noteSink = { notes.append($0) }
+            let scenarioRunner = makeServeRunner()
+            do {
+                try scenarioRunner.run(json: request.body)
+            } catch {
+                ok = false
+                message = "\(error)"
+            }
+            noteSink = nil
+            runner = scenarioRunner
+            json["notes"] = notes
+            json["steps"] = Array(scenarioRunner.trail.suffix(8))
         case "/launch":
             launchApp()
             runner = makeServeRunner()
@@ -119,8 +134,11 @@ final class ScenarioTests: QATestCase {
             ok = false
             message = ([message] + issues).filter { !$0.isEmpty }.joined(separator: "\n")
         }
-        if !ok, request.path == "/step", let app, app.state != .notRunning {
-            json["dump"] = try? QADump.run(app: app, settle: 0)   // 실패 시점 화면 구조
+        if !ok, request.path == "/step" || request.path == "/run", let app, app.state != .notRunning {
+            json["dump"] = try? QADump.run(app: app, settle: 0, save: false)   // 실패 시점 화면 구조 (results/ui-dump.txt를 덮지 않음)
+            if request.path == "/run" {
+                json["screenshot"] = app.screenshot().pngRepresentation.base64EncodedString()
+            }
         }
         json["ok"] = ok
         json["message"] = message
