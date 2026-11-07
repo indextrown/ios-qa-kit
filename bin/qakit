@@ -323,7 +323,17 @@ def simulator_udid(name_or_udid):
     return d["udid"], d["state"]
 
 
+BOOTED = {}
+
+
 def ensure_booted(ws):
+    """시뮬레이터 udid (꺼져 있으면 부팅). 한 번 실행 안에서는 재사용한다."""
+    if ws.simulator not in BOOTED:
+        BOOTED[ws.simulator] = _ensure_booted(ws)
+    return BOOTED[ws.simulator]
+
+
+def _ensure_booted(ws):
     udid, state = simulator_udid(ws.simulator)
     if not udid:
         fail(f"시뮬레이터 '{ws.simulator}'를 찾지 못했습니다.",
@@ -1493,6 +1503,7 @@ def _cmd_test(ws, args):
         fail("qakit test는 아직 실기기를 지원하지 않습니다.", "실기기는 시나리오로: qakit run <시나리오> --device")
     if not has_swift_runner(ws):
         fail("Swift 테스트가 없는 작업공간입니다.", "시나리오는 qakit run <시나리오>, 목록은 ls scenarios/")
+    prefetch_worktree(ws)
     only = args.filters or []
     extra = {}
     auto_sync(ws)
@@ -1644,8 +1655,24 @@ def git(app_dir, *args):
     return r.stdout.strip() if r.returncode == 0 else None
 
 
+APP_STATE_CACHE = {}
+
+
+def forget_app_state():
+    """앱 커밋이 바뀌었을 때(워크트리 최신화) 다음 app_state가 다시 계산하게."""
+    APP_STATE_CACHE.clear()
+
+
 def app_state(ws):
-    """앱 소스 상태 스냅샷: 경로, 브랜치, 커밋, 미커밋 변경 해시."""
+    """앱 소스 상태 스냅샷: 경로, 브랜치, 커밋, 미커밋 변경 해시.
+    한 번 실행 안에서는 재사용한다 (run 한 번에 세 번 불리고, 시스템이 바쁠 때 git status가 몇 초씩 걸린다)."""
+    key = (str(ws.app_dir), str(ws.project), ws.scheme, ws.configuration)
+    if key not in APP_STATE_CACHE:
+        APP_STATE_CACHE[key] = _app_state(ws)
+    return dict(APP_STATE_CACHE[key])
+
+
+def _app_state(ws):
     d = ws.app_dir
     state = {"appPath": str(ws.project), "scheme": ws.scheme, "configuration": ws.configuration}
     branch = git(d, "rev-parse", "--abbrev-ref", "HEAD")
@@ -1738,8 +1765,33 @@ def app_changed(ws):
 # 원칙: QA 워크트리 브랜치(qa/workspace)는 그대로 유지한다. 사용자가 명시적으로 요청하지 않는 한
 # 다른 브랜치로 병합하지 않고 push하지 않는다. 따라갈 브랜치(develop)가 앞서 있으면 그 커밋을 QA 쪽으로 가져온다.
 
+PREFETCH = {}
+
+
+def prefetch_worktree(ws):
+    """test/run 시작 때 QA 워크트리의 git fetch를 미리 백그라운드로 시작한다 (ID 검사와 동시에).
+    follow_worktree가 그 결과를 기다려 쓴다. 매번 가져오는 것은 같고, 기다리는 시간만 겹친다."""
+    import threading
+    if ws.worktree_update == "off" or APP_OVERRIDE or not ws.app_dir or not is_qa_worktree(ws.app_dir):
+        return
+    base = ws.worktree_base
+    key = (str(ws.app_dir), None if "*" in base else base)
+    if key not in PREFETCH:
+        t = threading.Thread(target=_git_fetch_now, args=key, daemon=True)
+        t.start()
+        PREFETCH[key] = t
+
+
 def _git_quiet_fetch(repo_dir, branch):
-    """branch가 None이면 origin 전체를 가져온다 (패턴으로 브랜치를 고를 때)."""
+    """branch가 None이면 origin 전체를 가져온다 (패턴으로 브랜치를 고를 때). 미리 시작한 fetch가 있으면 그것을 기다린다."""
+    t = PREFETCH.pop((str(repo_dir), branch), None)
+    if t:
+        t.join(timeout=35)
+        return
+    _git_fetch_now(str(repo_dir), branch)
+
+
+def _git_fetch_now(repo_dir, branch):
     if not git(repo_dir, "remote"):
         return
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
@@ -1822,6 +1874,7 @@ def update_worktree(ws, base=None, check_only=False, strict=True):
         conflicts = [l for l in (r.stdout or "").splitlines() if "CONFLICT" in l][:5]
         return stop(f"{ref}를 가져오다 충돌이 나서 되돌렸습니다." + ("\n   " + "\n   ".join(conflicts) if conflicts else ""),
                     f"직접 해결: git -C {d} merge {ref}")
+    forget_app_state()
     ok(f"{ref}의 {n}커밋을 가져옴 ({before} → {git(d, 'rev-parse', '--short', 'HEAD')}). 다음 test/run이 앱을 다시 빌드합니다")
     return True
 
@@ -2441,6 +2494,42 @@ def run_scenario_runner(ws, method, extra_env, label, quiet=False, history_name=
     return result
 
 
+def id_sources_fingerprint(ws):
+    """ID에 영향을 주는 것들의 지문: 앱 Swift 파일(경로·수정 시각·크기), ID 도구, SwiftUI 설정. 파일 내용은 읽지 않는다."""
+    h = hashlib.sha1()
+    root = ws.root.resolve()
+    sources = sorted(set([str(x) for x in (ws.id_sources or [ws.app_dir])] + swiftui_sources(ws)))
+    for f in sorted(set(gen_ids.iter_swift_files(sources))):
+        try:
+            if f.resolve().is_relative_to(root):
+                continue
+            st = f.stat()
+        except OSError:
+            continue
+        h.update(f"{f}\0{st.st_mtime_ns}\0{st.st_size}\n".encode())
+    for tool in (KIT_DIR / "Tools" / "gen-ids" / "gen_ids.py", SWIFTUI_IDS_DIR / "Package.swift"):
+        try:
+            h.update(f"{tool}\0{tool.stat().st_mtime_ns}\n".encode())
+        except OSError:
+            pass
+    for f in sorted((SWIFTUI_IDS_DIR / "Sources").rglob("*.swift")):
+        h.update(f"{f}\0{f.stat().st_mtime_ns}\n".encode())
+    h.update(f"swiftui={ws.swiftui}".encode())
+    return h.hexdigest()
+
+
+def known_ids(ws):
+    """앱에 있는 ID 전체 (시나리오 정적 검사용). 앱 소스·도구가 지난번과 같으면 파싱하지 않고 저장해 둔 목록을 쓴다."""
+    key = id_sources_fingerprint(ws)
+    cached = load_state(ws, "ids-check")
+    if cached and cached.get("key") == key and ws.ids_file.exists():
+        return set(cached["ids"])
+    trees, _ = generate_ids(ws, quiet=True)
+    ids = sorted(gen_ids.all_ids(trees))
+    save_state(ws, "ids-check", {"key": key, "ids": ids})
+    return set(ids)
+
+
 def load_checked_scenario(ws, name, strict=True):
     path = scenario_tools.find_scenario(ws.root, name)
     if not path:
@@ -2450,8 +2539,7 @@ def load_checked_scenario(ws, name, strict=True):
         scenario = scenario_tools.load_scenario(path, ws.root)
     except scenario_tools.YamlError as e:
         fail(f"시나리오 형식 오류: {e}")
-    trees, model = generate_ids(ws, quiet=True)
-    unknown = scenario_tools.check_ids(scenario, set(gen_ids.all_ids(trees)), extra_ok=("Mapbox",))
+    unknown = scenario_tools.check_ids(scenario, known_ids(ws), extra_ok=("Mapbox",))
     if unknown:
         msg = "앱에 없는 ID: " + ", ".join(unknown)
         if strict:
@@ -3139,6 +3227,7 @@ def write_bench_summary(base, seconds, scenario, ws, s):
 
 
 def _cmd_run(ws, args):
+    prefetch_worktree(ws)
     path, scenario = load_checked_scenario(ws, args.scenario, strict=not args.no_check)
     overrides = {}
     for item in args.var or []:
@@ -3547,7 +3636,58 @@ def cmd_update(args):
 
 # ─────────────────────────────── main ───────────────────────────────
 
+TIMED_FUNCTIONS = ("find_workspace", "ensure_booted", "sim_lock", "load_checked_scenario", "generate_ids", "auto_sync",
+                   "follow_worktree", "swiftui_list", "serve_ready_for", "serve_ensure", "serve_request", "run_via_serve",
+                   "app_state", "update_readme", "run_scenario_runner", "record_history", "kit_version",
+                   "known_ids", "id_sources_fingerprint", "_git_quiet_fetch")
+
+
+def enable_timing():
+    """QAKIT_TIMING=1: 주요 단계에 걸린 시간을 끝에 출력한다 (느려졌을 때 어디인지 보기)."""
+    import atexit
+    start = time.time()
+    rows = []
+    depth = [0]
+
+    def wrap(name, fn):
+        if isinstance(fn, type) or not callable(fn):
+            return fn
+        is_cm = name == "sim_lock"
+
+        def timed(*a, **k):
+            depth[0] += 1
+            t = time.time()
+            try:
+                return fn(*a, **k)
+            finally:
+                depth[0] -= 1
+                rows.append((t - start, depth[0], name, time.time() - t))
+
+        if is_cm:
+            @contextlib.contextmanager
+            def timed_cm(*a, **k):
+                t = time.time()
+                with fn(*a, **k) as v:
+                    rows.append((t - start, depth[0], "sim_lock(잡기)", time.time() - t))
+                    yield v
+            return timed_cm
+        return timed
+
+    for name in TIMED_FUNCTIONS:
+        if name in globals():
+            globals()[name] = wrap(name, globals()[name])
+
+    def report():
+        print(f"\n── qakit 단계별 시간 (전체 {time.time() - start:.2f}초)", file=sys.stderr)
+        for at, d, name, secs in sorted(rows):
+            if secs >= 0.05:
+                print(f"  {at:6.2f}s  {'  ' * d}{name} {secs:.2f}초", file=sys.stderr)
+    atexit.register(report)
+
+
 def main():
+    if os.environ.get("QAKIT_TIMING"):
+        enable_timing()
     parser = argparse.ArgumentParser(prog="qakit", description="AI용 XCUITest 도구")
     version = (KIT_DIR / "VERSION").read_text().strip() if (KIT_DIR / "VERSION").exists() else "dev"
     branch = run(["git", "-C", str(KIT_DIR), "rev-parse", "--abbrev-ref", "HEAD"], check=False).stdout.strip()
