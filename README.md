@@ -11,33 +11,42 @@
 
 ### 기존 방식 (XCUITest만)
 
-```mermaid
-flowchart TD
-    APP["앱 레포"] -- "① 화면마다 accessibilityIdentifier 추가<br/>(앱 코드 수정·리뷰·브랜치 충돌)" --> TGT["앱 안 UI 테스트 타깃<br/>Swift 테스트 작성"]
-    TGT -- "② 고칠 때마다 컴파일" --> BUILD["xcodebuild build"]
-    BUILD -- "③ 실행할 때마다 테스트 실행기를 새로 띄움" --> SIM["시뮬레이터"]
-    SIM -- "④ 결과" --> XCR[".xcresult"]
-    XCR -- "⑤ 열어서 원인 찾기 → 고치고 다시 ②" --> TGT
-    LOOK["화면 파악: 스크린샷·Xcode로 직접 확인"] -.-> TGT
-```
+<p align="center"><img src="docs/images/architecture-before.png" alt="기존 방식: 앱 코드에 ID 추가 → 앱 안 UI 테스트 타깃 → 고칠 때마다 컴파일 → 실행마다 실행기를 새로 띄움 → .xcresult를 열어 원인 찾기를 반복" width="480"></p>
 
 ### ios-qa-kit
 
+<p align="center"><img src="docs/images/architecture-qakit.png" alt="ios-qa-kit: 앱 레포는 읽기만, AutoID가 ID 자동 부여, AI가 qakit do로 상주 실행기에 한 단계씩 보내 탐색, 통과한 단계를 .qa.yml로, qakit check·run, 실패 요약 텍스트, 이후 qakit run 한 줄" width="100%"></p>
+
+그림 원본: [`docs/images/architecture-before.drawio`](docs/images/architecture-before.drawio), [`architecture-qakit.drawio`](docs/images/architecture-qakit.drawio) (draw.io로 열어 고친 뒤 PNG로 내보냄)
+
+<!-- Mermaid 원본 (그림은 docs/images/*.drawio에서 PNG로 바꿈). HTML 주석은 대시 두 개와 꺾쇠가 붙은 곳에서 끝나므로, 화살표는 같은 뜻의 굵은 화살표(==>)로 적어 둠.
+
 ```mermaid
 flowchart TD
-    APP["앱 레포<br/>(읽기만, 수정 없음)"] -- "① 앱이 바뀌면 자동 재빌드·설치" --> SIM
+    APP["앱 레포"] == "① 화면마다 accessibilityIdentifier 추가<br/>(앱 코드 수정·리뷰·브랜치 충돌)" ==> TGT["앱 안 UI 테스트 타깃<br/>Swift 테스트 작성"]
+    TGT == "② 고칠 때마다 컴파일" ==> BUILD["xcodebuild build"]
+    BUILD == "③ 실행할 때마다 테스트 실행기를 새로 띄움" ==> SIM["시뮬레이터"]
+    SIM == "④ 결과" ==> XCR[".xcresult"]
+    XCR == "⑤ 열어서 원인 찾기 → 고치고 다시 ②" ==> TGT
+    LOOK["화면 파악: 스크린샷·Xcode로 직접 확인"] -.-> TGT
+```
+
+```mermaid
+flowchart TD
+    APP["앱 레포<br/>(읽기만, 수정 없음)"] == "① 앱이 바뀌면 자동 재빌드·설치" ==> SIM
     AUTO["AutoID<br/>실행할 때 프로퍼티 이름으로 ID 자동 부여<br/>(LoginView.loginButton)"] -.->|"주입"| SIM
     SIM["시뮬레이터 / 실기기 (USB·Wi-Fi)"]
-    RUNNER["상주 실행기<br/>미리 빌드한 범용 XCUITest 실행기를 띄워 둠"] <-->|"조작·화면 구조"| SIM
+    RUNNER["상주 실행기<br/>미리 빌드한 범용 XCUITest 실행기를 띄워 둠"] <==>|"조작·화면 구조"| SIM
 
-    AI["AI (Claude Code / Codex + 스킬)"] -- "② qakit do '단계' (1~2초)<br/>한 단계씩 눌러 보며 탐색" --> RUNNER
-    RUNNER -- "화면 구조 텍스트" --> AI
-    AI -- "③ 통과한 단계를 그대로 옮김" --> YML["scenarios/*.qa.yml<br/>(컴파일 없음)"]
-    YML -- "④ qakit check: ID가 앱에 있는지 검사" --> RUN["qakit run<br/>(--reuse-app: 시작 화면이면 앱 재실행 생략)"]
-    RUN --> RUNNER
-    RUNNER -- "⑤ 실패 요약 텍스트<br/>(원인·마지막 단계·화면 구조)" --> AI
-    PEOPLE["사람·정기 실행"] -- "⑥ 이후로는 qakit run 한 줄 (AI 토큰 0)" --> RUN
+    AI["AI (Claude Code / Codex + 스킬)"] == "② qakit do '단계' (1~2초)<br/>한 단계씩 눌러 보며 탐색" ==> RUNNER
+    RUNNER == "화면 구조 텍스트" ==> AI
+    AI == "③ 통과한 단계를 그대로 옮김" ==> YML["scenarios/*.qa.yml<br/>(컴파일 없음)"]
+    YML == "④ qakit check: ID가 앱에 있는지 검사" ==> RUN["qakit run<br/>(--reuse-app: 시작 화면이면 앱 재실행 생략)"]
+    RUN ==> RUNNER
+    RUNNER == "⑤ 실패 요약 텍스트<br/>(원인·마지막 단계·화면 구조)" ==> AI
+    PEOPLE["사람·정기 실행"] == "⑥ 이후로는 qakit run 한 줄 (AI 토큰 0)" ==> RUN
 ```
+-->
 
 <details>
 <summary>그림이 안 보이는 환경(터미널 등)이면 펼치기</summary>
