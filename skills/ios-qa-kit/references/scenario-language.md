@@ -20,7 +20,7 @@ steps:
 | input | `input: { tap?: <대상>, alert: 글자, confirm: 완료 }` | 시스템 입력 알림(UIAlertController)에 입력 후 버튼 |
 | type | `type: { into: <대상>, text: 글자 }` | 입력칸 지우고 입력 |
 | wait | `wait: <대상>` / `wait: { for: <대상>, timeout: 초 }` | 나타날 때까지 |
-| wait-any | `wait-any: { candidates: { 키: <대상> }, as: 변수, timeout: 초 }` | 먼저 나타난 키를 변수에 |
+| wait-any | `wait-any: { candidates: { 키: <대상> }, as: 변수, timeout: 초 }` | 먼저 나타난 키를 변수에 (note "먼저 나타남: 키"가 자동으로 남는다). 분기 예시는 아래 [먼저 뜬 화면으로 분기](#먼저-뜬-화면으로-분기-wait-any--if) |
 | if / unless | `if: <조건>` + `then: [단계]` + `else: [단계]`, `timeout:` | 조건 분기 (timeout 동안 조건을 기다림) |
 | read | `read: { from: <대상>, pattern: '정규식', as: 변수 }` | 라벨에서 값 추출 (첫 그룹) |
 | scroll-to | `scroll-to: { target: <대상>, in: <대상>, max: 8, dir: up, required: false }` | 화면에 보일 때까지 스크롤 |
@@ -135,6 +135,26 @@ steps:
 | `wait-any` | 30초 | |
 | `input` 알림 | 5초 | |
 | `expect`, `if`, `unless` | **0초 (바로 판정)** | 화면 전환 직후라면 `timeout:`을 꼭 적는다 (예: 닫기 뒤 `hidden`은 `timeout: 5`) |
+
+## 먼저 뜬 화면으로 분기 (`wait-any` + `if`)
+
+목록이 있을 수도, 빈 화면일 수도 있을 때처럼 어느 쪽이 뜰지 모르면 `wait-any`로 기다린 뒤 변수로 나눈다.
+
+```yaml
+- wait-any:
+    candidates:
+      list: ItemListView.row
+      empty: { type: text, label: 항목이 없어요 }
+    as: state
+    timeout: 15
+- if: { equals: ['{state}', list] }      # then·else는 if와 같은 높이
+  then:
+    - expect: { visible: { id: ItemListView.row, index: 0 } }
+      message: 첫 항목이 보여야 함
+  else:
+    - expect: { visible: ItemListView.Button.둘러보기 }
+      message: 빈 화면 안내 버튼이 보여야 함
+```
 
 ## 변수
 

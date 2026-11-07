@@ -47,16 +47,31 @@ qakit doctor           # ❌가 있으면 → 안내대로 해결
    - 버튼 → 액션: VC의 `bind`/`rx.tap`/`addTarget` → ViewModel → Coordinator/Router 순으로 따라간다.
    - 확인할 것: **push / modal / 같은 화면 안 교체(시트·탭)** 중 무엇인지, 뒤로·닫기가 **어디로** 돌아가는지.
    - **상수가 있다고 화면에 보이는 것은 아니다.** 공통 컴포넌트의 버튼(예: back/close 둘 다 선언)은 화면마다 일부만 붙는다. 실제로 보이는지는 소스의 `isHidden`/`addSubview` 또는 덤프로 확인한다.
-3. **화면 덤프** — 실제 구조·라벨·좌표가 필요할 때. **화면 enum에 ID가 몇 개 없으면**(목록·탭바처럼 UIKit 기본 컴포넌트 위주 화면) 위치 규칙 ID와 라벨을 봐야 하므로 덤프를 먼저 한다.
-   - 첫 화면: `qakit dump-ui --wait-id <QAID 문자열>`
-   - 깊은 화면: 그 화면까지 가는 테스트를 먼저 돌린 뒤 `qakit dump-ui --attach` (앱이 떠 있는 화면 그대로 덤프)
-   - 결과: `results/ui-dump.txt` (`#ID "라벨" @x,y WxH`). 맨 위에 ID 커버리지와 ID 없는 요소 목록이 있다.
+3. **`qakit do`로 직접 눌러 보며 덤프** — 실제 구조·라벨·좌표가 필요하거나, 화면 전환이 소스만으로 확실하지 않을 때. **화면 enum에 ID가 몇 개 없으면**(목록·탭바처럼 UIKit 기본 컴포넌트 위주 화면) 위치 규칙 ID와 라벨을 봐야 하므로 이것을 먼저 한다.
+   `qakit do`는 떠 있는 상주 실행기(시뮬레이터)로 **시나리오 단계 하나**를 바로 실행한다 (1~2초). 없으면 알아서 띄운다 (첫 명령만 1분 안팎, 실행기 빌드가 필요하면 더. 출력에 "실행기 시작 포함 전체 N초"로 나온다).
+   ```bash
+   qakit do launch                                  # 앱을 새로 실행 (변수도 비움)
+   qakit do dump                                    # 지금 화면 구조 → 출력 + results/ui-dump.txt
+   qakit do 'use: login'                            # 기존 공통 단계 그대로 (steps/login.qa.yml)
+   qakit do 'tap: HomeView.menuButton'              # 단계 문법은 .qa.yml과 같다
+   qakit do 'wait: { for: SearchView.searchField, timeout: 10 }'
+   qakit do dump                                    # 넘어간 화면 확인
+   ```
+   - **탐색용 시나리오 파일을 만들어 `qakit run`을 반복하지 않는다.** 한 단계씩 `qakit do`로 누르고 `qakit do dump`로 확인한다.
+   - **라벨·ID로 누르기 전에 `qakit do dump`로 실제 값을 확인한다.** NOTES·앱 소스·사용자 말에 나온 이름(예: "팝팡(찜)" 탭)은 화면의 실제 라벨("팝팡")과 다를 수 있다. 짐작으로 누르면 기본 대기 시간(10초)을 다 쓰고 실패한다.
+   - 판정 조건(`expect`)도 시나리오에 넣기 전에 `qakit do 'expect: …'`로 하나씩 확인한다. SwiftUI 커스텀 컴포넌트는 `selected` 같은 상태가 안 나올 수 있다 → 안 되는 판정은 빼고 다른 근거(보이는 요소)로 바꾼다.
+   - 명령 하나에 단계 하나 (`use:`는 펼쳐서 실행). 앱 상태와 `read`로 읽은 변수는 다음 `qakit do`로 이어진다. 처음부터 다시 하려면 `qakit do launch`, 변수만 비우려면 `qakit do reset`.
+   - 실패하면 ❌ 원인과 `results/do-fail-dump.txt`(실패 시점 화면 구조)가 남고 실행기는 그대로 떠 있다 → 덤프를 보고 단계를 고쳐 다시 `qakit do`.
+   - 되돌릴 수 없는 버튼(탈퇴·결제·삭제·전송)은 탐색 중에도 누르지 않는다 (절대 규칙 3).
+   - 실기기(`--device`)는 아직 안 된다 → 시뮬레이터로 탐색하고, 실기기는 `qakit run --device`로 확인한다. Swift 테스트 중심이면 `qakit dump-ui --wait-id <ID>` / 테스트를 돌린 뒤 `qakit dump-ui --attach`도 된다.
+   - 덤프 형식: `#ID "라벨" @x,y WxH`. 맨 위에 ID 커버리지와 ID 없는 요소 목록이 있다.
 4. 스크린샷은 덤프로 판단이 안 될 때만 본다 (실패 요약에 경로가 있다).
 
 ## 3. 작성
 
 **먼저 시나리오 파일(`scenarios/<이름>.qa.yml`)로 쓸 수 있는지 본다** — 컴파일·프로젝트 없이 실행되고, 저장·복구가 파일만으로 된다.
 여러 시나리오가 쓰는 단계는 `steps/<이름>.qa.yml`로 빼고 `- use: <이름>`으로 부른다 (기존 steps를 먼저 확인).
+`qakit do`로 통과한 단계는 **그대로 `steps:`에 옮긴다** (`qakit do`의 입력이 곧 시나리오 단계 문법이다). 시나리오는 독립적으로 돌아야 하므로 시작(`reset`, `use: login` 등)을 빠뜨리지 않는다.
 `qakit check <이름>` → `qakit run <이름>` 순서로 돌린다. 문법: [references/scenario-language.md](references/scenario-language.md).
 조건·계산이 언어로 표현이 안 될 때만 아래 Swift 방식으로 쓴다.
 
@@ -131,8 +146,17 @@ final class ItemListFlowTests: QATestCase {
 - **같은 ID가 여러 개인 시스템 셀·섹션 헤더**(덤프에서 헤더도 `Cell` 타입으로 나온다)는 ID와 라벨을 함께 건다:
   `app.cells.matching(NSPredicate(format: "identifier == %@ AND label == %@", QAID.X.collectionView + ".header", "제목")).firstMatch`
   (`cell(_:labelID:label:)`은 셀 *안의 라벨*에 ID가 있는 앱 셀용이다)
-- **탭바**: 탭 버튼은 `app.buttons["Tab.<탭 첫 화면 VC>"]`. 선택 상태는 `isSelected`로 판정한다. 탭바 자체는 Page로 만들지 말고 탭 버튼 묶음 헬퍼(일반 struct)로 두고, 각 탭 화면을 Page로 만든다.
+- **탭바**: UIKit 탭바의 탭 버튼은 `app.buttons["Tab.<탭 첫 화면 VC>"]`. SwiftUI 커스텀 탭바는 `<탭바 뷰>.Button.0`처럼 같은 ID가 반복되므로 라벨로 고른다 (시나리오: `{ type: button, label: 홈 }`). 선택 상태는 `isSelected`(시나리오: `selected`)로 판정한다. 탭바 자체는 Page로 만들지 말고 탭 버튼 묶음 헬퍼(일반 struct)로 두고, 각 탭 화면을 Page로 만든다.
 - **탭 전환 판정**: 이전 탭 화면은 보통 접근성 구조에서 빠진다 → 새 탭 Page `isDisplayed` + 이전 탭 Page `isVisibleOnScreen == false` + 탭 버튼 `isSelected`.
+  시나리오로는:
+  ```yaml
+  - tap: { type: button, label: 캘린더 }
+  - wait: { for: CalendarView.title, timeout: 15 }             # 새 탭 화면의 대표 요소
+  - expect: { selected: { type: button, label: 캘린더 } }       # 탭 버튼 선택
+    timeout: 5
+  - expect: { hidden: HomeView.sortButton }                     # 이전 탭 화면이 안 보임
+    timeout: 5
+  ```
 - `isVisibleOnScreen`은 Page에서는 속성(`page.isVisibleOnScreen`), 요소에서는 함수(`element.isVisibleOnScreen(in: app)`)다.
 - `Pages/`, `Flows/`에 새 Swift 파일을 만들면 `qakit test`가 프로젝트에 자동으로 포함한다 (Xcode 프로젝트를 직접 고치지 않는다).
 
@@ -141,11 +165,14 @@ final class ItemListFlowTests: QATestCase {
 ```bash
 qakit check menu-open-close                   # 시나리오 파일: 형식·ID 정적 검사
 qakit run menu-open-close                     # 시나리오 파일 실행 (실패 요약은 Swift와 같은 형식)
+qakit run menu-open-close --serve             # 상주 실행기가 없어도 띄워서 (반복 실행이 빠름)
 qakit test SearchFlowTests                    # 클래스
 qakit test SearchFlowTests/test_search_showsResults
 qakit test --reset FreshLoginTests            # 앱 재설치+키체인 초기화 후 (로그아웃 상태가 필요할 때)
 ```
 
+- **상주 실행기가 떠 있으면 `qakit run`은 자동으로 그쪽으로 돈다** (시나리오당 약 8초 빠름, 결과 폴더·실패 요약 형식은 같다). `qakit do`로 탐색했다면 이미 떠 있으므로 옵션 없이 `qakit run <이름>`이면 된다. 떠 있지 않은데 여러 번 고쳐 돌릴 것 같으면 `--serve`(없으면 띄움)를 붙인다 (떠 있을 때 붙여도 같다). 상주 실행기 쪽 문제로 의심되면 `--no-serve`로 xcodebuild 경로와 비교한다. `--bench`·`--device`는 늘 xcodebuild로 돈다.
+- 상주 실행기로 돈 실행은 xcresult 대신 결과 폴더에 `summary.txt`(요약)·`failure-dump.txt`·`failure.png`·`output.log`를 남긴다. `qakit summarize`는 두 경로 모두 마지막 실행의 요약을 보여 준다.
 - 앱 소스가 바뀌었으면 `qakit test`가 먼저 알아서 재빌드·ID 재생성한다.
 - 실패하면 출력된 요약(원인 / 마지막 단계 / 실패 시점 화면 구조)을 읽고 고친다. 더 필요하면 `qakit summarize`.
 - 컴파일 에러는 테스트 실행 전에 원인만 출력된다 → 그대로 고친다.
@@ -161,12 +188,14 @@ qakit test --reset FreshLoginTests            # 앱 재설치+키체인 초기�
 
 - **시나리오를 만들거나 실행 방법(옵션·`--var`·`--bench`·`--device` 등)이 늘어나면, QA 폴더 `README.md`의 손으로 쓰는 부분(자동 목록 위, 예: `## 실행 명령`)에 그 명령을 바로 붙여 쓸 수 있게 추가한다.** 자동 목록에는 실행 예시가 없어서, 사용자가 직접 돌릴 명령은 여기서 찾는다. 명령마다 한 줄 설명을 붙이고, 실서비스 계정이 바뀌는 등 주의할 점이 있으면 같이 적는다.
 
-- `qakit save -m "무엇을 만들었나"` — 결과물 목록·해시(qa.lock.json)와 보관소 복사. 시나리오 파일·공통 단계·Swift·NOTES가 모두 포함된다. 이후 복구는 AI 없이 `qakit restore`.
+- `qakit save -m "무엇을 만들었나"` — 결과물 목록·해시(qa.lock.json)와 보관소(`~/.qakit/archive/`) 복사. **git 커밋은 하지 않는다.** 시나리오 파일·공통 단계·Swift·NOTES가 모두 포함된다. 이후 복구는 AI 없이 `qakit restore`.
 - 시나리오 파일로 만들었다면 NOTES.md에 그 시나리오가 쓰는 ID·판정 방법도 적는다 (Swift 헬퍼 이름만 적지 않는다).
 
 - 새로 알게 된 것을 `NOTES.md`에 적는다: 진입 흐름, 상태 판별 anchor, 새 팝업과 처리법, ID 없는 영역, 사용자 결정.
-- 사용자에게 보고: 만든/고친 테스트, 통과 여부(`qakit test` 출력 근거), 실행 횟수, 남은 문제.
+- 사용자에게 보고: 만든/고친 테스트, 통과 여부(시나리오는 `qakit run`, Swift는 `qakit test` 출력 근거), 실행 횟수, 남은 문제.
+- **돌려 보지 못한 분기**(데이터를 바꿔야만 보이는 빈 화면·오류 화면 등)는 소스를 근거로 쓰되, 시나리오 주석과 NOTES.md에 "미검증 (이유)"로 적고 사용자 보고에도 넣는다. 그 분기를 보려고 되돌릴 수 없는 동작(찜 해제·삭제 등)을 하지 않는다.
 - 커밋은 사용자가 요청할 때만.
+- 상주 실행기는 30분 동안 명령이 없으면 스스로 끝난다. 바로 정리하려면 `qakit serve --stop`.
 
 ## 앱이 바뀌었을 때
 
