@@ -2363,6 +2363,20 @@ def save_serve_files(ws, res, run_dir=None):
     return written
 
 
+def timing_summary(timings):
+    """실행기 안 시간 나누기: 앱 실행 / 단계 / 그중 끼어드는 화면 확인, 오래 걸린 단계 (output.log·QAKIT_TIMING)."""
+    rows = [r for r in timings or [] if r]
+    launch = sum(r["seconds"] for r in rows if r.get("kind") == "launch")
+    steps = sum(r["seconds"] for r in rows if r.get("kind") != "launch" and r.get("depth") == 0)
+    interrupts = sum(r.get("interrupts", 0) for r in rows if r.get("kind") == "step")
+    head = f"앱 실행 {launch:.1f}초 · 단계 {steps:.1f}초 (그중 끼어드는 화면 확인 {interrupts:.1f}초)"
+    slow = sorted((r for r in rows if r.get("kind") == "step"), key=lambda r: -r["seconds"])[:5]
+    lines = [f"  {r['seconds']:5.1f}초  {r['name'][:90]}" for r in slow]
+    detail = [f"  {'  ' * r.get('depth', 0)}{r['seconds']:5.1f}초  {r['name'][:90]}"
+              + (f"  (끼어드는 화면 {r['interrupts']:.1f}초)" if r.get("interrupts") else "") for r in rows]
+    return head, lines, detail
+
+
 def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
     """qakit run을 상주 실행기로. 결과 폴더·latest·실행 기록·실패 요약은 xcodebuild 경로와 같은 모양으로 남긴다."""
     mask = masker(ws.secrets())
@@ -2392,10 +2406,13 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
         shot_path.write_bytes(base64.b64decode(res["screenshot"]))
     if res.get("dump"):
         (rd / "failure-dump.txt").write_text(mask(res["dump"]), encoding="utf-8")
+    head, slow, detail = timing_summary(res.get("timings"))
     (rd / "output.log").write_text(mask("\n".join(log + [
         f"via: qakit serve · {seconds}초 · {'통과' if success else '실패'}",
-        f"message: {res.get('message', '')}", "steps:"] + [f"  - {x}" for x in res.get("steps") or []])) + "\n",
-        encoding="utf-8")
+        f"message: {res.get('message', '')}", "steps:"] + [f"  - {x}" for x in res.get("steps") or []]
+        + ([f"timing: {head}"] + detail if detail else []))) + "\n", encoding="utf-8")
+    if detail and os.environ.get("QAKIT_TIMING"):
+        print(f"  ⏱  {head}\n  오래 걸린 단계:\n" + "\n".join(slow), file=sys.stderr)
     _relink(ws.results_dir / "latest", rd)
     latest_xcresult = ws.results_dir / "latest.xcresult"   # 이 실행에는 xcresult가 없다 → 예전 결과를 가리키지 않게
     if latest_xcresult.is_symlink() or latest_xcresult.exists():
