@@ -659,8 +659,31 @@ def ensure_device_runner(team):
     return list((build / "Build" / "Products").glob("*iphoneos*.xctestrun"))[0]
 
 
+def device_file_path(name):
+    """실기기 첨부 이름 → 결과 폴더 기준 경로. qakit 첨부가 아니면 None.
+    새 형식: qakit-file-<경로 16진수>. 예전 형식: qakit-file:<경로>, 그리고 xcresulttool이 ':'·'/'를 지운 qakit-filedumps<이름>."""
+    name = re.sub(r"_\d+_[0-9A-F-]{36}(\.\w+)?$", "", name)   # xcresult가 붙인 꼬리 제거
+    if name.endswith(".txt"):
+        name = name[:-4]
+    m = re.fullmatch(r"qakit-file-([0-9a-f]+)", name)
+    if m:
+        try:
+            rel = bytes.fromhex(m.group(1)).decode("utf-8")
+        except ValueError:
+            return None
+    elif name.startswith("qakit-file:"):
+        rel = name[len("qakit-file:"):]
+    elif name.startswith("qakit-filedumps"):
+        rel = "dumps/" + name[len("qakit-filedumps"):]
+    elif name == "qakit-fileui-dump":
+        rel = "ui-dump.txt"
+    else:
+        return None
+    return rel if rel.endswith(".txt") else rel + ".txt"
+
+
 def extract_device_files(ws, xcresult, run_dir):
-    """실기기 실행기가 첨부로 남긴 파일(qakit-file:<경로>)을 결과 폴더로 꺼낸다 (덤프 등)."""
+    """실기기 실행기가 첨부로 남긴 파일(qakit-file-<경로 16진수>)을 결과 폴더로 꺼낸다 (덤프 등)."""
     dest = Path(tempfile.mkdtemp())
     try:
         r = run(["xcrun", "xcresulttool", "export", "attachments", "--path", str(xcresult),
@@ -671,12 +694,10 @@ def extract_device_files(ws, xcresult, run_dir):
         mask = masker(ws.secrets())
         for entry in json.loads(manifest.read_text()):
             for a in entry.get("attachments", []):
-                name = a.get("suggestedHumanReadableName", "")
-                if not name.startswith("qakit-file:"):
+                rel = device_file_path(a.get("suggestedHumanReadableName", ""))
+                if not rel:
                     continue
-                rel = re.sub(r"_\d+_[0-9A-F-]{36}(\.\w+)?$", "", name[len("qakit-file:"):])   # xcresult가 붙인 꼬리 제거
-                rel = rel if rel.endswith(".txt") else rel + ".txt"
-                if ".." in Path(rel).parts:
+                if Path(rel).is_absolute() or ".." in Path(rel).parts:
                     continue
                 for target in (ws.results_dir / rel, run_dir / rel):
                     target.parent.mkdir(parents=True, exist_ok=True)
@@ -2274,6 +2295,21 @@ def serve_ready_for(ws, udid):
 SERVE_SUMMARY = "summary.txt"   # 상주 실행기로 돈 run의 요약 (xcresult 대신)
 
 
+def save_serve_files(ws, res, run_dir=None):
+    """상주 실행기 응답의 파일(실기기 시나리오 dump: 단계)을 xcodebuild 경로와 같은 곳에 쓴다. 쓴 경로 목록."""
+    mask = masker(ws.secrets())
+    written = []
+    for rel, content in (res.get("files") or {}).items():
+        rel = rel if rel.endswith(".txt") else rel + ".txt"
+        if Path(rel).is_absolute() or ".." in Path(rel).parts:
+            continue
+        for target in [ws.results_dir / rel] + ([run_dir / rel] if run_dir else []):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(mask(content), encoding="utf-8")
+        written.append(ws.results_dir / rel)
+    return written
+
+
 def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
     """qakit run을 상주 실행기로. 결과 폴더·latest·실행 기록·실패 요약은 xcodebuild 경로와 같은 모양으로 남긴다."""
     mask = masker(ws.secrets())
@@ -2292,6 +2328,7 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
         res = {"ok": False, "message": f"상주 실행기 연결 실패: {e}"}
     seconds = round(time.time() - started, 1)
     success = bool(res.get("ok"))
+    save_serve_files(ws, res, rd)
 
     log = [f"[qakit-note] 시나리오: {scenario.get('name')}"] + [f"[qakit-note] {n}" for n in res.get("notes") or []]
     for line in log[1:]:
@@ -3425,6 +3462,8 @@ def cmd_do(args):
             fail(f"상주 실행기에 연결하지 못했습니다: {e}", "다시 실행하면 새로 띄웁니다")
 
     secs = (res.get("durationMs") or 0) / 1000
+    for f in save_serve_files(ws, res):
+        info(f"덤프 저장: {f}")
     total = time.time() - t0
     # 실행기 시간만 보이면 첫 명령(실행기 시작)이 짧아 보인다 → 새로 띄웠으면 명령 전체 시간도
     extra_time = f" · 실행기 시작 포함 전체 {total:.0f}초" if fresh else ""

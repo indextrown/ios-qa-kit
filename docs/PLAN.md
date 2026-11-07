@@ -353,7 +353,7 @@ qakit serve --stop                   → POST /stop   → 테스트가 끝나고
 - 실기기는 xcodebuild 준비가 시뮬레이터보다 짧다 (시나리오 명령 전체 약 11초). 상주 실행기로 줄어드는 몫도 약 4초.
 - usbmuxd는 Wi-Fi로만 연결된 기기를 보지 못한다 → 아래 Wi-Fi 결과.
 - 기기 앱이 옛 빌드면 서비스 점검 화면이 떴다. 첫 `run`의 자동 동기화가 다시 설치하자 사라졌다.
-- 상주 실행기로 돈 실기기 `run`에서는 시나리오의 `dump:` 단계 파일이 남지 않는다 (기기는 첨부로 남기는데 상주 실행기는 xcresult를 꺼내지 않음). 필요하면 `--no-serve` (미결).
+- 상주 실행기로 돈 실기기 `run`에서는 시나리오의 `dump:` 단계 파일이 남지 않았다 (기기는 첨부로 남기는데 상주 실행기는 xcresult를 꺼내지 않음) → 2026-11-07 고침: 상주 실행기는 첨부 대신 응답(`files`)으로 받아 같은 곳에 쓴다. 이때 xcodebuild 경로도 깨져 있던 것을 찾았다: 지금 Xcode의 `xcresulttool export attachments`가 첨부 이름의 `:`·`/`를 지워(`qakit-file:dumps/x` → `qakit-filedumpsx`) qakit이 하나도 꺼내지 못했다 (`dump-ui --device`도). 이름에 경로를 16진수로 넣고(`qakit-file-<hex>`), 예전 형식도 읽게 했다.
 
 ### R5 Wi-Fi 결과 (2026-11-07, 같은 기기, USB 뺀 상태)
 

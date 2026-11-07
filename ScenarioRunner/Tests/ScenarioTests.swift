@@ -85,6 +85,10 @@ final class ScenarioTests: QATestCase {
         issues = []
         let started = Date()
         var json: [String: Any] = [:]
+        // 실기기: 시나리오 dump: 단계 파일을 첨부 대신 모아 응답으로 (qakit이 results/에 쓴다)
+        var files: [String: String] = [:]
+        QADump.fileSink = { files[$0] = $1 }
+        defer { QADump.fileSink = nil }
         var ok = true
         var message = ""
         switch request.path {
@@ -147,6 +151,7 @@ final class ScenarioTests: QATestCase {
                 json["screenshot"] = app.screenshot().pngRepresentation.base64EncodedString()
             }
         }
+        if !files.isEmpty { json["files"] = files }
         json["ok"] = ok
         json["message"] = message
         json["durationMs"] = Int(Date().timeIntervalSince(started) * 1000)
