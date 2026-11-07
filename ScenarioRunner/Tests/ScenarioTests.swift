@@ -29,11 +29,11 @@ final class ScenarioTests: QATestCase {
     }
 
     /// 상주 실행기 (docs/PLAN.md "상주 실행기 설계"). 끝나지 않는 테스트로 HTTP 서버를 열고 명령을 기다린다.
-    /// 인자: SERVE_STATE(포트·토큰을 쓸 파일), SERVE_TOKEN, SERVE_LAUNCH=0(앱을 띄우지 않음), SERVE_IDLE(초, 기본 1800)
+    /// 인자: SERVE_STATE(포트·토큰을 쓸 파일, 시뮬레이터), SERVE_PORT(열 포트, 실기기), SERVE_TOKEN, SERVE_LAUNCH=0(앱을 띄우지 않음), SERVE_IDLE(초, 기본 1800)
     func test_serve() throws {
         continueAfterFailure = true
         let server = QAServer(token: QAConfig.value("SERVE_TOKEN") ?? UUID().uuidString)
-        try server.start()
+        try server.start(port: UInt16(QAConfig.value("SERVE_PORT") ?? "") ?? 0)
         if let path = QAConfig.value("SERVE_STATE") {
             let state: [String: Any] = ["port": Int(server.port), "token": server.token,
                                         "pid": Int(ProcessInfo.processInfo.processIdentifier),
@@ -100,7 +100,8 @@ final class ScenarioTests: QATestCase {
             let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] ?? [:]
             let settle = (body["settle"] as? Double) ?? 0.5
             if let app {
-                do { json["dump"] = try QADump.run(app: app, settle: settle) } catch { ok = false; message = "\(error)" }
+                // 저장은 qakit 쪽에서 (실기기는 첨부가 쌓이지 않게)
+                do { json["dump"] = try QADump.run(app: app, settle: settle, save: false) } catch { ok = false; message = "\(error)" }
             } else {
                 ok = false
                 message = "앱이 실행되지 않음 (/launch 먼저)"

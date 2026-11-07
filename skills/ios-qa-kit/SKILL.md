@@ -63,7 +63,7 @@ qakit doctor           # ❌가 있으면 → 안내대로 해결
    - 명령 하나에 단계 하나 (`use:`는 펼쳐서 실행). 앱 상태와 `read`로 읽은 변수는 다음 `qakit do`로 이어진다. 처음부터 다시 하려면 `qakit do launch`, 변수만 비우려면 `qakit do reset`.
    - 실패하면 ❌ 원인과 `results/do-fail-dump.txt`(실패 시점 화면 구조)가 남고 실행기는 그대로 떠 있다 → 덤프를 보고 단계를 고쳐 다시 `qakit do`.
    - 되돌릴 수 없는 버튼(탈퇴·결제·삭제·전송)은 탐색 중에도 누르지 않는다 (절대 규칙 3).
-   - 실기기(`--device`)는 아직 안 된다 → 시뮬레이터로 탐색하고, 실기기는 `qakit run --device`로 확인한다. Swift 테스트 중심이면 `qakit dump-ui --wait-id <ID>` / 테스트를 돌린 뒤 `qakit dump-ui --attach`도 된다.
+   - 실기기는 `--device <이름>`을 붙인다 (`qakit do dump --device i`). **USB 케이블 연결이 필요하다** (Wi-Fi만이면 "USB로 연결되어 있지 않습니다" → 사용자에게 연결을 부탁하거나 시뮬레이터로 탐색). Swift 테스트 중심이면 `qakit dump-ui --wait-id <ID>` / 테스트를 돌린 뒤 `qakit dump-ui --attach`도 된다.
    - 덤프 형식: `#ID "라벨" @x,y WxH`. 맨 위에 ID 커버리지와 ID 없는 요소 목록이 있다.
 4. 스크린샷은 덤프로 판단이 안 될 때만 본다 (실패 요약에 경로가 있다).
 
@@ -171,7 +171,7 @@ qakit test SearchFlowTests/test_search_showsResults
 qakit test --reset FreshLoginTests            # 앱 재설치+키체인 초기화 후 (로그아웃 상태가 필요할 때)
 ```
 
-- **상주 실행기가 떠 있으면 `qakit run`은 자동으로 그쪽으로 돈다** (시나리오당 약 8초 빠름, 결과 폴더·실패 요약 형식은 같다). `qakit do`로 탐색했다면 이미 떠 있으므로 옵션 없이 `qakit run <이름>`이면 된다. 떠 있지 않은데 여러 번 고쳐 돌릴 것 같으면 `--serve`(없으면 띄움)를 붙인다 (떠 있을 때 붙여도 같다). 상주 실행기 쪽 문제로 의심되면 `--no-serve`로 xcodebuild 경로와 비교한다. `--bench`·`--device`는 늘 xcodebuild로 돈다.
+- **상주 실행기가 떠 있으면 `qakit run`은 자동으로 그쪽으로 돈다** (시나리오당 약 8초 빠름, 결과 폴더·실패 요약 형식은 같다). `qakit do`로 탐색했다면 이미 떠 있으므로 옵션 없이 `qakit run <이름>`이면 된다. 떠 있지 않은데 여러 번 고쳐 돌릴 것 같으면 `--serve`(없으면 띄움)를 붙인다 (떠 있을 때 붙여도 같다). 상주 실행기 쪽 문제로 의심되면 `--no-serve`로 xcodebuild 경로와 비교한다. `--bench`는 늘 xcodebuild로 돈다. 실기기(`--device`)도 USB로 연결되어 있으면 상주 실행기로 돈다.
 - 상주 실행기로 돈 실행은 xcresult 대신 결과 폴더에 `summary.txt`(요약)·`failure-dump.txt`·`failure.png`·`output.log`를 남긴다. `qakit summarize`는 두 경로 모두 마지막 실행의 요약을 보여 준다.
 - 앱 소스가 바뀌었으면 `qakit test`가 먼저 알아서 재빌드·ID 재생성한다.
 - 실패하면 출력된 요약(원인 / 마지막 단계 / 실패 시점 화면 구조)을 읽고 고친다. 더 필요하면 `qakit summarize`.

@@ -2040,28 +2040,93 @@ class ServeTimeout(Exception):
     pass
 
 
-def serve_request(st, path, body=None, timeout=120):
-    """상주 실행기에 요청. 응답 JSON. 제한 시간을 넘기면 ServeTimeout, 연결 실패는 ConnectionError."""
+USBMUXD_SOCKET = "/var/run/usbmuxd"
+
+
+def _usbmux_call(msg, timeout=5):
+    """usbmuxd에 plist 메시지 하나를 보내고 (소켓, 응답)을 돌려준다. Connect가 성공하면 그 소켓이 곧 기기 포트와의 연결이다."""
+    import plistlib
     import socket
-    import urllib.error
-    import urllib.request
-    data = json.dumps(body if body is not None else {}, ensure_ascii=False).encode()
-    req = urllib.request.Request(f"http://127.0.0.1:{st['port']}{path}", data=data, method="POST",
-                                 headers={"X-Qakit-Token": st["token"], "Content-Type": "application/json"})
+    import struct
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(timeout)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
+        sock.connect(USBMUXD_SOCKET)
+        body = plistlib.dumps(dict(msg, ClientVersionString="qakit", ProgName="qakit"))
+        sock.sendall(struct.pack("<IIII", 16 + len(body), 1, 8, 1) + body)   # 길이, 버전 1, plist 메시지, tag
+        head = b""
+        while len(head) < 16:
+            chunk = sock.recv(16 - len(head))
+            if not chunk:
+                raise ConnectionError("usbmuxd 연결이 끊김")
+            head += chunk
+        size = struct.unpack("<IIII", head)[0] - 16
+        data = b""
+        while len(data) < size:
+            chunk = sock.recv(size - len(data))
+            if not chunk:
+                raise ConnectionError("usbmuxd 연결이 끊김")
+            data += chunk
+        return sock, plistlib.loads(data)
+    except OSError as e:
+        sock.close()
+        raise ConnectionError(f"usbmuxd: {e}")
+
+
+def usbmux_device_id(udid):
+    """usbmuxd가 보는 기기 번호. 없으면 None (USB로 연결 안 됨)."""
+    sock, res = _usbmux_call({"MessageType": "ListDevices"})
+    sock.close()
+    want = udid.replace("-", "").lower()
+    for d in res.get("DeviceList", []):
+        props = d.get("Properties", {})
+        if str(props.get("SerialNumber", "")).replace("-", "").lower() == want:
+            return d.get("DeviceID")
+    return None
+
+
+def usbmux_connect(udid, port, timeout):
+    """기기 안 127.0.0.1:<port>로 가는 연결 (usbmuxd 포트 전달, iproxy와 같은 방식)."""
+    import struct
+    device_id = usbmux_device_id(udid)
+    if device_id is None:
+        raise ConnectionError("usbmuxd에 기기가 없음 (USB로 연결하고 잠금을 풀어 주세요)")
+    big_endian_port = struct.unpack("<H", struct.pack(">H", int(port)))[0]
+    sock, res = _usbmux_call({"MessageType": "Connect", "DeviceID": device_id, "PortNumber": big_endian_port})
+    if res.get("Number") != 0:
+        sock.close()
+        raise ConnectionError(f"기기 포트 {port}에 연결 거부 (usbmuxd {res.get('Number')})")
+    sock.settimeout(timeout)
+    return sock
+
+
+def serve_request(st, path, body=None, timeout=120):
+    """상주 실행기에 요청. 응답 JSON. 제한 시간을 넘기면 ServeTimeout, 연결 실패는 ConnectionError.
+    시뮬레이터는 Mac의 127.0.0.1, 실기기(st["usbmux"])는 usbmuxd로 기기 안 127.0.0.1에 붙는다."""
+    import http.client
+    import socket
+
+    class MuxConnection(http.client.HTTPConnection):
+        def connect(self):
+            self.sock = usbmux_connect(st["usbmux"], st["port"], timeout)
+
+    data = json.dumps(body if body is not None else {}, ensure_ascii=False).encode()
+    conn = (MuxConnection if st.get("usbmux") else http.client.HTTPConnection)("127.0.0.1", st["port"], timeout=timeout)
+    try:
+        conn.request("POST", path, body=data,
+                     headers={"X-Qakit-Token": st["token"], "Content-Type": "application/json"})
+        r = conn.getresponse()
+        raw = r.read().decode("utf-8")
         try:
-            return json.loads(e.read().decode("utf-8"))
+            return json.loads(raw)
         except ValueError:
-            return {"ok": False, "message": f"HTTP {e.code}"}
+            return {"ok": False, "message": f"HTTP {r.status}"}
     except (socket.timeout, TimeoutError):
         raise ServeTimeout(path)
-    except urllib.error.URLError as e:
-        if isinstance(e.reason, (socket.timeout, TimeoutError)):
-            raise ServeTimeout(path)
-        raise ConnectionError(str(e.reason))
+    except (OSError, http.client.HTTPException) as e:
+        raise ConnectionError(str(e) or type(e).__name__)
+    finally:
+        conn.close()
 
 
 def serve_alive(st):
@@ -2081,7 +2146,7 @@ def serve_stop(udid, reason=None, quiet=False, force=False):
     pid = st.get("pid")
     if _pid_alive(pid):
         if reason and not quiet:
-            info(f"상주 실행기를 멈춥니다 ({reason}와 같은 시뮬레이터를 쓰므로)")
+            info(f"상주 실행기를 멈춥니다 ({reason}와 같은 기기를 쓰므로)")
         if not force:
             try:
                 serve_request(st, "/stop", timeout=10)
@@ -2104,17 +2169,28 @@ def serve_start(ws, udid, idle=1800, launch=True):
     """test_serve를 백그라운드로 띄우고 포트·토큰을 받을 때까지 기다린다."""
     SERVE_DIR.mkdir(parents=True, exist_ok=True)
     ensure_autoid(ws)
-    if not app_installed(udid, ws.bundle_id):
-        fail(f"시뮬레이터에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app")
-    xctestrun = ensure_scenario_runner(udid)
     token = hashlib.sha1(os.urandom(32)).hexdigest()
+    extra = {"SERVE_TOKEN": token, "SERVE_IDLE": int(idle), "SERVE_LAUNCH": "1" if launch else "0"}
     ready_file = SERVE_DIR / f"{udid}.runner.json"
     ready_file.unlink(missing_ok=True)
-    extra = {"SERVE_STATE": ready_file, "SERVE_TOKEN": token, "SERVE_IDLE": int(idle),
-             "SERVE_LAUNCH": "1" if launch else "0"}
-    prefs = app_prefs_path(udid, ws.bundle_id)
-    if prefs:
-        extra["APP_PREFS"] = prefs
+    if ws.device:
+        # 기기 안 실행기는 Mac 파일에 못 쓴다 → 포트를 Mac이 정하고, 준비는 usbmuxd로 /ping 해서 안다
+        if usbmux_device_id(udid) is None:
+            fail(f"{ws.device['name']}이(가) USB로 연결되어 있지 않습니다.",
+                 "상주 실행기는 USB 포트 전달(usbmuxd)로 붙습니다. 케이블로 연결하고 잠금을 풀어 주세요")
+        if not device_app_installed(ws):
+            fail(f"{ws.device['name']}에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app --device ...")
+        xctestrun = ensure_device_runner(device_team(ws))
+        device_port = 20000 + int.from_bytes(os.urandom(2), "big") % 20000
+        extra["SERVE_PORT"] = device_port
+    else:
+        if not app_installed(udid, ws.bundle_id):
+            fail(f"시뮬레이터에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app")
+        xctestrun = ensure_scenario_runner(udid)
+        extra["SERVE_STATE"] = ready_file
+        prefs = app_prefs_path(udid, ws.bundle_id)
+        if prefs:
+            extra["APP_PREFS"] = prefs
     xcresult = SERVE_DIR / f"{udid}.xcresult"
     shutil.rmtree(xcresult, ignore_errors=True)
     log = SERVE_DIR / f"{udid}.log"
@@ -2125,9 +2201,18 @@ def serve_start(ws, udid, idle=1800, launch=True):
     with open(log, "w") as out:
         proc = subprocess.Popen(cmd, env=test_env(ws, extra), stdout=out, stderr=subprocess.STDOUT,
                                 start_new_session=True)
-    deadline = time.time() + 180
+    wait = 240 if ws.device else 180   # 실기기는 실행기 설치·실행이 더 걸린다
+    deadline = time.time() + wait
+    probe = {"port": extra.get("SERVE_PORT"), "token": token, "usbmux": udid} if ws.device else None
     while time.time() < deadline:
-        if ready_file.exists() and ready_file.stat().st_size:
+        if probe:
+            try:
+                if serve_request(probe, "/ping", timeout=5).get("ok"):
+                    ready_file.write_text(json.dumps({"port": probe["port"], "token": token}))
+                    break
+            except (ServeTimeout, ConnectionError):
+                pass
+        elif ready_file.exists() and ready_file.stat().st_size:
             break
         if proc.poll() is not None:
             tail = "\n   ".join(log.read_text(errors="replace").splitlines()[-15:])
@@ -2135,11 +2220,13 @@ def serve_start(ws, udid, idle=1800, launch=True):
         time.sleep(0.5)
     else:
         os.killpg(proc.pid, 15)
-        fail("상주 실행기가 180초 안에 준비되지 않았습니다.", f"로그: {log}")
+        fail(f"상주 실행기가 {wait}초 안에 준비되지 않았습니다.", f"로그: {log}")
     runner = json.loads(ready_file.read_text())
     st = {"udid": udid, "pid": proc.pid, "port": runner["port"], "token": runner["token"],
           "workspace": str(ws.root), "bundleId": ws.bundle_id, "runnerHash": scenario_runner_source_hash(),
           "started": datetime.datetime.now().isoformat(timespec="seconds"), "log": str(log)}
+    if ws.device:
+        st["usbmux"] = udid
     serve_state_file(udid).write_text(json.dumps(st, ensure_ascii=False, indent=2))
     ok(f"상주 실행기 준비됨 (포트 {st['port']}, {time.time() - started_at:.0f}초)")
     return st
@@ -2257,6 +2344,8 @@ def run_scenario_runner(ws, method, extra_env, label, quiet=False, history_name=
         udid = ws.device["udid"]
         if not device_app_installed(ws):
             fail(f"{ws.device['name']}에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app --device ...")
+        if method != "test_serve":
+            serve_stop(udid, reason=f"qakit {label}")
         xctestrun = ensure_device_runner(device_team(ws))
         # 기기 안 실행기는 Mac 파일을 못 읽는다 → 시나리오를 내용째 넘긴다
         if extra_env.get("SCENARIO_JSON"):
@@ -3037,8 +3126,8 @@ def _cmd_run(ws, args):
              + ("CPU + 함수별 CPU (Time Profiler)" if ws.device else
                 "CPU·메모리" + (" + 함수별 CPU(sample)" if profile else "")) + " 기록")
     info(f"시나리오 실행: {scenario.get('name')} ({path.name})")
-    if not bench and not ws.device and not args.no_serve:
-        udid = ensure_booted(ws)
+    if not bench and not args.no_serve:
+        udid = ws.device["udid"] if ws.device else ensure_booted(ws)
         if args.serve or serve_ready_for(ws, udid):
             if extra.get("RESET"):
                 serve_stop(udid, quiet=True)   # 재설치로 앱 데이터 경로가 바뀌므로 실행기를 새로 띄운다
@@ -3225,9 +3314,7 @@ def cmd_install_skill(args):
 # ─────────────────────────────── 명령: serve · do ───────────────────────────────
 
 def _serve_udid(ws):
-    if ws.device:
-        fail("상주 실행기는 아직 시뮬레이터만 지원합니다 (실기기는 docs/PLAN.md R5).", "--device 없이 실행")
-    return ensure_booted(ws)
+    return ws.device["udid"] if ws.device else ensure_booted(ws)
 
 
 def cmd_serve(args):
@@ -3237,7 +3324,8 @@ def cmd_serve(args):
     if args.status:
         if st and serve_alive(st):
             stale = st.get("runnerHash") != scenario_runner_source_hash()
-            ok(f"상주 실행기 실행 중: {ws.simulator} · 포트 {st['port']} · {st['started']} 시작 · {st['workspace']}"
+            where = f"실기기 {ws.device['name']} (USB)" if ws.device else ws.simulator
+            ok(f"상주 실행기 실행 중: {where} · 포트 {st['port']} · {st['started']} 시작 · {st['workspace']}"
                + (" (실행기 코드가 바뀜 → 다음 명령 때 다시 띄움)" if stale else ""))
         else:
             info("상주 실행기 없음" + (" (기록만 남아 있어 정리함)" if st else ""))
@@ -3291,7 +3379,9 @@ def cmd_do(args):
 
     t0 = time.time()
     with sim_lock(ws, f"qakit do {text[:40]}"):
+        before = (serve_load(udid) or {}).get("pid")
         st = serve_ensure(ws, udid)
+        fresh = st.get("pid") != before   # 이번에 실행기를 새로 띄웠나
         try:
             res = serve_request(st, path, body, timeout=args.timeout)
         except ServeTimeout:
@@ -3304,8 +3394,8 @@ def cmd_do(args):
 
     secs = (res.get("durationMs") or 0) / 1000
     total = time.time() - t0
-    # 실행기 시간만 보이면 첫 명령(실행기 시작)이 짧아 보인다 → 차이가 크면 명령 전체 시간도
-    extra_time = f" · 실행기 시작 포함 전체 {total:.0f}초" if total - secs > 5 else ""
+    # 실행기 시간만 보이면 첫 명령(실행기 시작)이 짧아 보인다 → 새로 띄웠으면 명령 전체 시간도
+    extra_time = f" · 실행기 시작 포함 전체 {total:.0f}초" if fresh else ""
     dump = res.get("dump")
     if res.get("ok"):
         if path == "/dump" and dump:
