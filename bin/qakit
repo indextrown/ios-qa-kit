@@ -27,6 +27,7 @@ import argparse
 import base64
 import contextlib
 import fcntl
+import functools
 import datetime
 import hashlib
 import json
@@ -1025,6 +1026,7 @@ def cmd_readme(args):
     ok(f"{ws.root / 'README.md'}")
 
 
+@functools.lru_cache(maxsize=None)
 def kit_version():
     v = (KIT_DIR / "VERSION").read_text().strip() if (KIT_DIR / "VERSION").exists() else "dev"
     c = git(KIT_DIR, "rev-parse", "--short", "HEAD")
@@ -1776,14 +1778,18 @@ def prefetch_worktree(ws):
         return
     base = ws.worktree_base
     key = (str(ws.app_dir), None if "*" in base else base)
-    if key not in PREFETCH:
+    if key not in PREFETCH and key not in FETCHED:
         t = threading.Thread(target=_git_fetch_now, args=key, daemon=True)
         t.start()
         PREFETCH[key] = t
 
 
+FETCHED = set()
+
+
 def _git_quiet_fetch(repo_dir, branch):
     """branch가 None이면 origin 전체를 가져온다 (패턴으로 브랜치를 고를 때). 미리 시작한 fetch가 있으면 그것을 기다린다."""
+    FETCHED.add((str(repo_dir), branch))
     t = PREFETCH.pop((str(repo_dir), branch), None)
     if t:
         t.join(timeout=35)
@@ -1891,7 +1897,14 @@ def cmd_worktree_update(args):
     update_worktree(ws, base=args.base, check_only=args.check)
 
 
+AUTO_SYNCED = set()
+
+
 def auto_sync(ws):
+    """test/run 전 앱 변경 반영. 한 명령 안에서는 한 번만 (qakit run 여러 개)."""
+    if str(ws.root) in AUTO_SYNCED:
+        return
+    AUTO_SYNCED.add(str(ws.root))
     follow_worktree(ws)
     if ws.sync_mode == "off":
         return
@@ -2535,8 +2548,18 @@ def id_sources_fingerprint(ws):
     return h.hexdigest()
 
 
+KNOWN_IDS = {}
+
+
 def known_ids(ws):
-    """앱에 있는 ID 전체 (시나리오 정적 검사용). 앱 소스·도구가 지난번과 같으면 파싱하지 않고 저장해 둔 목록을 쓴다."""
+    """앱에 있는 ID 전체 (시나리오 정적 검사용). 앱 소스·도구가 지난번과 같으면 파싱하지 않고 저장해 둔 목록을 쓴다.
+    한 명령 안에서는 재사용한다 (qakit run 여러 개)."""
+    if str(ws.root) not in KNOWN_IDS:
+        KNOWN_IDS[str(ws.root)] = _known_ids(ws)
+    return KNOWN_IDS[str(ws.root)]
+
+
+def _known_ids(ws):
     key = id_sources_fingerprint(ws)
     cached = load_state(ws, "ids-check")
     if cached and cached.get("key") == key and ws.ids_file.exists():
@@ -2585,13 +2608,59 @@ def count_steps(steps):
     return n
 
 
+def expand_scenario_args(ws, items):
+    """시나리오 인자 → 이름 목록. 'home-*' 같은 패턴은 scenarios/의 이름에 맞춰 펼친다 (순서 유지, 중복 제거)."""
+    import fnmatch
+    available = [f.name[:-len(".qa.yml")] for f in sorted((ws.root / "scenarios").glob("*.qa.yml"))]
+    names = []
+    for item in items:
+        if any(c in item for c in "*?["):
+            pattern = item[:-len(".qa.yml")] if item.endswith(".qa.yml") else item
+            matched = [n for n in available if fnmatch.fnmatch(n, pattern)]
+            if not matched:
+                fail(f"'{item}'에 맞는 시나리오가 없습니다.", "scenarios/ 목록: " + (", ".join(available) or "(없음)"))
+            names += matched
+        else:
+            names.append(item)
+    return list(dict.fromkeys(names))
+
+
 def cmd_run(args):
     ws = find_workspace(args.workspace)
+    names = expand_scenario_args(ws, args.scenario)
+    if len(names) > 1 and args.bench:
+        fail("--bench는 시나리오 하나만 측정합니다.", f"예) qakit run {names[0]} --bench 1m")
     try:
-        with sim_lock(ws, f"qakit run {args.scenario}"):
-            _cmd_run(ws, args)
+        with sim_lock(ws, "qakit run " + " ".join(names)[:80]):
+            if len(names) == 1:
+                _cmd_run(ws, args, names[0])
+            else:
+                run_many(ws, args, names)
     finally:
         update_readme(ws)
+
+
+def run_many(ws, args, names):
+    """시나리오 여러 개를 차례로. 준비(워크트리 최신화·앱 변경 확인·ID 검사)는 한 번만, 판정·결과 폴더는 시나리오마다.
+    하나가 실패해도 나머지를 돌리고, 끝에 요약. 하나라도 실패하면 종료 코드 1."""
+    results = []
+    started = time.time()
+    for i, name in enumerate(names, 1):
+        print(f"\n━━ [{i}/{len(names)}] {name}", flush=True)
+        t = time.time()
+        try:
+            _cmd_run(ws, args, name)
+            passed = True
+        except SystemExit as e:
+            passed = e.code in (0, None)
+        results.append((name, passed, time.time() - t))
+    failed = [n for n, ok_, _ in results if not ok_]
+    print(f"\n── 결과: 통과 {len(results) - len(failed)} / 실패 {len(failed)} / 전체 {len(results)} "
+          f"({time.time() - started:.1f}초)")
+    for name, passed, secs in results:
+        print(f"   {'✅' if passed else '❌'} {name}  {secs:.1f}초")
+    if failed:
+        fail(f"실패 {len(failed)}개: " + ", ".join(failed), "실패한 것만 다시: qakit run " + " ".join(failed))
 
 
 # ─────────────────────────────── 성능 측정 (run --bench) ───────────────────────────────
@@ -3243,9 +3312,9 @@ def write_bench_summary(base, seconds, scenario, ws, s):
     return path, lines
 
 
-def _cmd_run(ws, args):
+def _cmd_run(ws, args, name):
     prefetch_worktree(ws)
-    path, scenario = load_checked_scenario(ws, args.scenario, strict=not args.no_check)
+    path, scenario = load_checked_scenario(ws, name, strict=not args.no_check)
     overrides = {}
     for item in args.var or []:
         key, sep, value = item.partition("=")
@@ -3801,7 +3870,8 @@ def main():
     p.set_defaults(func=cmd_test)
 
     p = sub.add_parser("run", help="시나리오 파일(.qa.yml) 실행 — Swift 테스트 없이")
-    p.add_argument("scenario", help="scenarios/<이름>.qa.yml의 이름 또는 파일 경로")
+    p.add_argument("scenario", nargs="+",
+                   help="scenarios/<이름>.qa.yml의 이름·파일 경로, 여러 개 가능. 패턴은 따옴표로: 'home-*'")
     p.add_argument("--reset", action="store_true", help="실행 전 앱 재설치 + 키체인 초기화")
     p.add_argument("--no-check", action="store_true", help="ID 정적 검사 실패해도 실행")
     p.add_argument("--bench", metavar="시간",

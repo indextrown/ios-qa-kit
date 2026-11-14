@@ -166,6 +166,7 @@ final class ItemListFlowTests: QATestCase {
 qakit check menu-open-close                   # 시나리오 파일: 형식·ID 정적 검사
 qakit run menu-open-close                     # 시나리오 파일 실행 (실패 요약은 Swift와 같은 형식)
 qakit run menu-open-close --serve             # 상주 실행기가 없어도 띄워서 (반복 실행이 빠름)
+qakit run 'menu-*' --reuse-app                # 여러 개를 차례로 (준비는 한 번, 끝에 요약). 패턴은 따옴표로
 qakit test SearchFlowTests                    # 클래스
 qakit test SearchFlowTests/test_search_showsResults
 qakit test --reset FreshLoginTests            # 앱 재설치+키체인 초기화 후 (로그아웃 상태가 필요할 때)

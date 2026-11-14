@@ -277,6 +277,7 @@ cp secrets.example.txt secrets.txt
 | 전체 테스트 실행 (토큰 0) | `qakit test` |
 | 테스트 하나만 | `qakit test LoginTests` |
 | 시나리오 파일 실행 | `qakit run <시나리오>` |
+| 여러 시나리오를 한 번에 | `qakit run 'home-*' --reuse-app` (끝에 통과·실패 요약) |
 | 시나리오를 빠르게 반복 실행 | `qakit run <시나리오> --serve` ([상주 실행기](#빠르게-돌리고-눌러-보기-qakit-serve--qakit-do)) |
 | 화면을 한 단계씩 눌러 보기 | `qakit do 'tap: <ID>'` · `qakit do dump` |
 | 값을 바꿔 실행 (매개변수) | `qakit run <시나리오> --var ship="선박명"` |
@@ -1142,6 +1143,8 @@ worktree:
 | `qakit run <시나리오> [--reset] [--var 키=값]` | 시나리오 파일 실행 (`--var`: `vars` 기본값 대신 이번 실행에 쓸 값. 여러 번 가능) |
 | `qakit run <시나리오> --bench <시간> [--no-profile]` | 시나리오가 끝난 화면 그대로 그 시간 동안 CPU·메모리(1초 단위) + 함수별 CPU(`sample`) 기록. Time Profiler는 실기기(`--device`)에서만. 시간은 단위 필수: `30s`·`5m`·`1h`·`1h30m` (`30초`·`5분`·`1시간`도 됨, 최소 5초). 1분 이하는 전체를, 더 길면 3분마다 20초씩 함수를 찍는다. 권한 불필요. `--no-profile`: CPU·메모리만 |
 | `qakit run <시나리오> --device [select\|last\|이름]` | 실기기에서 실행. 값을 빼면 방향키 목록에서 고름. `--bench`와 같이 쓰면 Time Profiler로 측정 ([실기기에서 실행](#실기기에서-실행---device)) |
+| `qakit run <시나리오> <시나리오> …` · `qakit run 'home-*'` | 여러 개를 차례로 (준비는 한 번, 끝에 요약, 하나라도 실패하면 종료 코드 1) |
+| `qakit run <시나리오> --reuse-app` | 앱이 이미 시작 화면(`start:`)이면 다시 켜지 않음 |
 | `qakit run <시나리오> --serve \| --no-serve` | 상주 실행기로 / xcodebuild로 실행 (기본: 상주 실행기가 떠 있으면 그쪽으로) |
 | `qakit serve [--stop\|--status]` | 상주 실행기 띄우기·멈추기·상태 (실기기는 `--device`, USB·Wi-Fi) ([설명](#빠르게-돌리고-눌러-보기-qakit-serve--qakit-do)) |
 | `qakit do '<단계>'` · `qakit do dump\|launch\|reset` | 시나리오 단계 하나를 바로 실행 (1~2초) · 화면 구조 · 앱 다시 실행 · 변수 비우기 |
