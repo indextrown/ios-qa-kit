@@ -2459,6 +2459,7 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
     text = mask("\n".join(out))
     (rd / SERVE_SUMMARY).write_text(text + "\n", encoding="utf-8")   # qakit summarize가 다시 보여 준다
     print(text)
+    LAST_FAILURE["sig"] = (res.get("message", ""), (res.get("steps") or [""])[-1])
     fail("실패", f"자세한 결과: {rd}")
 
 
@@ -2640,27 +2641,53 @@ def cmd_run(args):
         update_readme(ws)
 
 
+LAST_FAILURE = {}   # 마지막 실패의 (원인, 마지막 단계) — 여러 개 실행에서 같은 원인 연속 실패를 알아본다
+
+
 def run_many(ws, args, names):
     """시나리오 여러 개를 차례로. 준비(워크트리 최신화·앱 변경 확인·ID 검사)는 한 번만, 판정·결과 폴더는 시나리오마다.
-    하나가 실패해도 나머지를 돌리고, 끝에 요약. 하나라도 실패하면 종료 코드 1."""
-    results = []
+    하나가 실패해도 나머지를 돌리고, 끝에 요약. 하나라도 실패하면 종료 코드 1.
+    연속한 두 시나리오가 같은 원인·같은 단계에서 실패하면 환경 문제(로그아웃·서버 점검 등)로 보고 멈춘다
+    (--keep-going: 끝까지, --fail-fast: 첫 실패에서 멈춤)."""
+    results = []   # (이름, 통과, 초, 실패 표시)
     started = time.time()
+    stop_reason = None
     for i, name in enumerate(names, 1):
         print(f"\n━━ [{i}/{len(names)}] {name}", flush=True)
         t = time.time()
+        LAST_FAILURE.clear()
         try:
             _cmd_run(ws, args, name)
             passed = True
         except SystemExit as e:
             passed = e.code in (0, None)
-        results.append((name, passed, time.time() - t))
-    failed = [n for n, ok_, _ in results if not ok_]
-    print(f"\n── 결과: 통과 {len(results) - len(failed)} / 실패 {len(failed)} / 전체 {len(results)} "
-          f"({time.time() - started:.1f}초)")
-    for name, passed, secs in results:
+        sig = None if passed else LAST_FAILURE.get("sig")
+        results.append((name, passed, time.time() - t, sig))
+        if passed or i == len(names):
+            continue
+        if args.fail_fast:
+            stop_reason = "--fail-fast: 첫 실패에서 멈춤"
+            break
+        prev = results[-2] if len(results) >= 2 else None
+        if not args.keep_going and sig and prev and not prev[1] and prev[3] == sig:
+            stop_reason = ("같은 원인으로 연속 2번 실패 → 환경 문제(로그아웃·서버 점검·앱 상태 등)로 보고 멈춤\n"
+                           f"   원인: {sig[0]}" + (f"\n   단계: {sig[1]}" if sig[1] else ""))
+            break
+    skipped = names[len(results):]
+    failed = [r[0] for r in results if not r[1]]
+    print(f"\n── 결과: 통과 {len(results) - len(failed)} / 실패 {len(failed)}"
+          + (f" / 건너뜀 {len(skipped)}" if skipped else "") + f" / 전체 {len(names)} ({time.time() - started:.1f}초)")
+    for name, passed, secs, _ in results:
         print(f"   {'✅' if passed else '❌'} {name}  {secs:.1f}초")
-    if failed:
-        fail(f"실패 {len(failed)}개: " + ", ".join(failed), "실패한 것만 다시: qakit run " + " ".join(failed))
+    for name in skipped:
+        print(f"   ⏭  {name}  (돌리지 않음)")
+    if stop_reason:
+        warn(stop_reason)
+    if failed or skipped:
+        hint = ("실패·건너뜀만 다시: " if skipped else "실패한 것만 다시: ") + "qakit run " + " ".join(failed + skipped)
+        if skipped and not args.fail_fast:
+            hint += "\n   (환경을 확인한 뒤. 같은 원인이어도 끝까지 돌리려면 --keep-going)"
+        fail(f"실패 {len(failed)}개" + (f", 건너뜀 {len(skipped)}개" if skipped else ""), hint)
 
 
 # ─────────────────────────────── 성능 측정 (run --bench) ───────────────────────────────
@@ -3406,7 +3433,12 @@ def _cmd_run(ws, args, name):
     if success:
         ok(f"통과 — 결과: {xcresult}")
         return
-    print(summarize(xcresult, masker(ws.secrets())))
+    text = summarize(xcresult, masker(ws.secrets()))
+    print(text)
+    cause = re.search(r"원인: (.*)", text)
+    last = re.search(r"마지막 단계:\s*(?:\n\s*-\s*)?(.*)", text)
+    if cause:
+        LAST_FAILURE["sig"] = (cause.group(1).strip(), last.group(1).strip() if last else "")
     fail("실패", f"자세한 결과: {xcresult}")
 
 
@@ -3873,6 +3905,10 @@ def main():
     p.add_argument("scenario", nargs="+",
                    help="scenarios/<이름>.qa.yml의 이름·파일 경로, 여러 개 가능. 패턴은 따옴표로: 'home-*'")
     p.add_argument("--reset", action="store_true", help="실행 전 앱 재설치 + 키체인 초기화")
+    stop = p.add_mutually_exclusive_group()
+    stop.add_argument("--fail-fast", action="store_true", help="여러 개 실행: 첫 실패에서 멈춤")
+    stop.add_argument("--keep-going", action="store_true",
+                      help="여러 개 실행: 같은 원인으로 연속 실패해도 끝까지 (기본은 2번 연속이면 멈춤)")
     p.add_argument("--no-check", action="store_true", help="ID 정적 검사 실패해도 실행")
     p.add_argument("--bench", metavar="시간",
                    help="시나리오가 끝난 화면 그대로 이 시간 동안 CPU·메모리 + 함수별 CPU(sample) 기록. "

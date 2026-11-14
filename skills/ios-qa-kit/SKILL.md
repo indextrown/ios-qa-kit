@@ -167,6 +167,7 @@ qakit check menu-open-close                   # 시나리오 파일: 형식·ID 
 qakit run menu-open-close                     # 시나리오 파일 실행 (실패 요약은 Swift와 같은 형식)
 qakit run menu-open-close --serve             # 상주 실행기가 없어도 띄워서 (반복 실행이 빠름)
 qakit run 'menu-*' --reuse-app                # 여러 개를 차례로 (준비는 한 번, 끝에 요약). 패턴은 따옴표로
+                                              # 같은 원인으로 연속 2번 실패하면 멈춤 → 로그아웃 등 환경을 먼저 확인
 qakit test SearchFlowTests                    # 클래스
 qakit test SearchFlowTests/test_search_showsResults
 qakit test --reset FreshLoginTests            # 앱 재설치+키체인 초기화 후 (로그아웃 상태가 필요할 때)
@@ -174,7 +175,7 @@ qakit test --reset FreshLoginTests            # 앱 재설치+키체인 초기�
 
 - **상주 실행기가 떠 있으면 `qakit run`은 자동으로 그쪽으로 돈다** (시나리오당 약 8초 빠름, 결과 폴더·실패 요약 형식은 같다). `qakit do`로 탐색했다면 이미 떠 있으므로 옵션 없이 `qakit run <이름>`이면 된다. 떠 있지 않은데 여러 번 고쳐 돌릴 것 같으면 `--serve`(없으면 띄움)를 붙인다 (떠 있을 때 붙여도 같다). 상주 실행기 쪽 문제로 의심되면 `--no-serve`로 xcodebuild 경로와 비교한다. `--bench`는 늘 xcodebuild로 돈다. 실기기(`--device`)도 USB·Wi-Fi 모두 상주 실행기로 돈다.
 - 상주 실행기로 돈 실행은 xcresult 대신 결과 폴더에 `summary.txt`(요약)·`failure-dump.txt`·`failure.png`·`output.log`를 남긴다. `qakit summarize`는 두 경로 모두 마지막 실행의 요약을 보여 준다.
-- **같은 시나리오를 고쳐 가며 반복 실행할 때**: 시나리오에 `start:`(시작 화면 조건)가 있으면 `qakit run <이름> --reuse-app`으로 앱 재실행을 건너뛴다 (시작 화면이 아니면 알아서 다시 켬). 마지막 확인은 옵션 없이 돌려 처음부터 통과하는지 본다. 문법: scenario-language.md "앱 재실행 생략".
+- **같은 시나리오를 고쳐 가며 반복 실행할 때**: 시나리오에 `start:`(시작 화면 조건)가 있으면 `qakit run <이름> --reuse-app`으로 앱 재실행을 건너뛴다 (`start:`는 진입 공통 단계 `steps/<이름>.qa.yml`에 한 번 적으면 그 단계로 시작하는 시나리오가 물려받는다) (시작 화면이 아니면 알아서 다시 켬). 마지막 확인은 옵션 없이 돌려 처음부터 통과하는지 본다. 문법: scenario-language.md "앱 재실행 생략".
 - 앱 소스가 바뀌었으면 `qakit test`가 먼저 알아서 재빌드·ID 재생성한다.
 - 실패하면 출력된 요약(원인 / 마지막 단계 / 실패 시점 화면 구조)을 읽고 고친다. 더 필요하면 `qakit summarize`.
 - 컴파일 에러는 테스트 실행 전에 원인만 출력된다 → 그대로 고친다.
