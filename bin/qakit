@@ -3745,6 +3745,7 @@ def cmd_update(args):
     r = run(["git", "-C", str(repo), "merge", "--ff-only", "--quiet", "@{u}"], check=False)
     if r.returncode != 0:
         fail("업데이트 실패", (r.stdout or "")[-400:])
+    kit_version.cache_clear()   # 한 명령 안에서 기억해 둔 옛 버전 대신 받은 뒤의 버전을 읽는다
     ok(f"업데이트 완료: qakit {kit_version()}")
 
     # 명령·스킬 링크가 이 폴더를 가리키는지 (다른 폴더를 가리키면 업데이트가 반영되지 않는다)
