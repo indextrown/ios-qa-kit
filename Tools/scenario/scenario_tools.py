@@ -255,10 +255,30 @@ def load_scenario(path, qa_root):
     if not isinstance(data, dict) or "steps" not in data:
         raise YamlError(f"{path}: 맨 위에 steps: 가 있어야 합니다")
     data.setdefault("name", Path(path).stem.replace(".qa", ""))
+    if not data.get("start"):
+        # 시작 화면 조건(launch: reuse·--reuse-app용)이 없으면 첫 공통 단계(use:)의 start:를 물려받는다
+        inherited = _inherited_start(data["steps"], qa_root, [Path(path).name])
+        if inherited:
+            data["start"] = inherited
     data["steps"] = _expand(data["steps"], qa_root, [Path(path).name])
     if data.get("interrupts") is not None:
         data["interrupts"] = _expand(data["interrupts"], qa_root, [Path(path).name])
     return data
+
+
+def _inherited_start(steps, qa_root, stack):
+    """첫 단계(note는 건너뜀)가 use: X면 steps/X의 start:. X에도 없으면 X의 첫 use:를 따라 내려간다."""
+    first = next((s for s in steps if not (isinstance(s, dict) and set(s) <= {"note"})), None) if isinstance(steps, list) else None
+    if not (isinstance(first, dict) and "use" in first):
+        return None
+    name = first["use"]
+    f = qa_root / "steps" / f"{name}.qa.yml"
+    if not f.exists() or name in stack:
+        return None
+    sub = parse_yaml(f.read_text(encoding="utf-8"))
+    if not isinstance(sub, dict):
+        return None
+    return sub.get("start") or _inherited_start(sub.get("steps", []), qa_root, stack + [name])
 
 
 def _expand(steps, qa_root, stack):
