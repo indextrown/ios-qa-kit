@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { get, type Info, type Job } from "./lib/api";
 import { useHash } from "./lib/util";
-import { Layout } from "./components/Layout";
+import { Layout, NAV_LABEL } from "./components/Layout";
 import { Runs } from "./pages/Runs";
 import { RunDetail } from "./pages/RunDetail";
 import { Scenarios } from "./pages/Scenarios";
@@ -50,5 +50,12 @@ export function App() {
     catch (e) { alert(`실행하지 못함: ${(e as Error).message}`); }
   }} />;
   else page = <Runs />;
-  return <Layout active={active} info={info} running={!!job?.running}>{page}</Layout>;
+  // 위치 경로: 작업공간 › 메뉴 › (실행 결과·AI 세션·편집 중인 파일·기기)
+  const rest = decodeURIComponent(hash.slice(2).split("/").slice(1).join("/"));
+  const crumbs = [info?.name ?? "qakit", NAV_LABEL[active] ?? active];
+  if (hash.startsWith("#/run/")) crumbs.push(decodeURIComponent(hash.slice(6)));
+  else if (active === "ai" && rest) crumbs.push(rest);
+  else if (active === "edit" && rest) crumbs.push(rest.split("/").slice(1).join("/") || rest);
+  else if (active === "live" || !hash.slice(2)) crumbs.push(info?.device ? `실기기 ${info.device}` : info?.simulator ?? "");
+  return <Layout active={active} info={info} running={!!job?.running} crumbs={crumbs.filter(Boolean)}>{page}</Layout>;
 }

@@ -38,6 +38,8 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   const [streaming, setStreaming] = useState(() => stored("qakit-live", true));
   const [interval, setIntervalMs] = useState(() => stored("qakit-live-ms", 1000));
   const [boxes, setBoxes] = useState(() => stored("qakit-boxes", true));
+  const [tab, setTab] = useState<Tab>(() => stored<Tab>("qakit-live-tab", "act"));   // 오른쪽 패널 탭
+  useEffect(() => store("qakit-live-tab", tab), [tab]);
   // 화면 방식: 실시간(시뮬레이터 화면을 바로 읽어 영상으로) · 스크린샷(정해진 간격으로 사진). 실시간이 안 되면 스크린샷으로
   const [mode, setMode] = useState<"stream" | "shot">(() => stored("qakit-screen-mode", "stream"));
   const [streamNote, setStreamNote] = useState<string | null>(null);
@@ -124,6 +126,13 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   }, [ai.active, loadEls, loadSteps]);
   const wasBusy = useRef(false);
   const jobBusy = !!job?.running;
+  const jobIsRun = jobBusy && !!job?.args && !job?.draft;
+  const prevRun = useRef(jobIsRun), prevAi = useRef(!!ai.active);
+  useEffect(() => {   // 시나리오 실행이 시작되면 그 탭으로, AI가 조작을 시작하면 AI 탭으로
+    if (jobIsRun && !prevRun.current) setTab("run");
+    if (ai.active && !prevAi.current) setTab("ai");
+    prevRun.current = jobIsRun; prevAi.current = !!ai.active;
+  }, [jobIsRun, ai.active]);
   useEffect(() => {   // 재생(시나리오 실행)이 끝나면 화면 구조·기록을 다시 읽는다. AI 조작 사이에는 읽지 않음 (실행기를 같이 쓰면 AI 조작이 늦어짐)
     if (wasBusy.current && !jobBusy) { loadEls(); loadSteps(); }
     wasBusy.current = jobBusy;
@@ -189,39 +198,40 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     ["보이는지 확인", `expect: { visible: ${selector} }`, CheckCircle2], ["위로 쓸기", `swipe: { on: ${selector}, dir: up }`, ArrowUp],
     ["아래로 쓸기", `swipe: { on: ${selector}, dir: down }`, ArrowDown]] : [];
 
+  const recSecs = rec ? Math.max(0, Math.floor(now / 1000 - rec.started)) : 0;
+  const lock = ai.busy ? `AI(${ai.client ?? "MCP"}) 조작 중 — 조작 잠김` : busy ? "시나리오 실행 중 — 조작 잠김" : null;
+  const notice = capMsg ?? streamNote ?? shotError;
+
   return (
     <>
-      <PageHeader title="라이브 세션" description="화면을 눌러 요소를 고르고 실행합니다 ('누르면 탭'을 켜면 바로 탭) (qakit do — ID 우선, 없으면 라벨). 통과한 단계는 기록됩니다."
-        actions={ai.busy ? <Badge tone="warn">AI({ai.client ?? "MCP"}) 조작 중 — 조작 잠김</Badge> : busy && <Badge tone="warn">시나리오 실행 중 — 조작 잠김</Badge>} />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <div className="flex flex-col items-center">
-          <div className="mb-3 flex flex-wrap items-center gap-1 rounded-lg bg-card p-1 shadow-e1">
-            <Button size="sm" variant="ghost" onClick={() => setStreaming(!streaming)} title="화면 갱신">
-              {streaming ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}{streaming ? "일시정지" : "재생"}</Button>
-            <Button size="sm" variant="ghost" title="실시간: 시뮬레이터 화면을 바로 읽어 영상으로 (시뮬레이터 창 필요 없음) · 스크린샷: 정해진 간격으로 사진"
+      <PageHeader title="라이브 세션" description="화면을 눌러 요소를 고르고 실행합니다 (ID 우선, 없으면 라벨). 통과한 단계는 기록돼 시나리오로 저장할 수 있습니다." />
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
+        <div className="flex items-start justify-center gap-4">
+          {/* 세로 도구 막대 */}
+          <div className="sticky top-4 flex flex-col gap-0.5 rounded-xl bg-card p-1 ring-1 ring-line">
+            <ToolBtn label={streaming ? "화면 갱신 멈춤" : "화면 갱신 다시"} onClick={() => setStreaming(!streaming)}>
+              {streaming ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}</ToolBtn>
+            <ToolBtn label={mode === "stream" ? "실시간 → 스크린샷으로" : "스크린샷 → 실시간으로"} active={mode === "stream"}
               onClick={() => { setStreamNote(null); setStreamKey(Date.now()); setMode(mode === "stream" ? "shot" : "stream"); }}>
-              {mode === "stream" ? <Radio className="h-3.5 w-3.5" /> : <ImageIcon className="h-3.5 w-3.5" />}{mode === "stream" ? "실시간" : "스크린샷"}</Button>
-            {mode === "shot" ? (
-              <select value={interval} onChange={(e) => setIntervalMs(Number(e.target.value))} className="h-7 rounded-md bg-transparent px-1.5 text-[12px] text-sub outline-none hover:bg-muted">
-                {[500, 1000, 2000, 5000].map((v) => <option key={v} value={v}>{v / 1000}초</option>)}
-              </select>
-            ) : <span className="w-12 text-center font-mono text-[11px] text-sub" title="화면이 바뀔 때만 보냅니다 (멈춰 있으면 0에 가까움)">{liveOn ? `${fps}fps` : ""}</span>}
-            <span className="mx-1 h-4 w-px bg-line" />
-            <Button size="sm" variant="ghost" onClick={() => doStep("launch")} disabled={working}><RotateCcw className="h-3.5 w-3.5" />앱 다시 켜기</Button>
-            <Button size="sm" variant="ghost" onClick={loadEls} loading={dumping}><ScanLine className="h-3.5 w-3.5" />화면 구조</Button>
-            <span className="mx-1 h-4 w-px bg-line" />
-            <Button size="sm" variant="ghost" onClick={saveShot} title="지금 화면을 사진으로 내려받기 (원래 해상도)"><Camera className="h-3.5 w-3.5" />사진</Button>
-            <Button size="sm" variant="ghost" onClick={toggleRec} title="화면 녹화 — 멈추면 results/recordings/에 남기고 내려받기"
-              className={cx(rec && "text-bad")}>{rec ? <StopIcon className="h-3.5 w-3.5 fill-current" /> : <Circle className="h-3.5 w-3.5" />}
-              {rec ? `녹화 ${Math.max(0, Math.floor(now / 1000 - rec.started))}s` : "녹화"}</Button>
-            <Button size="sm" variant="ghost" onClick={() => setBoxes(!boxes)}>{boxes ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}요소</Button>
-            <Button size="sm" variant="ghost" onClick={() => setCursor(!cursor)} title="누르는 자리 보기: 실행기(라이브 조작·qakit do·시나리오 실행)가 누르는 곳으로 커서가 움직이고, 마우스는 손가락 원으로"
-              className={cx(cursor ? "bg-muted font-medium" : "text-sub")}><MousePointer2 className="h-3.5 w-3.5" />커서 {cursor ? "켬" : "끔"}</Button>
-            <Button size="sm" variant="ghost" onClick={() => setClickTap(!clickTap)} title="켜면 화면을 누르는 즉시 그 요소를 탭합니다 (끄면 고르기만)"
-              className={cx(clickTap ? "bg-muted font-medium" : "text-sub")}><MousePointerClick className="h-3.5 w-3.5" />누르면 탭 {clickTap ? "켬" : "끔"}</Button>
+              {mode === "stream" ? <Radio className="h-4 w-4" /> : <ImageIcon className="h-4 w-4" />}</ToolBtn>
+            <Sep />
+            <ToolBtn label="앱 다시 켜기" onClick={() => doStep("launch")} disabled={working}><RotateCcw className="h-4 w-4" /></ToolBtn>
+            <ToolBtn label="화면 구조 다시 읽기" onClick={loadEls} disabled={dumping}>
+              {dumping ? <Loader2 className="h-4 w-4 animate-spin" /> : <ScanLine className="h-4 w-4" />}</ToolBtn>
+            <ToolBtn label={boxes ? "요소 상자 숨기기" : "요소 상자 보이기"} active={boxes} onClick={() => setBoxes(!boxes)}>
+              {boxes ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}</ToolBtn>
+            <Sep />
+            <ToolBtn label={`커서 ${cursor ? "끄기" : "켜기"} — 누르는 자리 보기`} active={cursor} onClick={() => setCursor(!cursor)}><MousePointer2 className="h-4 w-4" /></ToolBtn>
+            <ToolBtn label={`누르면 탭 ${clickTap ? "끄기" : "켜기"} — 화면을 누르면 바로 탭`} active={clickTap} onClick={() => setClickTap(!clickTap)}><MousePointerClick className="h-4 w-4" /></ToolBtn>
+            <Sep />
+            <ToolBtn label="사진 내려받기" onClick={saveShot}><Camera className="h-4 w-4" /></ToolBtn>
+            <ToolBtn label={rec ? "녹화 멈추고 내려받기" : "녹화 시작"} onClick={toggleRec} danger={!!rec}>
+              {rec ? <StopIcon className="h-4 w-4 fill-current" /> : <Circle className="h-4 w-4" />}</ToolBtn>
           </div>
-          <div className="relative w-full max-w-[380px] rounded-[44px] bg-neutral-900 p-3 shadow-e3 ring-1 ring-black/40">
-            <div className="relative overflow-hidden rounded-[34px] bg-black">
+
+          {/* 기기 */}
+          <div className="relative w-full max-w-[360px] rounded-[48px] bg-neutral-900 p-[11px] shadow-[0_24px_60px_-20px_rgba(0,0,0,0.45)] ring-1 ring-black/50 dark:ring-white/15">
+            <div className="relative overflow-hidden rounded-[38px] bg-black">
               {liveOn ? <img key={streamKey} src={`/api/stream?k=${streamKey}`} alt="시뮬레이터 화면 (실시간)" className="block w-full select-none" draggable={false}
                   style={{ aspectRatio: scr ? `${scr.w} / ${scr.h}` : "9 / 19.5" }}
                   onError={() => { setMode("shot"); setStreamNote("실시간 화면을 열지 못했습니다 — 스크린샷으로 봅니다"); }} />
@@ -234,7 +244,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                   onClick={(e) => {
                     const h = hit(e);
                     if (!h) return;
-                    setSel(h);
+                    setSel(h); setTab("act");
                     if (clickTap && !working && els) doStep(`tap: ${selectorFor(h, els.elements)}`);
                   }}>
                   {(ai.active ? [] : els?.elements ?? []).filter((e) => boxes || e === sel || e === hover).map((e, i) => (
@@ -252,68 +262,129 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
               {(img || liveOn) && <RobotCursor enabled={cursor} size="h-7 w-7" />}
             </div>
           </div>
-          <p className="mt-2 h-4 text-[12px] text-sub">
-            {hover ? <span className="font-mono">{hover.type} {hasId(hover) ? `#${hover.id}` : ""} {hover.label ? `"${hover.label}"` : ""}</span>
-              : capMsg ?? streamNote ?? (shotError ? shotError : els ? `요소 ${els.elements.length}개` : "")}</p>
+
+          {/* 상태 카드 */}
+          <div className="sticky top-4 hidden w-52 shrink-0 space-y-2 2xl:block">
+            <div className="space-y-2 rounded-xl bg-card p-3 text-[12px] ring-1 ring-line">
+              <div className="flex items-center gap-1.5">
+                <span className={cx("h-2 w-2 rounded-full", !streaming ? "bg-sub" : liveOn ? "bg-ok" : "bg-warn")} />
+                <span className="font-medium">{!streaming ? "멈춤" : liveOn ? "실시간" : "스크린샷"}</span>
+                {liveOn && <span className="font-mono text-sub" title="화면이 바뀔 때만 보냅니다">{fps} fps</span>}
+                {mode === "shot" && (
+                  <select value={interval} onChange={(e) => setIntervalMs(Number(e.target.value))} className="ml-auto rounded bg-muted px-1 text-[11px] outline-none">
+                    {[500, 1000, 2000, 5000].map((v) => <option key={v} value={v}>{v / 1000}초</option>)}
+                  </select>)}
+              </div>
+              <div className="text-sub">{els ? `요소 ${els.elements.length}개` : "화면 구조 없음"}{boxes ? "" : " · 상자 숨김"}</div>
+              {cursor && <div className="text-sub">커서 켬{clickTap ? " · 누르면 탭" : ""}</div>}
+              {rec && <div className="flex items-center gap-1.5 font-medium text-bad"><span className="h-2 w-2 animate-pulse rounded-full bg-bad" />녹화 {recSecs}s</div>}
+            </div>
+            {lock && <div className="rounded-xl bg-warn/10 p-3 text-[12px] text-warn ring-1 ring-warn/30">{lock}</div>}
+            {hover && <div className="rounded-xl bg-card p-3 text-[12px] ring-1 ring-line">
+              <div className="text-sub">마우스 아래</div>
+              <div className="mt-0.5 break-all font-mono text-[11.5px]">{hover.type}{hasId(hover) ? ` #${hover.id}` : ""}</div>
+              {hover.label && <div className="mt-0.5 truncate">"{hover.label}"</div>}
+            </div>}
+            {notice && <div className="rounded-xl bg-card p-3 text-[12px] text-sub ring-1 ring-line">{notice}</div>}
+          </div>
         </div>
 
-        <div className="space-y-4">
-          <AiActivity onBusy={onAiBusy} />
-          <RunScenario job={job} refreshJob={refreshJob} />
-          <Card title="고른 요소">
-            {!sel ? <Empty>화면을 눌러 요소를 고르세요</Empty> : (
-              <div className="space-y-3 p-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge>{sel.type}</Badge>{hasId(sel) ? <Mono>#{sel.id}</Mono> : <Badge tone="warn">ID 없음 — 라벨로</Badge>}
+        {/* 오른쪽 패널: 탭 (모두 그려 두고 숨기기만 — 탭을 바꿔도 입력·로그 그대로) */}
+        <div className="min-w-0 space-y-3">
+          <div className="grid grid-cols-4 gap-0.5 rounded-lg bg-muted p-0.5 text-[12.5px]">
+            {TABS.map(([id, label]) => (
+              <button key={id} onClick={() => setTab(id)}
+                className={cx("relative rounded-md py-1.5", tab === id ? "bg-card font-medium text-fg shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-line" : "text-sub hover:text-fg")}>
+                {label}
+                {id === "run" && busy && !ai.busy && <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-ok" />}
+                {id === "ai" && ai.active && <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-warn" />}
+                {id === "save" && (steps?.steps.length ?? 0) > 0 && <span className="ml-1 text-[11px] text-sub">{steps!.steps.length}</span>}
+              </button>
+            ))}
+          </div>
+          {lock && <div className="rounded-lg bg-warn/10 px-3 py-2 text-[12px] text-warn ring-1 ring-warn/30 2xl:hidden">{lock}</div>}
+
+          <div className={cx("space-y-3", tab !== "act" && "hidden")}>
+            <Card title="고른 요소">
+              {!sel ? <Empty>화면을 눌러 요소를 고르세요</Empty> : (
+                <div className="space-y-3 p-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge>{sel.type}</Badge>{hasId(sel) ? <Mono>#{sel.id}</Mono> : <Badge tone="warn">ID 없음 — 라벨로</Badge>}
+                  </div>
+                  {sel.label && <div className="text-[13px]">"{sel.label}"</div>}
+                  <div className="font-mono text-[11px] text-sub">@{sel.x},{sel.y} {sel.w}×{sel.h}</div>
+                  <div className="rounded-md bg-muted px-2.5 py-2"><div className="mb-0.5 text-[11px] text-sub">단계 대상</div><Mono className="break-all">{selector}</Mono></div>
+                  {isInput && (
+                    <form className="space-y-1.5" onSubmit={(e) => { e.preventDefault(); if (typed) doStep(`type: { into: ${selector}, text: ${JSON.stringify(typed)} }`); }}>
+                      <div className="flex gap-1.5">
+                        <input value={typed} onChange={(e) => setTyped(e.target.value)} type="text"
+                          placeholder={sel.type === "SecureTextField" ? "{secret:PASSWORD} (secrets.txt 키)" : "칠 글자"}
+                          className="h-8 min-w-0 flex-1 rounded-md bg-muted px-2.5 text-[12px] outline-none placeholder:text-sub" />
+                        <Button type="submit" size="sm" variant="primary" disabled={working || !typed}><Keyboard className="h-3.5 w-3.5" />입력</Button>
+                      </div>
+                      {sel.type === "SecureTextField" && typed && !/^\{secret:[A-Za-z0-9_-]+\}$/.test(typed) &&
+                        <div className="text-[11px] text-warn">비밀번호가 기록·시나리오에 그대로 남습니다 — <Mono>{"{secret:키}"}</Mono>로 쓰세요</div>}
+                    </form>
+                  )}
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {actions.map(([label, step, Icon], i) => (
+                      <Button key={label} variant={i === 0 ? "primary" : "secondary"} size="sm" disabled={working} onClick={() => doStep(step)}
+                        className={i === 0 ? "col-span-2" : ""}><Icon className="h-3.5 w-3.5" />{label}</Button>
+                    ))}
+                  </div>
                 </div>
-                {sel.label && <div className="text-[13px]">"{sel.label}"</div>}
-                <div className="font-mono text-[11px] text-sub">@{sel.x},{sel.y} {sel.w}×{sel.h}</div>
-                <div className="rounded-md bg-muted px-2.5 py-2"><div className="mb-0.5 text-[11px] text-sub">단계 대상</div><Mono className="break-all">{selector}</Mono></div>
-                {isInput && (
-                  <form className="space-y-1.5" onSubmit={(e) => { e.preventDefault(); if (typed) doStep(`type: { into: ${selector}, text: ${JSON.stringify(typed)} }`); }}>
-                    <div className="flex gap-1.5">
-                      <input value={typed} onChange={(e) => setTyped(e.target.value)} type="text"
-                        placeholder={sel.type === "SecureTextField" ? "{secret:PASSWORD} (secrets.txt 키)" : "칠 글자"}
-                        className="h-8 min-w-0 flex-1 rounded-md bg-muted px-2.5 text-[12px] outline-none placeholder:text-sub" />
-                      <Button type="submit" size="sm" variant="primary" disabled={working || !typed}><Keyboard className="h-3.5 w-3.5" />입력</Button>
-                    </div>
-                    {sel.type === "SecureTextField" && typed && !/^\{secret:[A-Za-z0-9_-]+\}$/.test(typed) &&
-                      <div className="text-[11px] text-warn">비밀번호가 기록·시나리오에 그대로 남습니다 — <Mono>{"{secret:키}"}</Mono>로 쓰세요</div>}
-                  </form>
-                )}
-                <div className="grid grid-cols-2 gap-1.5">
-                  {actions.map(([label, step, Icon], i) => (
-                    <Button key={label} variant={i === 0 ? "primary" : "secondary"} size="sm" disabled={working} onClick={() => doStep(step)}
-                      className={i === 0 ? "col-span-2" : ""}><Icon className="h-3.5 w-3.5" />{label}</Button>
-                  ))}
+              )}
+            </Card>
+            <Card title={<span className="flex items-center gap-1.5"><TerminalSquare className="h-3.5 w-3.5" />단계 직접 실행</span>}>
+              <form className="flex gap-2 p-4" onSubmit={(e) => { e.preventDefault(); doStep(input.trim()); }}>
+                <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="tap: home_search_button"
+                  className="h-8 min-w-0 flex-1 rounded-md bg-muted px-2.5 font-mono text-[12px] outline-none placeholder:text-sub" />
+                <Button type="submit" disabled={working || !input.trim()}>실행</Button>
+              </form>
+              {result && (
+                <div className="border-t border-line px-4 py-3 text-[12px]">
+                  <Mono className="block break-all text-sub">{result.step}</Mono>
+                  {result.running ? <span className="mt-1 flex items-center gap-1.5 text-sub"><Loader2 className="h-3.5 w-3.5 animate-spin" />실행 중…</span>
+                    : <pre className={cx("mt-1 whitespace-pre-wrap font-mono", result.res?.code === 0 ? "text-ok" : "text-bad")}>{result.error ?? result.res?.output.trim()}</pre>}
                 </div>
-              </div>
-            )}
-          </Card>
-          <Card title={<span className="flex items-center gap-1.5"><TerminalSquare className="h-3.5 w-3.5" />단계 직접 실행</span>}>
-            <form className="flex gap-2 p-4" onSubmit={(e) => { e.preventDefault(); doStep(input.trim()); }}>
-              <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="tap: home_search_button"
-                className="h-8 min-w-0 flex-1 rounded-md bg-muted px-2.5 font-mono text-[12px] outline-none placeholder:text-sub" />
-              <Button type="submit" disabled={working || !input.trim()}>실행</Button>
-            </form>
-            {result && (
-              <div className="border-t border-line px-4 py-3 text-[12px]">
-                <Mono className="block break-all text-sub">{result.step}</Mono>
-                {result.running ? <span className="mt-1 flex items-center gap-1.5 text-sub"><Loader2 className="h-3.5 w-3.5 animate-spin" />실행 중…</span>
-                  : <pre className={cx("mt-1 whitespace-pre-wrap font-mono", result.res?.code === 0 ? "text-ok" : "text-bad")}>{result.error ?? result.res?.output.trim()}</pre>}
-              </div>
-            )}
-          </Card>
-          <SaveScenario job={job} refreshJob={refreshJob} stepsCount={steps?.steps.length ?? 0} />
-          <Card title="기록된 단계" actions={steps && <span className="text-[11px] text-sub">{steps.fromLaunch ? "앱을 다시 켠 뒤부터" : steps.steps.length ? "다시 켜기 전 것 포함" : ""}</span>}>
-            {!steps?.steps.length ? <Empty>통과한 단계가 여기에 쌓입니다</Empty> : (
-              <ol className="space-y-1 p-4 pl-9 text-[12px] [list-style:decimal]">
-                {steps.steps.map((s, i) => <li key={i}><Mono className="break-all">{s}</Mono></li>)}
-              </ol>
-            )}
-          </Card>
+              )}
+            </Card>
+          </div>
+          <div className={cx(tab !== "run" && "hidden")}><RunScenario job={job} refreshJob={refreshJob} /></div>
+          <div className={cx("space-y-3", tab !== "save" && "hidden")}>
+            <Card title="기록된 단계" actions={steps && <span className="text-[11px] text-sub">{steps.fromLaunch ? "앱을 다시 켠 뒤부터" : steps.steps.length ? "다시 켜기 전 것 포함" : ""}</span>}>
+              {!steps?.steps.length ? <Empty>통과한 단계가 여기에 쌓입니다</Empty> : (
+                <ol className="max-h-64 space-y-1 overflow-auto p-4 pl-9 text-[12px] [list-style:decimal]">
+                  {steps.steps.map((s, i) => <li key={i}><Mono className="break-all">{s}</Mono></li>)}
+                </ol>
+              )}
+            </Card>
+            <SaveScenario job={job} refreshJob={refreshJob} stepsCount={steps?.steps.length ?? 0} />
+          </div>
+          <div className={cx("space-y-3", tab !== "ai" && "hidden")}>
+            <AiActivity onBusy={onAiBusy} />
+            {!ai.active && <div className="px-1 text-[12px] text-sub">AI(Claude Code·Codex)가 qakit 도구로 조작하면 여기에 활동이 쌓입니다 — <a href="#/ai" className="text-link hover:underline">AI QA에서 시작</a></div>}
+          </div>
         </div>
       </div>
     </>
+  );
+}
+
+const TABS = [["act", "조작"], ["run", "시나리오 실행"], ["save", "저장"], ["ai", "AI"]] as const;
+type Tab = (typeof TABS)[number][0];
+
+function Sep() { return <span className="mx-1.5 my-0.5 h-px bg-line" />; }
+
+/** 세로 도구 막대 버튼: 아이콘만, 마우스를 올리면 오른쪽에 이름 */
+function ToolBtn({ label, onClick, active, danger, disabled, children }:
+  { label: string; onClick: () => void; active?: boolean; danger?: boolean; disabled?: boolean; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} disabled={disabled} aria-label={label}
+      className={cx("group relative flex h-9 w-9 items-center justify-center rounded-lg transition-colors disabled:opacity-40",
+        danger ? "bg-bad/10 text-bad" : active ? "bg-muted text-fg" : "text-sub hover:bg-muted hover:text-fg")}>
+      {children}
+      <span className="pointer-events-none absolute left-full top-1/2 z-20 ml-2 -translate-y-1/2 whitespace-nowrap rounded-md bg-fg px-2 py-1 text-[11.5px] text-bg opacity-0 shadow-e3 transition-opacity group-hover:opacity-100">{label}</span>
+    </button>
   );
 }

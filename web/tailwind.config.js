@@ -1,7 +1,7 @@
 /** 흑백 위주 디자인: 색은 모두 src/index.css의 CSS 변수로 (다크 모드는 변수만 바뀜) */
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
-  darkMode: "media",
+  darkMode: "class",
   theme: {
     extend: {
       fontFamily: {
@@ -10,6 +10,7 @@ export default {
       },
       colors: {
         bg: "rgb(var(--bg) / <alpha-value>)",
+        side: "rgb(var(--side) / <alpha-value>)",
         card: "rgb(var(--card) / <alpha-value>)",
         muted: "rgb(var(--muted) / <alpha-value>)",
         fg: "rgb(var(--fg) / <alpha-value>)",
@@ -23,9 +24,9 @@ export default {
         link: "rgb(var(--link) / <alpha-value>)",
       },
       boxShadow: {
-        e1: "0 0 0 1px rgb(var(--line)), 0 1px 2px rgb(0 0 0 / 0.04)",
-        e2: "0 0 0 1px rgb(var(--line)), 0 2px 6px rgb(0 0 0 / 0.06)",
-        e3: "0 0 0 1px rgb(var(--line)), 0 8px 24px rgb(0 0 0 / 0.10)",
+        e1: "0 0 0 1px rgb(var(--line))",   // 그림자 없이 경계선만
+        e2: "0 0 0 1px rgb(var(--line)), 0 1px 3px rgb(0 0 0 / 0.04)",
+        e3: "0 0 0 1px rgb(var(--line)), 0 12px 32px rgb(0 0 0 / 0.12)",
       },
       letterSpacing: { head: "-0.02em" },
     },
