@@ -763,6 +763,26 @@ def ensure_swiftui_ids():
     return SWIFTUI_IDS_BIN
 
 
+SIMSCREEN_SRC = KIT_DIR / "Tools" / "simscreen" / "simscreen.swift"
+SIMSCREEN_BIN = KIT_DIR / "Tools" / "simscreen" / ".build" / "simscreen"
+
+
+def ensure_simscreen():
+    """시뮬레이터 화면을 바로 읽는 도구(qakit ui 실시간 화면). 소스가 바뀌었을 때만 swiftc로 빌드 (몇 초).
+    빌드가 안 되면 None — UI는 스크린샷 방식으로 돌아간다."""
+    if not SIMSCREEN_SRC.exists():
+        return None
+    digest = hashlib.sha1(SIMSCREEN_SRC.read_bytes()).hexdigest()
+    stamp = SIMSCREEN_BIN.with_suffix(".stamp")
+    if not SIMSCREEN_BIN.exists() or not stamp.exists() or stamp.read_text().strip() != digest:
+        SIMSCREEN_BIN.parent.mkdir(parents=True, exist_ok=True)
+        r = run(["xcrun", "swiftc", "-O", str(SIMSCREEN_SRC), "-o", str(SIMSCREEN_BIN)], check=False)
+        if r.returncode != 0 or not SIMSCREEN_BIN.exists():
+            return None
+        stamp.write_text(digest)
+    return SIMSCREEN_BIN
+
+
 def swiftui_sources(ws):
     return [str(p) for p in (ws.id_sources or [ws.app_dir])]
 
@@ -4115,6 +4135,9 @@ def cmd_ui(args):
     token = pysecrets.token_urlsafe(18)
     udid = None if ws.device else simulator_udid(ws.simulator)[0]
     screen = {"at": 0.0, "data": None, "lock": threading.Lock()}
+    # 실시간 화면: simscreen 하나를 띄워 최신 JPEG를 모든 브라우저에 나눠 준다 (보는 사람이 없으면 30초 뒤 끔)
+    live = {"proc": None, "frame": None, "seq": 0, "cond": threading.Condition(), "error": None, "failed_at": 0.0,
+            "clients": 0, "idle_since": time.time(), "frames": []}
     static = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".woff2": "font/woff2",
               ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
     if not (UI_DIR / "index.html").exists():
@@ -4298,6 +4321,59 @@ def cmd_ui(args):
         update_readme(ws)
         return {"saved": f"scenarios/{name}.qa.yml"}, None
 
+    def live_reader(proc):
+        err = []
+        threading.Thread(target=lambda: err.extend(proc.stderr.read().decode("utf-8", "replace").splitlines()), daemon=True).start()
+        try:
+            while True:
+                head = proc.stdout.read(4)
+                if len(head) < 4:
+                    break
+                data = proc.stdout.read(int.from_bytes(head, "big"))
+                now = time.time()
+                with live["cond"]:
+                    live["frame"] = data
+                    live["seq"] += 1
+                    live["frames"] = [t for t in live["frames"] if now - t < 2] + [now]
+                    live["cond"].notify_all()
+                    idle = live["clients"] == 0 and now - live["idle_since"] > 30
+                if idle:
+                    proc.terminate()
+        finally:
+            proc.wait()
+            with live["cond"]:
+                if live["proc"] is proc:
+                    live["proc"] = None
+                    if proc.returncode not in (0, -15):   # 스스로 멈춤 = 실패 (비공개 API가 바뀌었거나 시뮬레이터 꺼짐)
+                        live["error"] = next((l for l in err if l.startswith("simscreen:")), None) or f"종료 코드 {proc.returncode}"
+                        live["failed_at"] = time.time()
+                live["cond"].notify_all()
+
+    def live_start():
+        """실시간 화면 도구를 띄운다. 안 되면 (False, 이유) — 30초 동안은 다시 시도하지 않는다."""
+        with live["cond"]:
+            if live["proc"] and live["proc"].poll() is None:
+                return True, None
+            if live["error"] and time.time() - live["failed_at"] < 30:
+                return False, live["error"]
+        tool = ensure_simscreen()
+        if not tool:
+            with live["cond"]:
+                live.update(error="실시간 화면 도구 빌드 실패", failed_at=time.time())
+            return False, live["error"]
+        proc = subprocess.Popen([str(tool), udid, "--fps", "24", "--width", "600", "--quality", "0.65"],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        with live["cond"]:
+            live.update(proc=proc, error=None, frame=None, idle_since=time.time())
+        threading.Thread(target=live_reader, args=(proc,), daemon=True).start()
+        return True, None
+
+    def live_stop():
+        with live["cond"]:
+            proc = live["proc"]
+        if proc and proc.poll() is None:
+            proc.terminate()
+
     def grab_screen():
         with screen["lock"]:
             if time.time() - screen["at"] < 0.4 and screen["data"]:
@@ -4463,6 +4539,42 @@ def cmd_ui(args):
                         except ValueError:
                             pass
                     return self.send(200, {"offset": since + end, "taps": taps[-20:]})
+                if path == "/api/stream-status":
+                    with live["cond"]:
+                        running = bool(live["proc"] and live["proc"].poll() is None)
+                        return self.send(200, {"running": running, "error": None if running else live["error"],
+                                               "fps": round(len(live["frames"]) / 2, 1) if running else 0})
+                if path == "/api/stream":   # MJPEG (multipart/x-mixed-replace) — <img>가 그대로 보여 준다
+                    if not udid:
+                        return self.send(404, {"error": "실시간 화면은 시뮬레이터만"})
+                    started, why = live_start()
+                    if not started:
+                        return self.send(503, {"error": why})
+                    self.send_response(200)
+                    self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=qakitframe")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    with live["cond"]:
+                        live["clients"] += 1
+                    seq = -1
+                    try:
+                        while True:
+                            with live["cond"]:
+                                live["cond"].wait_for(lambda: live["seq"] != seq or live["proc"] is None, timeout=5)
+                                if live["proc"] is None:
+                                    break
+                                frame, seq = live["frame"], live["seq"]
+                            if frame:
+                                self.wfile.write(b"--qakitframe\r\nContent-Type: image/jpeg\r\nContent-Length: "
+                                                 + str(len(frame)).encode() + b"\r\n\r\n" + frame + b"\r\n")
+                                self.wfile.flush()
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    finally:
+                        with live["cond"]:
+                            live["clients"] -= 1
+                            live["idle_since"] = time.time()
+                    return
                 if path == "/api/screen":
                     if not udid:
                         return self.send(404, {"error": "라이브 화면은 시뮬레이터만 (실기기는 아직)"})
@@ -4484,6 +4596,7 @@ def cmd_ui(args):
         print()
     finally:
         stop_job()   # UI를 끄면 UI에서 시작한 실행도 멈춘다
+        live_stop()
         server.server_close()
 
 

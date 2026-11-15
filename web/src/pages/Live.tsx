@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, EyeOff, Hand, MousePointer2, MousePointerClick, Pause, Play, RotateCcw, ScanLine, TerminalSquare, Timer, CheckCircle2, ArrowUp, ArrowDown, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Hand, Radio, Image as ImageIcon, MousePointer2, MousePointerClick, Pause, Play, RotateCcw, ScanLine, TerminalSquare, Timer, CheckCircle2, ArrowUp, ArrowDown, Loader2 } from "lucide-react";
 import { get, post, screenUrl, type DoResult, type El, type Elements, type Job } from "../lib/api";
 import { SaveScenario } from "../components/SaveScenario";
 import { RunScenario } from "../components/RunScenario";
@@ -34,6 +34,11 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   const [streaming, setStreaming] = useState(() => stored("qakit-live", true));
   const [interval, setIntervalMs] = useState(() => stored("qakit-live-ms", 1000));
   const [boxes, setBoxes] = useState(() => stored("qakit-boxes", true));
+  // 화면 방식: 실시간(시뮬레이터 화면을 바로 읽어 영상으로) · 스크린샷(정해진 간격으로 사진). 실시간이 안 되면 스크린샷으로
+  const [mode, setMode] = useState<"stream" | "shot">(() => stored("qakit-screen-mode", "stream"));
+  const [streamNote, setStreamNote] = useState<string | null>(null);
+  const [fps, setFps] = useState(0);
+  const [streamKey, setStreamKey] = useState(() => Date.now());
   const [els, setEls] = useState<Elements | null>(null);
   const [dumping, setDumping] = useState(false);
   const [sel, setSel] = useState<El | null>(null);
@@ -50,8 +55,8 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   const overlay = useRef<HTMLDivElement>(null);
   const urlRef = useRef<string | null>(null);
 
-  useEffect(() => { store("qakit-live", streaming); store("qakit-live-ms", interval); store("qakit-boxes", boxes);
-    store("qakit-cursor", cursor); store("qakit-click-tap", clickTap); }, [streaming, interval, boxes, cursor, clickTap]);
+  useEffect(() => { store("qakit-live", streaming); store("qakit-live-ms", interval); store("qakit-boxes", boxes); store("qakit-screen-mode", mode);
+    store("qakit-cursor", cursor); store("qakit-click-tap", clickTap); }, [streaming, interval, boxes, cursor, clickTap, mode]);
   useEffect(() => {   // 마지막 탭 자리는 몇 초 뒤 지운다
     if (!lastTap) return;
     const t = setTimeout(() => setLastTap(null), 4000);
@@ -67,12 +72,27 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
       urlRef.current = url; setImg(url); setShotError(null);
     } catch (e) { setShotError((e as Error).message); }
   }, []);
-  useEffect(() => {   // 화면 갱신: 끝난 뒤 간격만큼 쉬고 다시 (겹치지 않게)
+  const liveOn = mode === "stream" && streaming;
+  useEffect(() => {   // 스크린샷 방식 화면 갱신: 끝난 뒤 간격만큼 쉬고 다시 (겹치지 않게). 실시간이면 멈춤 때 한 장만
+    if (liveOn) return;
     let alive = true, t: ReturnType<typeof setTimeout>;
     const loop = async () => { await shot(); if (alive && streaming) t = setTimeout(loop, interval); };
     loop();
     return () => { alive = false; clearTimeout(t); };
-  }, [shot, streaming, interval]);
+  }, [shot, streaming, interval, liveOn]);
+  useEffect(() => {   // 실시간: 상태(초당 장수)를 보고, 도구가 멈췄으면 스크린샷으로 돌아간다
+    if (!liveOn) { setFps(0); return; }
+    let alive = true;
+    const t = setInterval(async () => {
+      try {
+        const st = await get<{ running: boolean; error: string | null; fps: number }>("/api/stream-status");
+        if (!alive) return;
+        setFps(st.fps);
+        if (!st.running && st.error) { setMode("shot"); setStreamNote(`실시간 화면 멈춤 (${st.error}) — 스크린샷으로 봅니다`); }
+      } catch { /* 다음에 */ }
+    }, 2000);
+    return () => { alive = false; clearInterval(t); };
+  }, [liveOn]);
 
   const loadEls = useCallback(async () => {
     setDumping(true);
@@ -139,7 +159,8 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     setResult({ step, running: true });
     try { setResult({ step, res: await post<DoResult>("/api/do", { step }) }); }
     catch (e) { setResult({ step, error: (e as Error).message }); }
-    await shot(); await loadEls(); loadSteps();
+    if (!liveOn) await shot();
+    await loadEls(); loadSteps();
   };
 
   const hit = (ev: React.MouseEvent) => {
@@ -172,9 +193,14 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
           <div className="mb-3 flex flex-wrap items-center gap-1 rounded-lg bg-card p-1 shadow-e1">
             <Button size="sm" variant="ghost" onClick={() => setStreaming(!streaming)} title="화면 갱신">
               {streaming ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}{streaming ? "일시정지" : "재생"}</Button>
-            <select value={interval} onChange={(e) => setIntervalMs(Number(e.target.value))} className="h-7 rounded-md bg-transparent px-1.5 text-[12px] text-sub outline-none hover:bg-muted">
-              {[500, 1000, 2000, 5000].map((v) => <option key={v} value={v}>{v / 1000}초</option>)}
-            </select>
+            <Button size="sm" variant="ghost" title="실시간: 시뮬레이터 화면을 바로 읽어 영상으로 (시뮬레이터 창 필요 없음) · 스크린샷: 정해진 간격으로 사진"
+              onClick={() => { setStreamNote(null); setStreamKey(Date.now()); setMode(mode === "stream" ? "shot" : "stream"); }}>
+              {mode === "stream" ? <Radio className="h-3.5 w-3.5" /> : <ImageIcon className="h-3.5 w-3.5" />}{mode === "stream" ? "실시간" : "스크린샷"}</Button>
+            {mode === "shot" ? (
+              <select value={interval} onChange={(e) => setIntervalMs(Number(e.target.value))} className="h-7 rounded-md bg-transparent px-1.5 text-[12px] text-sub outline-none hover:bg-muted">
+                {[500, 1000, 2000, 5000].map((v) => <option key={v} value={v}>{v / 1000}초</option>)}
+              </select>
+            ) : <span className="w-12 text-center font-mono text-[11px] text-sub" title="화면이 바뀔 때만 보냅니다 (멈춰 있으면 0에 가까움)">{liveOn ? `${fps}fps` : ""}</span>}
             <span className="mx-1 h-4 w-px bg-line" />
             <Button size="sm" variant="ghost" onClick={() => doStep("launch")} disabled={working}><RotateCcw className="h-3.5 w-3.5" />앱 다시 켜기</Button>
             <Button size="sm" variant="ghost" onClick={loadEls} loading={dumping}><ScanLine className="h-3.5 w-3.5" />화면 구조</Button>
@@ -186,9 +212,12 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
           </div>
           <div className="relative w-full max-w-[380px] rounded-[44px] bg-neutral-900 p-3 shadow-e3 ring-1 ring-black/40">
             <div className="relative overflow-hidden rounded-[34px] bg-black">
-              {img ? <img src={img} alt="시뮬레이터 화면" className="block w-full select-none" draggable={false} />
+              {liveOn ? <img key={streamKey} src={`/api/stream?k=${streamKey}`} alt="시뮬레이터 화면 (실시간)" className="block w-full select-none" draggable={false}
+                  style={{ aspectRatio: scr ? `${scr.w} / ${scr.h}` : "9 / 19.5" }}
+                  onError={() => { setMode("shot"); setStreamNote("실시간 화면을 열지 못했습니다 — 스크린샷으로 봅니다"); }} />
+                : img ? <img src={img} alt="시뮬레이터 화면" className="block w-full select-none" draggable={false} />
                 : <div className="flex aspect-[9/19.5] items-center justify-center text-[13px] text-neutral-400">{shotError ?? "화면 불러오는 중…"}</div>}
-              {img && scr && (
+              {(img || liveOn) && scr && (
                 <div ref={overlay} className={cx("absolute inset-0", cursor ? "cursor-none" : "cursor-crosshair")}
                   onMouseMove={(e) => { setHover(hit(e)); setPt(pos(e)); }} onMouseLeave={() => { setHover(null); setPt(null); setDown(false); }}
                   onMouseDown={() => setDown(true)} onMouseUp={() => setDown(false)}
@@ -225,7 +254,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
           </div>
           <p className="mt-2 h-4 text-[12px] text-sub">
             {hover ? <span className="font-mono">{hover.type} {hasId(hover) ? `#${hover.id}` : ""} {hover.label ? `"${hover.label}"` : ""}</span>
-              : shotError ? shotError : els ? `요소 ${els.elements.length}개` : ""}</p>
+              : streamNote ?? (shotError ? shotError : els ? `요소 ${els.elements.length}개` : "")}</p>
         </div>
 
         <div className="space-y-4">
