@@ -323,7 +323,7 @@ cp secrets.example.txt secrets.txt
 | 시나리오를 빠르게 반복 실행 | `qakit run <시나리오> --serve` ([상주 실행기](#빠르게-돌리고-눌러-보기-qakit-serve--qakit-do)) |
 | 화면을 한 단계씩 눌러 보기 | `qakit do 'tap: <ID>'` · `qakit do dump` |
 | 눌러 본 단계를 시나리오로 | `qakit do save <이름>` (`qakit do launch`부터 통과한 단계로 초안) |
-| CI에서 태그로 골라 보고서까지 | `qakit run --tag smoke --junit report.xml` (종료 코드 1 앱 실패 · 2 환경 문제) |
+| CI에서 태그로 골라 보고서까지 | `qakit run --tag smoke --junit report.xml` (종료 코드 1 앱 실패 · 2 환경 문제) · GitHub Actions 예시: [CI에서 돌리기](#ci에서-돌리기-github-actions) |
 | 값을 바꿔 실행 (매개변수) | `qakit run <시나리오> --var ship="선박명"` |
 | 마지막 실패 다시 보기 | `qakit summarize` |
 | 무엇이 아직 테스트되지 않았나 | `qakit coverage [--unused]` (앱 ID 중 시나리오가 쓰는 것, 화면별) · UI **커버리지**에서 빈 화면을 AI QA로 |
@@ -363,6 +363,7 @@ cp secrets.example.txt secrets.txt
    - [빠르게 돌리고 눌러 보기 (`qakit serve` · `qakit do`)](#빠르게-돌리고-눌러-보기-qakit-serve--qakit-do)
    - [브라우저로 쓰기 (`qakit ui`)](#브라우저로-쓰기-qakit-ui)
    - [AI가 직접 QA하기 (`qakit mcp`)](#ai가-직접-qa하기-qakit-mcp)
+   - [CI에서 돌리기 (GitHub Actions)](#ci에서-돌리기-github-actions)
    - [실기기에서 실행 (`--device`)](#실기기에서-실행---device)
 5. [저장과 복구 (AI 없이)](#저장과-복구-ai-없이)
 
@@ -810,6 +811,31 @@ qakit 도구로 검색 화면 QA해 줘. 빈 검색어, 아주 긴 검색어, �
 **터미널 없이 UI에서**: `qakit ui` → **AI QA** 메뉴에서 목표를 적고 AI(설치·로그인된 Claude Code / Codex 자동 감지), 시간·횟수 한도, "확인한 경로를 시나리오로 저장"을 고른 뒤 **AI QA 시작**. qakit이 그 CLI를 **qakit 도구만 허용**(셸·파일 수정 막음)해 실행하고, AI가 하는 말·쓰는 도구·이유, 실시간 화면(**커서 켬/끔** — AI가 누르는 자리로 화살표가 움직임), AI 활동, 마지막 보고서(확인한 것·문제·확인하지 못한 것·남긴 시나리오)와 사용량을 보여 줍니다. 결과는 `results/ai/<시각>/`(`report.md`·`agent.jsonl`·`log.jsonl`·`issues.md`). AI QA가 도는 동안 손 조작·시나리오 실행은 막습니다. Codex 연결은 아직 시험하지 못했습니다.
 
 **결과 모아 보기**: AI QA 메뉴 아래 **지난 AI QA**와 **실행 기록**에 AI 세션이 쌓입니다 (터미널의 AI가 `qakit mcp`로 한 것도). 세션을 누르면 보고서, 문제(재현 단계·기대·실제·사진), AI가 한 말·도구 기록(이유·실패 원인), **AI가 통과한 단계**가 나오고, 그 단계로 바로 **시나리오 초안 → 재생 → 저장**할 수 있습니다 (실패한 조작은 빠짐).
+
+<sub>[↑ 목차](#목차)</sub>
+
+---
+
+### CI에서 돌리기 (GitHub Actions)
+
+시나리오를 **PR마다 GitHub 서버(macOS·시뮬레이터)가 자동으로** 돌리게 합니다. 예시: [`templates/ci/qa.yml`](templates/ci/qa.yml) — 앱 저장소의 `.github/workflows/qa.yml`로 복사해 고쳐 씁니다.
+
+```
+PR → macOS 러너: qakit 설치 → 앱 빌드 → qakit run --tag smoke --junit
+   → PR 체크 ✅/❌, 결과(실패 요약·스크린샷·실패 영상·JUnit)를 내려받기로 첨부
+매일 밤 → 전체 시나리오 · Actions 탭 "Run workflow" → 태그를 골라서
+```
+
+| 준비 (저장소 Settings) | 내용 |
+|---|---|
+| Secret `QA_SECRETS` | 작업공간 `secrets.txt` 내용 그대로 (로그인 계정 등) |
+| Variable `QA_SIMULATOR` | 러너에 있는 시뮬레이터 이름 (예: `iPhone 16`). 비우면 `qakit.yml` 값 |
+| Variable `QA_REPO` · Secret `QA_REPO_TOKEN` | QA 작업공간이 앱 저장소 안 `QA/`가 아니라 **따로 된 저장소**일 때만 |
+
+- 러너에서는 QA 워크트리 자동 최신화를 끄고(`update: off`, 이미 이번 커밋을 받았으므로) 시뮬레이터 이름을 바꿉니다.
+- macOS 러너는 Linux보다 분당 비용이 약 10배 → PR엔 `smoke`, 전체는 하루 한 번.
+- 로그인이 필요한 화면은 러너에서도 로그인해야 합니다. 아이디·비밀번호는 secrets로 되지만, **애플·소셜 로그인처럼 사람이 확인하는 로그인은 자동으로 못 합니다** → 로그인 없는 화면만 돌리거나, `precheck`가 "로그인 상태가 아님"으로 멈춥니다(종료 코드 2).
+- 종료 코드: 0 통과 · 1 앱 판정 실패 · 2 환경·설정 문제.
 
 <sub>[↑ 목차](#목차)</sub>
 
