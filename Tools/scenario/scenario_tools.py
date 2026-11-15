@@ -179,6 +179,8 @@ def parse_yaml(text):
             lines.append([len(line) - len(line.lstrip(" ")), line.strip(), no])
     if not lines:
         return {}
+    if len(lines) == 1 and lines[0][1].startswith("{"):   # 한 줄짜리 { ... } (qakit do '{ tap: X, expect: … }')
+        return _parse_flow(lines[0][1])
     value, i = _block(lines, 0, lines[0][0])
     if i != len(lines):
         raise YamlError(f"{lines[i][2]}번째 줄: 들여쓰기가 맞지 않음")

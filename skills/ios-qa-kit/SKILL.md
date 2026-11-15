@@ -71,7 +71,7 @@ qakit doctor           # ❌가 있으면 → 안내대로 해결
 
 **먼저 시나리오 파일(`scenarios/<이름>.qa.yml`)로 쓸 수 있는지 본다** — 컴파일·프로젝트 없이 실행되고, 저장·복구가 파일만으로 된다.
 여러 시나리오가 쓰는 단계는 `steps/<이름>.qa.yml`로 빼고 `- use: <이름>`으로 부른다 (기존 steps를 먼저 확인).
-`qakit do`로 통과한 단계는 **그대로 `steps:`에 옮긴다** (`qakit do`의 입력이 곧 시나리오 단계 문법이다). 시나리오는 독립적으로 돌아야 하므로 시작(`reset`, `use: login` 등)을 빠뜨리지 않는다.
+`qakit do`로 통과한 단계는 기록된다 → **`qakit do launch`부터 탐색했다면 `qakit do save <이름>`으로 초안을 만든다** (손으로 옮기지 않는다. `qakit do steps`로 확인). 초안에 맨 위 설명과 판정을 더한다. 화면을 바꾸는 탭에는 `expect:`로 바뀐 결과를 붙인다 (탭이 무시되면 그 자리에서 실패). 시나리오는 독립적으로 돌아야 하므로 시작(`reset`, `use: login` 등)을 빠뜨리지 않는다.
 `qakit check <이름>` → `qakit run <이름>` 순서로 돌린다. 문법: [references/scenario-language.md](references/scenario-language.md).
 조건·계산이 언어로 표현이 안 될 때만 아래 Swift 방식으로 쓴다.
 

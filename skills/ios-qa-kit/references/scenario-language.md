@@ -6,6 +6,7 @@ Swift 테스트를 쓰지 않고 파일만으로 QA를 실행한다. `qakit run 
 ```yaml
 name: 시나리오 이름
 reset: true                       # 실행 전 앱 재설치 + 키체인 초기화 (= qakit run --reset)
+tags: [smoke, home]               # qakit run --tag smoke 로 고름 (선택)
 # launch: reuse                   # 앱이 이미 시작 화면이면 다시 켜지 않음 (아래 "앱 재실행 생략")
 # start: { visible: HomeView.title }   # 시작 화면 조건 (launch: reuse·--reuse-app일 때만 씀)
 vars: { item: 커피 }               # {item}으로 사용. 비밀값은 {secret:KEY} (secrets.txt)
@@ -18,7 +19,7 @@ steps:
 
 | 단계 | 형식 | 설명 |
 |---|---|---|
-| tap | `tap: <대상>` | 나타날 때까지(10초) 기다렸다 탭. `timeout:` 가능 |
+| tap | `tap: <대상>`, `expect: <조건>`, `expect-timeout: 초` | 나타날 때까지(10초, `timeout:`) 기다렸다가, **위치가 멈추면**(화면 전환·스크롤 중이 아니면, 최대 2초) 탭. `expect:`를 두면 누른 뒤 그 조건이 맞을 때까지(기본 10초) 기다리고, 안 맞으면 "탭이 무시됐거나 다른 곳에 닿음"으로 실패. **누르기 전에 이미 맞으면 실패** (탭의 효과를 알 수 없음). 아래 [탭의 기대 효과](#탭의-기대-효과-expect) |
 | input | `input: { tap?: <대상>, alert: 글자, confirm: 완료 }` | 시스템 입력 알림(UIAlertController)에 입력 후 버튼 |
 | type | `type: { into: <대상>, text: 글자 }` | 입력칸 지우고 입력 |
 | wait | `wait: <대상>` / `wait: { for: <대상>, timeout: 초 }` | 나타날 때까지 |
@@ -137,6 +138,22 @@ steps:
 | `wait-any` | 30초 | |
 | `input` 알림 | 5초 | |
 | `expect`, `if`, `unless` | **0초 (바로 판정)** | 화면 전환 직후라면 `timeout:`을 꼭 적는다 (예: 닫기 뒤 `hidden`은 `timeout: 5`) |
+
+## 탭의 기대 효과 (`expect`)
+
+탭은 보냈는데 앱이 받지 않으면(화면 전환 중, 보이지 않는 막이 가로챔) 다음 단계에서 엉뚱한 이유로 실패한다. 화면을 바꾸는 탭에는 바뀐 결과를 같이 적는다.
+
+```yaml
+- tap: HomeView.searchButton
+  expect: { visible: SearchView.searchField }          # 누른 뒤 이 조건이 맞아야 한다
+- tap: { type: button, label: backButton }
+  expect: { missing: { type: text, label: 운영 장소 } }   # 상세 화면이 사라져야 한다
+  expect-timeout: 15
+```
+
+- 조건 문법은 `expect` 단계와 같다 (`visible`, `missing`, `hidden`, `selected`, `all` …).
+- 누르기 전에 이미 맞는 조건은 실패로 본다 — 탭이 무엇을 했는지 알 수 없기 때문이다 (앞 시나리오가 남긴 상태로 통과하는 것을 막음).
+- `qakit do`에서도 쓴다: `qakit do '{ tap: X, expect: { visible: Y } }'`.
 
 ## 먼저 뜬 화면으로 분기 (`wait-any` + `if`)
 

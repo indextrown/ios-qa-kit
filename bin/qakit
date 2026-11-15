@@ -75,11 +75,14 @@ def warn(msg):
     print(f"⚠️  {msg}", flush=True)
 
 
-def fail(msg, hint=None, code=1):
+FAIL_CODE = 1   # qakit run은 2로 바꾼다: 앱 판정 실패(1)가 아닌 실패는 환경·설정 문제(2)
+
+
+def fail(msg, hint=None, code=None):
     print(f"❌ {msg}", file=sys.stderr, flush=True)
     if hint:
         print(f"   → {hint}", file=sys.stderr, flush=True)
-    sys.exit(code)
+    sys.exit(FAIL_CODE if code is None else code)
 
 
 # ─────────────────────────────── YAML (부분 집합) ───────────────────────────────
@@ -2402,10 +2405,10 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
         res = serve_request(st, "/run", json.loads(scenario_json.read_text(encoding="utf-8")), timeout=timeout)
     except ServeTimeout:
         serve_stop(udid, quiet=True, force=True)
-        res = {"ok": False, "message": f"{timeout}초 안에 끝나지 않아 상주 실행기를 멈춤 (다음 실행 때 다시 띄움)"}
+        res = {"ok": False, "env": True, "message": f"{timeout}초 안에 끝나지 않아 상주 실행기를 멈춤 (다음 실행 때 다시 띄움)"}
     except ConnectionError as e:
         serve_stop(udid, quiet=True, force=True)
-        res = {"ok": False, "message": f"상주 실행기 연결 실패: {e}"}
+        res = {"ok": False, "env": True, "message": f"상주 실행기 연결 실패: {e}"}
     seconds = round(time.time() - started, 1)
     success = bool(res.get("ok"))
     save_serve_files(ws, res, rd)
@@ -2460,7 +2463,8 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
     (rd / SERVE_SUMMARY).write_text(text + "\n", encoding="utf-8")   # qakit summarize가 다시 보여 준다
     print(text)
     LAST_FAILURE["sig"] = (res.get("message", ""), (res.get("steps") or [""])[-1])
-    fail("실패", f"자세한 결과: {rd}")
+    LAST_FAILURE["message"] = res.get("message", "")
+    fail("실패" + (" (실행 환경 문제)" if res.get("env") else ""), f"자세한 결과: {rd}", code=2 if res.get("env") else 1)
 
 
 def serve_ensure(ws, udid):
@@ -2626,14 +2630,49 @@ def expand_scenario_args(ws, items):
     return list(dict.fromkeys(names))
 
 
+def scenario_tags(ws, name):
+    """시나리오 맨 위 tags: (목록 또는 글자 하나). 읽지 못하면 빈 목록."""
+    path = scenario_tools.find_scenario(ws.root, name)
+    try:
+        data = scenario_tools.parse_yaml(path.read_text(encoding="utf-8")) if path else {}
+    except Exception:  # noqa: BLE001 — 형식 오류는 실행할 때 알린다
+        return []
+    tags = data.get("tags") if isinstance(data, dict) else None
+    return [str(t) for t in (tags if isinstance(tags, list) else [tags] if tags else [])]
+
+
+def select_scenarios(ws, args):
+    """이름·패턴 + --tag/--exclude-tag → 실행할 시나리오 목록. 이름이 없고 --tag만 있으면 전체에서 고른다."""
+    if not args.scenario and not args.tag:
+        fail("실행할 시나리오가 필요합니다.", "예) qakit run home-01  ·  qakit run 'home-*'  ·  qakit run --tag smoke")
+    names = expand_scenario_args(ws, args.scenario or ["*"])
+    if args.tag or args.exclude_tag:
+        include, exclude = set(args.tag or []), set(args.exclude_tag or [])
+        picked = []
+        for n in names:
+            tags = set(scenario_tags(ws, n))
+            if include and not tags & include:
+                continue
+            if tags & exclude:
+                continue
+            picked.append(n)
+        if not picked:
+            fail("고른 태그에 맞는 시나리오가 없습니다.",
+                 f"--tag {' '.join(sorted(include)) or '-'} / --exclude-tag {' '.join(sorted(exclude)) or '-'}")
+        names = picked
+    return names
+
+
 def cmd_run(args):
+    global FAIL_CODE
+    FAIL_CODE = 2   # 아래에서 앱 판정 실패만 1로 끝낸다
     ws = find_workspace(args.workspace)
-    names = expand_scenario_args(ws, args.scenario)
+    names = select_scenarios(ws, args)
     if len(names) > 1 and args.bench:
         fail("--bench는 시나리오 하나만 측정합니다.", f"예) qakit run {names[0]} --bench 1m")
     try:
         with sim_lock(ws, "qakit run " + " ".join(names)[:80]):
-            if len(names) == 1:
+            if len(names) == 1 and not args.junit:
                 _cmd_run(ws, args, names[0])
             else:
                 run_many(ws, args, names)
@@ -2656,13 +2695,14 @@ def run_many(ws, args, names):
         print(f"\n━━ [{i}/{len(names)}] {name}", flush=True)
         t = time.time()
         LAST_FAILURE.clear()
+        code = 0
         try:
             _cmd_run(ws, args, name)
-            passed = True
         except SystemExit as e:
-            passed = e.code in (0, None)
+            code = 0 if e.code in (0, None) else (e.code if isinstance(e.code, int) else 1)
+        passed = code == 0
         sig = None if passed else LAST_FAILURE.get("sig")
-        results.append((name, passed, time.time() - t, sig))
+        results.append((name, passed, time.time() - t, sig, code, LAST_FAILURE.get("message", "")))
         if passed or i == len(names):
             continue
         if args.fail_fast:
@@ -2677,17 +2717,50 @@ def run_many(ws, args, names):
     failed = [r[0] for r in results if not r[1]]
     print(f"\n── 결과: 통과 {len(results) - len(failed)} / 실패 {len(failed)}"
           + (f" / 건너뜀 {len(skipped)}" if skipped else "") + f" / 전체 {len(names)} ({time.time() - started:.1f}초)")
-    for name, passed, secs, _ in results:
-        print(f"   {'✅' if passed else '❌'} {name}  {secs:.1f}초")
+    for name, passed, secs, _, code, _ in results:
+        print(f"   {'✅' if passed else '❌'} {name}  {secs:.1f}초" + ("  (실행 환경·설정)" if code == 2 else ""))
     for name in skipped:
         print(f"   ⏭  {name}  (돌리지 않음)")
     if stop_reason:
         warn(stop_reason)
+    if args.junit:
+        write_junit(Path(args.junit), ws, results, skipped, time.time() - started)
     if failed or skipped:
         hint = ("실패·건너뜀만 다시: " if skipped else "실패한 것만 다시: ") + "qakit run " + " ".join(failed + skipped)
         if skipped and not args.fail_fast:
             hint += "\n   (환경을 확인한 뒤. 같은 원인이어도 끝까지 돌리려면 --keep-going)"
-        fail(f"실패 {len(failed)}개" + (f", 건너뜀 {len(skipped)}개" if skipped else ""), hint)
+        # 앱 판정 실패가 하나라도 있으면 1 (환경 문제에 회귀가 가려지지 않게), 모두 환경·설정 문제면 2
+        product = any(r[4] == 1 for r in results)
+        fail(f"실패 {len(failed)}개" + (f", 건너뜀 {len(skipped)}개" if skipped else ""), hint, code=1 if product else 2)
+
+
+def write_junit(path, ws, results, skipped, total_seconds):
+    """CI용 JUnit XML. 앱 판정 실패는 <failure>, 환경·설정 실패는 <error>, 돌리지 않은 것은 <skipped>."""
+    from xml.sax.saxutils import escape, quoteattr
+    mask = masker(ws.secrets())
+    failures = sum(1 for r in results if r[4] == 1)
+    errors = sum(1 for r in results if r[4] not in (0, 1))
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>',
+             f'<testsuites tests="{len(results) + len(skipped)}" failures="{failures}" errors="{errors}" '
+             f'skipped="{len(skipped)}" time="{total_seconds:.1f}">',
+             f'  <testsuite name={quoteattr("qakit " + ws.name)} tests="{len(results) + len(skipped)}" '
+             f'failures="{failures}" errors="{errors}" skipped="{len(skipped)}" time="{total_seconds:.1f}">']
+    for name, passed, secs, sig, code, message in results:
+        open_tag = f'    <testcase classname={quoteattr("qakit." + ws.name)} name={quoteattr(name)} time="{secs:.1f}"'
+        if passed:
+            lines.append(open_tag + "/>")
+            continue
+        kind = "failure" if code == 1 else "error"
+        msg = mask(message or (sig[0] if sig else "실패"))
+        detail = mask("\n".join(x for x in (sig or ()) if x))
+        lines += [open_tag + ">", f"      <{kind} message={quoteattr(msg)}>{escape(detail)}</{kind}>", "    </testcase>"]
+    for name in skipped:
+        lines.append(f'    <testcase classname={quoteattr("qakit." + ws.name)} name={quoteattr(name)} time="0">'
+                     '<skipped message="같은 원인으로 연속 실패해 돌리지 않음"/></testcase>')
+    lines += ["  </testsuite>", "</testsuites>"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    info(f"JUnit 보고서: {path}")
 
 
 # ─────────────────────────────── 성능 측정 (run --bench) ───────────────────────────────
@@ -3439,7 +3512,10 @@ def _cmd_run(ws, args, name):
     last = re.search(r"마지막 단계:\s*(?:\n\s*-\s*)?(.*)", text)
     if cause:
         LAST_FAILURE["sig"] = (cause.group(1).strip(), last.group(1).strip() if last else "")
-    fail("실패", f"자세한 결과: {xcresult}")
+        LAST_FAILURE["message"] = cause.group(1).strip()
+    if not Path(xcresult).exists():   # 실행기가 테스트를 시작하지 못함 (빌드·설치·연결)
+        fail("실패 (실행 환경 문제: 결과 파일 없음)", f"로그: {Path(xcresult).parent / 'output.log'}", code=2)
+    fail("실패", f"자세한 결과: {xcresult}", code=1)
 
 
 # ─────────────────────────────── 저장 · 복구 · 기록 ───────────────────────────────
@@ -3631,9 +3707,85 @@ def cmd_serve(args):
 SERVE_COMMANDS = {"dump": "/dump", "launch": "/launch", "ping": "/ping", "reset": "/reset"}
 
 
+def do_log_path(ws):
+    return ws.root / ".qakit" / "do-steps.jsonl"
+
+
+def do_log_read(ws):
+    """마지막 qakit do launch 이후 통과한 단계 (launch 기록이 없으면 처음부터). (단계 글자 목록, launch부터인지)"""
+    steps, from_launch = [], False
+    try:
+        lines = do_log_path(ws).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return steps, from_launch
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        if row.get("event") == "launch":
+            steps, from_launch = [], True
+        elif row.get("step"):
+            steps.append(row["step"])
+    return steps, from_launch
+
+
+def do_log_write(ws, row, reset=False):
+    f = do_log_path(ws)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    with open(f, "w" if reset else "a", encoding="utf-8") as out:
+        out.write(json.dumps(dict(row, at=datetime.datetime.now().isoformat(timespec="seconds")), ensure_ascii=False) + "\n")
+
+
+def do_steps(ws):
+    """qakit do steps: 기록된 단계 보기."""
+    steps, from_launch = do_log_read(ws)
+    if not steps:
+        info("기록된 단계가 없습니다. qakit do launch 뒤 단계를 실행하면 통과한 단계가 쌓입니다.")
+        return
+    info(("qakit do launch 이후" if from_launch else "기록 처음부터") + f" 통과한 단계 {len(steps)}개:")
+    for i, st in enumerate(steps, 1):
+        print(f"  {i:2}. {st}")
+    print("   → 시나리오로: qakit do save <이름>")
+
+
+def do_save(ws, name, force=False):
+    """qakit do save <이름>: 기록된 단계로 scenarios/<이름>.qa.yml 초안을 쓰고 바로 검사한다."""
+    if not re.fullmatch(r"[A-Za-z0-9가-힣_.-]+", name or ""):
+        fail(f"시나리오 이름으로 쓸 수 없습니다: {name!r}", "영문·숫자·한글·-·_ 만. 예) qakit do save home-12-banner")
+    steps, from_launch = do_log_read(ws)
+    if not steps:
+        fail("저장할 단계가 없습니다.", "qakit do launch 뒤 단계를 실행하세요 (통과한 단계만 기록됩니다)")
+    target = ws.root / "scenarios" / f"{name}.qa.yml"
+    if target.exists() and not force:
+        fail(f"이미 있습니다: {target}", "덮어쓰려면 --force")
+    body = []
+    for st in steps:
+        first, *rest = st.splitlines()
+        body.append(f"  - {first}")
+        body += [f"    {line}" for line in rest]
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    text = "\n".join([f"name: {name}",
+                      f"# (qakit do 기록에서 만든 초안, {stamp}) 무엇을 확인하는지 1~2줄로 바꿔 쓰고, 판정(expect)을 더한다.",
+                      "steps:"] + body) + "\n"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    ok(f"시나리오 초안: {target} (단계 {len(steps)}개)")
+    if not from_launch:
+        warn("qakit do launch 뒤의 기록이 아닙니다. 시나리오는 앱을 새로 켜고 시작하므로 앞부분(진입 단계)이 빠졌을 수 있습니다")
+    load_checked_scenario(ws, str(target), strict=False)
+    ok("형식·ID 검사 통과 → 다듬은 뒤 qakit run " + name)
+
+
 def cmd_do(args):
-    """시나리오 단계 하나를 상주 실행기로 바로 실행 (없으면 띄운다)."""
+    """시나리오 단계 하나를 상주 실행기로 바로 실행 (없으면 띄운다). 통과한 단계는 기록해 두었다가 save로 시나리오 초안을 만든다."""
     ws = find_workspace(args.workspace)
+    if args.step[0] == "steps" and len(args.step) == 1:
+        return do_steps(ws)
+    if args.step[0] == "save":
+        if len(args.step) != 2:
+            fail("저장할 시나리오 이름이 필요합니다.", "예) qakit do save home-12-banner")
+        return do_save(ws, args.step[1], force=args.force)
     udid = _serve_udid(ws)
     text = " ".join(args.step).strip()
     if not text:
@@ -3680,6 +3832,10 @@ def cmd_do(args):
     extra_time = f" · 실행기 시작 포함 전체 {total:.0f}초" if fresh else ""
     dump = res.get("dump")
     if res.get("ok"):
+        if path == "/launch":
+            do_log_write(ws, {"event": "launch"}, reset=True)   # 새 기록 시작
+        elif path == "/step":
+            do_log_write(ws, {"step": text})
         if path == "/dump" and dump:
             text_out = masker(ws.secrets())(dump)
             (ws.results_dir).mkdir(exist_ok=True)
@@ -3854,7 +4010,9 @@ def main():
     p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("do", help="시나리오 단계 하나를 바로 실행 (상주 실행기, 없으면 띄움). 예) qakit do 'tap: X' / dump / launch / reset")
-    p.add_argument("step", nargs="+", help="단계(시나리오 문법) 또는 dump · launch · ping · reset")
+    p.add_argument("step", nargs="+",
+                   help="단계(시나리오 문법) 또는 dump · launch · ping · reset · steps(기록 보기) · save <이름>(기록으로 시나리오 초안)")
+    p.add_argument("--force", action="store_true", help="save: 같은 이름의 시나리오가 있어도 덮어씀")
     p.add_argument("--timeout", type=int, default=120, help="이 시간(초) 안에 안 끝나면 실행기를 멈춤 (기본 120)")
     p.add_argument("--settle", type=float, default=0.5, help="dump 전에 기다릴 시간(초)")
     p.set_defaults(func=cmd_do)
@@ -3903,8 +4061,11 @@ def main():
     p.set_defaults(func=cmd_test)
 
     p = sub.add_parser("run", help="시나리오 파일(.qa.yml) 실행 — Swift 테스트 없이")
-    p.add_argument("scenario", nargs="+",
-                   help="scenarios/<이름>.qa.yml의 이름·파일 경로, 여러 개 가능. 패턴은 따옴표로: 'home-*'")
+    p.add_argument("scenario", nargs="*",
+                   help="scenarios/<이름>.qa.yml의 이름·파일 경로, 여러 개 가능. 패턴은 따옴표로: 'home-*'. 비우면 --tag로 고름")
+    p.add_argument("--tag", action="append", metavar="태그", help="이 태그가 있는 시나리오만 (여러 번 가능, 하나라도 있으면)")
+    p.add_argument("--exclude-tag", action="append", metavar="태그", help="이 태그가 있는 시나리오는 뺌 (--tag보다 우선)")
+    p.add_argument("--junit", metavar="파일", help="JUnit XML 보고서를 이 경로에 씀 (CI용)")
     p.add_argument("--reset", action="store_true", help="실행 전 앱 재설치 + 키체인 초기화")
     stop = p.add_mutually_exclusive_group()
     stop.add_argument("--fail-fast", action="store_true", help="여러 개 실행: 첫 실패에서 멈춤")
