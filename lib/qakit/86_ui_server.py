@@ -98,6 +98,47 @@ def cmd_ui(args):
         finally:
             do_lock.release()
 
+    touch = {"helper": None, "lock": threading.Lock()}
+
+    def run_touch(body):
+        """라이브 세션 손 조작을 직접 터치로 (H4, 실험) — 좌표(0~1)를 그대로 누른다. XCUITest 탭보다 빠르고 길게 누르기·끌기도.
+        step(그 자리 요소의 단계 글)이 오면 탭이 된 뒤 기록 (시나리오로 옮길 수 있게 — 재생은 XCUITest)."""
+        if not udid:
+            return None, "직접 터치는 시뮬레이터만"
+        if job["proc"] and job["proc"].poll() is None:
+            return None, "시나리오 실행 중에는 조작할 수 없습니다"
+        if aij["proc"] and aij["proc"].poll() is None:
+            return None, "AI QA가 조작하는 중에는 조작할 수 없습니다"
+        kind = body.get("kind") or "tap"
+        try:
+            pts = [min(max(float(body[k]), 0.0), 1.0) for k in (("x", "y", "x2", "y2") if kind == "swipe" else ("x", "y"))]
+            secs = min(max(float(body.get("seconds") or {"tap": 0.06, "press": 1.0, "swipe": 0.4}[kind]), 0.03), 5.0)
+        except (KeyError, TypeError, ValueError):
+            return None, "좌표가 없거나 이상함 (kind: tap·press·swipe, x·y·x2·y2는 0~1)"
+        cmd = {"tap": "tap {:.4f} {:.4f} {ms}", "press": "press {:.4f} {:.4f} {s}", "swipe": "swipe {:.4f} {:.4f} {:.4f} {:.4f} {s}"}[kind]
+        cmd = cmd.format(*pts, ms=int(secs * 1000), s=f"{secs:.2f}")
+        mark = lambda k, x, y: touch_mark(ws, k, x, y)
+        mark({"tap": "tap", "press": "press", "swipe": "drag"}[kind], pts[0], pts[1])
+        if not touch["lock"].acquire(timeout=10):
+            return None, "앞선 터치가 끝나지 않았습니다"
+        try:
+            if touch["helper"] is None:
+                touch["helper"] = TouchHelper(udid)
+            t0 = time.time()
+            good, line = touch["helper"].send(cmd, timeout=secs + 10)
+        finally:
+            touch["lock"].release()
+        if kind == "swipe":
+            mark("drag-done", pts[2], pts[3])
+        else:
+            mark(kind + "-done", pts[0], pts[1])
+        if not good:
+            return None, f"직접 터치 실패: {line}"
+        step = str(body.get("step") or "").strip()
+        if step and kind == "tap" and len(step) < 500:
+            do_log_write(ws, {"step": step})
+        return {"ok": True, "ms": int((time.time() - t0) * 1000), "reply": line, "recorded": bool(step and kind == "tap")}, None
+
     def job_state(since):
         with job["lock"]:
             running = bool(job["proc"]) and job["proc"].poll() is None
@@ -558,6 +599,9 @@ def cmd_ui(args):
                     return self.send(404, {"error": "녹화는 시뮬레이터만"})
                 res, err = record_start() if path.endswith("start") else record_stop()
                 return self.send(409 if err else 200, {"error": err} if err else res)
+            if path == "/api/touch":
+                res, err = run_touch(body)
+                return self.send(409 if err else 200, {"error": err} if err else res)
             if path == "/api/do":
                 step = str(body.get("step") or "").strip()
                 if not step or len(step) > 2000:
@@ -776,6 +820,8 @@ def cmd_ui(args):
             ai_stop("qakit ui 종료")
         if rec["proc"]:
             record_stop()
+        if touch["helper"]:
+            touch["helper"].stop()
         server.server_close()
 
 

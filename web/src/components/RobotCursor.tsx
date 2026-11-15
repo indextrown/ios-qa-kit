@@ -27,14 +27,15 @@ export function RobotCursor({ enabled, size = "h-6 w-6" }: { enabled: boolean; s
     };
     const handle = (n: Touch) => {
       const p = at(n);
-      if (n.kind === "tap-done") {
+      if (n.kind === "tap-done" || n.kind === "press-done") {
         if (pending.current) { clearTimeout(pending.current); pending.current = null; }
         setRobot({ ...p, kind: "tap", k: Date.now() });
         press(p);
         return;
       }
+      if (n.kind === "drag-done") { setRobot({ ...p, kind: "drag", k: Date.now() }); return; }   // 직접 터치 끌기: 시작 → 끝으로 미끄러짐
       setRobot({ ...p, k: Date.now() });
-      if (n.kind === "tap") {
+      if (n.kind === "tap" || n.kind === "press") {
         if (pending.current) clearTimeout(pending.current);
         pending.current = window.setTimeout(() => { pending.current = null; if (alive) press(p); }, 3000);   // tap-done이 안 오는 옛 실행기만
       }
@@ -62,8 +63,10 @@ export function RobotCursor({ enabled, size = "h-6 w-6" }: { enabled: boolean; s
       {dot && <div className="absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-rose-500 ring-2 ring-white/80" style={{ left: `${dot.x}%`, top: `${dot.y}%` }} />}
       {ripples.map((r) => <div key={r.k} className="qakit-ripple absolute h-10 w-10 rounded-full border-2 border-rose-500 bg-rose-500/25" style={{ left: `${r.x}%`, top: `${r.y}%` }} />)}
       {robot && (
-        <div className="absolute z-10 transition-[left,top] duration-200 ease-out" style={{ left: `${robot.x}%`, top: `${robot.y}%` }}>
+        <div className={`absolute z-10 transition-[left,top] ease-out ${robot.kind === "drag" ? "duration-500" : "duration-200"}`} style={{ left: `${robot.x}%`, top: `${robot.y}%` }}>
           <MousePointer2 className={`${size} -translate-x-[18%] -translate-y-[18%] fill-neutral-900 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]`} strokeWidth={1.5} />
+          {(robot.kind === "press" || robot.kind === "drag") && <span className="absolute left-5 top-4 whitespace-nowrap rounded bg-neutral-900/80 px-1.5 py-0.5 text-[10px] text-white">
+            {robot.kind === "press" ? "길게 누르기" : "끌기"}</span>}
           {robot.kind.startsWith("swipe") && <span className="absolute left-5 top-4 whitespace-nowrap rounded bg-neutral-900/80 px-1.5 py-0.5 text-[10px] text-white">
             쓸기 {({ "swipe-up": "↑", "swipe-down": "↓", "swipe-left": "←", "swipe-right": "→" } as Record<string, string>)[robot.kind] ?? ""}</span>}
         </div>
