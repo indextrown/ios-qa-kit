@@ -1,6 +1,7 @@
 """AI QA: 에이전트 출력 읽기, 세션 요약, 통과 단계 → 시나리오 초안"""
 import json
 import unittest
+from unittest import mock
 
 from helpers import load_qakit, make_workspace
 
@@ -62,3 +63,50 @@ class Session(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScenarioFromQa(unittest.TestCase):
+    def test_command_reads_source_only_when_asked(self):
+        tmp, root = make_workspace()
+        with tmp:
+            (root / "qakit.yml").write_text("name: t\napp:\n  project: ../App.xcodeproj\n  bundleId: x\n", encoding="utf-8")
+            ws = q.Workspace(root)
+            d = root / "results" / "ai" / "s"
+            d.mkdir(parents=True)
+            plain = q.ai_command("claude", ws, d, "p", 10)
+            self.assertEqual(plain[plain.index("--tools") + 1], "")          # 기본 도구 모두 끔
+            self.assertNotIn("--add-dir", plain)
+            src = q.ai_command("claude", ws, d, "p", 10, read_source=True)
+            self.assertEqual(src[src.index("--tools") + 1], "Read,Grep,Glob")   # 읽기 도구만 (셸·수정 없음)
+            self.assertNotIn("Bash", " ".join(src))
+            self.assertEqual(src[src.index("--add-dir") + 1], str(ws.app_dir))
+            self.assertEqual(src[src.index("--permission-mode") + 1], "dontAsk")
+
+    def test_prompt_and_context(self):
+        p = q.ai_scenario_prompt("x", 10, source="/app", context="- 그때 목표: 검색")
+        self.assertIn("앱 소스(읽기만, 고칠 수 없음): /app", p)
+        self.assertIn("시나리오의 근거는 실제 화면", p)
+        self.assertIn("바탕이 될 AI QA 결과", p)
+        self.assertIn("- 그때 목표: 검색", p)
+        self.assertNotIn("앱 소스(", q.ai_scenario_prompt("x", 10))
+
+    def test_session_context(self):
+        tmp, root = make_workspace()
+        with tmp:
+            d = root / "results" / "ai" / "2026-01-01_10-00-00"
+            d.mkdir(parents=True)
+            (d / "meta.json").write_text(json.dumps({"goal": "검색 QA"}), encoding="utf-8")
+            (d / "log.jsonl").write_text(row("launch", True) + "\n" + row("tap", True, "단계: tap: a\n✅") + "\n", encoding="utf-8")
+            (d / "issues.jsonl").write_text(json.dumps({"n": 1, "title": "문구 잘림", "severity": "낮음"}, ensure_ascii=False) + "\n", encoding="utf-8")
+            (d / "report.md").write_text("## 확인한 것\n- 검색 열림\n", encoding="utf-8")
+            c = q.ai_session_context(q.Workspace(root), d)
+            for must in ("그때 목표: 검색 QA", "  tap: a", "문구 잘림 (낮음)", "## 확인한 것"):
+                self.assertIn(must, c)
+
+    def test_find_ids_tool(self):
+        tmp, root = make_workspace()
+        with tmp, mock.patch.object(q, "known_ids", return_value={"HomeView.searchButton", "HomeView.sortButton", "LoginView.idField"}):
+            content, err = q.McpSession(q.Workspace(root)).call("find_ids", {"query": "home"})
+        self.assertFalse(err)
+        self.assertIn("HomeView.searchButton", content[0]["text"])
+        self.assertNotIn("LoginView", content[0]["text"])

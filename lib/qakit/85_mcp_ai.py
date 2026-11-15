@@ -104,6 +104,8 @@ def mcp_tools():
              {"yaml": {"type": "string"}}, ["yaml"]),
         tool("recorded_steps", "마지막 launch 이후 통과한 단계 목록 (save_scenario가 이것으로 시나리오를 만든다)."),
         tool("list_scenarios", "이미 있는 시나리오 (이름·제목·태그·최근 결과)."),
+        tool("find_ids", "앱 ID 목록에서 찾기 (자동 ID '타입.프로퍼티' — 화면 구조에 없을 때나 소스에서 본 이름 확인용).",
+             {"query": {"type": "string", "description": "이름 일부 (예: search, LoginView)"}}, ["query"]),
         tool("list_common_steps", "공통 단계(steps/) 목록 — 여러 시나리오가 앞에 쓰는 경로 (예: home = 앱 켜고 홈 탭까지). "
                                   "step 도구로 \"use: <이름>\"을 실행하면 그 단계를 밟는다."),
         tool("read_scenario", "시나리오(scenarios/)나 공통 단계(steps/)의 .qa.yml 내용 — 새 시나리오를 만들 때 스타일을 맞추려고 읽는다.",
@@ -328,6 +330,12 @@ class McpSession:
                     + (f" 최근: {''.join('✓' if r == 'pass' else '✗' if r == 'fail' else '·' for r in s['recent'][-5:])}" if s["recent"] else "")
                     for s in ui_scenarios(self.ws)]
             return text(f"시나리오 {len(rows)}개\n" + "\n".join(rows)), False
+        if name == "find_ids":
+            term = str(a.get("query") or "").lower()
+            ids = sorted(known_ids(self.ws))
+            hits = [i for i in ids if term in i.lower()]
+            return text(f"앱 ID {len(ids)}개 중 '{term}' {len(hits)}개\n" + "\n".join(hits[:60])
+                        + (f"\n…({len(hits) - 60}개 더)" if len(hits) > 60 else "")), False
         if name == "list_common_steps":
             rows = []
             for f in sorted((self.ws.root / "steps").glob("*.qa.yml")):
@@ -422,15 +430,26 @@ def ai_engines():
     return out
 
 
-def ai_scenario_prompt(goal, minutes, name=None, tags=None, start=None):
-    """시나리오 만들기 모드: 문제 찾기가 아니라, 다음부터 AI 없이 매번 통과하는 시나리오 하나를 남긴다."""
+def ai_scenario_prompt(goal, minutes, name=None, tags=None, start=None, source=None, context=None):
+    """시나리오 만들기 모드: 문제 찾기가 아니라, 다음부터 AI 없이 매번 통과하는 시나리오를 남긴다.
+    source: 앱 소스 폴더(읽기 전용) — 화면 코드·흐름·ID를 확인. context: 바탕이 될 AI QA 결과(보고서·통과 단계)."""
     meta = [f"이름: {name}" if name else "이름: 직접 정한다 (화면-번호-내용, 예: login-03-empty-password. list_scenarios로 겹치지 않게)",
             f"태그: {', '.join(tags)}" if tags else "태그: 알맞게 (없어도 됨)",
             f"시작 공통 단계: {start} — launch 다음에 step 도구로 \"use: {start}\"를 밟는다 (save_scenario에는 start를 주지 않음, 이미 기록됨)"
             if start else "시작 공통 단계: 필요하면 list_common_steps에서 골라 launch 다음 step으로 \"use: <이름>\""]
+    src = (f"""
+앱 소스(읽기만, 고칠 수 없음): {source}
+- Grep·Glob·Read로 해당 화면의 View/ViewController 코드를 찾아 흐름(어떤 버튼이 어디로 가는지)·조건(로그인·빈 목록 등)·요소를 확인한다.
+- 자동 ID는 '타입이름.프로퍼티' (예: LoginView.loginButton), 앱이 직접 붙인 ID는 accessibilityIdentifier("…"). find_ids로 앱 ID 목록에서 찾을 수 있다.
+- 시나리오의 근거는 실제 화면(screen)이다. 소스와 화면이 다르면 화면을 따른다. 소스를 읽는 데 시간을 다 쓰지 말고, 필요한 화면만.
+""" if source else "")
+    ctx = f"""
+바탕이 될 AI QA 결과 (이미 확인된 흐름 — 이걸 재사용 시나리오로 옮긴다. 확인된 흐름마다 시나리오 하나):
+{context}
+""" if context else ""
     return f"""만들 시나리오: {goal}
 {chr(10).join(meta)}
-
+{src}{ctx}
 qakit MCP 도구로 이 흐름의 시나리오(.qa.yml)를 만든다. 문제 찾기가 목적이 아니라, 다음부터 AI 없이 매번 통과하는 시나리오를 남기는 것이 목적이다. qakit 도구 말고 다른 도구는 없다.
 1. list_scenarios·list_common_steps로 있는 것을 보고, 비슷한 시나리오 하나를 read_scenario로 읽어 스타일을 맞춘다. 같은 흐름이 이미 있으면 새로 만들지 말고 그 이름을 보고한다.
 2. launch로 시작하고 screen으로 화면을 읽으며 흐름을 밟는다. 조작 도구마다 why(왜 하는지 한 줄)를 준다.
@@ -456,14 +475,17 @@ qakit MCP 도구로 이 iOS 앱(시뮬레이터)을 직접 QA한다. qakit 도�
 6. 마지막 답변은 지침의 보고 형식으로, 한국어 마크다운."""
 
 
-def ai_command(engine, ws, d, prompt, turns):
-    """AI CLI 명령 (qakit 도구만 허용). → (명령, MCP 설정 파일)"""
+def ai_command(engine, ws, d, prompt, turns, read_source=False):
+    """AI CLI 명령 (qakit 도구만 허용, read_source면 앱 소스 읽기(Read·Grep·Glob)도 — 셸·수정은 막음)."""
     mcp = {"command": str(KIT_DIR / "bin" / "qakit"), "args": ["-w", str(ws.root), "mcp"], "env": {"QAKIT_AI_DIR": str(d)}}
     if engine == "claude":
         cfg = d / "mcp.json"
         cfg.write_text(json.dumps({"mcpServers": {"qakit": mcp}}, ensure_ascii=False, indent=2), encoding="utf-8")
+        tools = ["--tools", "Read,Grep,Glob", "--allowedTools", "mcp__qakit,Read,Grep,Glob"] if read_source \
+            else ["--tools", "", "--allowedTools", "mcp__qakit"]
+        extra = ["--add-dir", str(ws.app_dir)] if read_source and ws.app_dir else []
         return [shutil.which("claude") or "claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
-                "--strict-mcp-config", "--mcp-config", str(cfg), "--tools", "", "--allowedTools", "mcp__qakit",
+                "--strict-mcp-config", "--mcp-config", str(cfg), *tools, *extra,
                 "--permission-mode", "dontAsk", "--max-turns", str(turns), "--no-session-persistence"]
     # codex (이 Mac에 없어 시험하지 못함): exec + JSON 이벤트, 읽기 전용 샌드박스, MCP는 -c로
     toml = lambda v: json.dumps(v, ensure_ascii=False)
@@ -556,6 +578,22 @@ def ai_session_info(ws, d, full=False):
             with contextlib.suppress(ValueError):
                 events += ai_events(engine, json.loads(line))[0]
     return dict(info_, report=report, rows=rows, issueList=issues, events=events, stepList=steps, fromLaunch=from_launch)
+
+
+def ai_session_context(ws, d, limit=6000):
+    """AI QA 세션 → 시나리오 만들기에 넘길 바탕 (목표·보고서·통과 단계·문제). 너무 길면 자른다."""
+    full = ai_session_info(ws, d, full=True)
+    parts = [f"- 그때 목표: {full.get('goal') or '(터미널에서 연결한 AI)'}"]
+    if full.get("stepList"):
+        parts.append("- 그때 통과한 단계 (마지막 launch부터):\n" + "\n".join(f"  {s}" for s in full["stepList"]))
+    if full.get("issueList"):
+        parts.append("- 그때 보고한 문제 (이 흐름은 시나리오에 넣지 않거나, 문제가 고쳐졌는지 확인하는 단계로):\n"
+                     + "\n".join(f"  · {x.get('title')} ({x.get('severity')})" for x in full["issueList"]))
+    if full.get("saved"):
+        parts.append("- 이미 저장한 시나리오: " + ", ".join(full["saved"]))
+    if full.get("report"):
+        parts.append("- 보고서:\n" + full["report"].strip())
+    return masker(ws.secrets())("\n".join(parts))[:limit]
 
 
 def ai_sessions(ws):

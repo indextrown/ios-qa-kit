@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, MousePointer2, Play, Square, Loader2, CheckCircle2, XCircle, AlertTriangle, Wrench, MessageSquare, Info, ExternalLink } from "lucide-react";
-import { fileUrl, get, post, type AiSession } from "../lib/api";
+import { fileUrl, get, post, scenarioFromSession, type AiSession } from "../lib/api";
 import { aiSecs, aiWhen } from "./AiSession";
 import { cx, store, stored } from "../lib/util";
 import { AiActivity } from "../components/AiActivity";
@@ -43,6 +43,8 @@ export function AiQa() {
   const [scName, setScName] = useState("");
   const [scTags, setScTags] = useState("");
   const [scStart, setScStart] = useState(() => stored("qakit-ai-start", ""));
+  const [readSource, setReadSource] = useState(() => stored("qakit-ai-readsrc", true));   // 시나리오 만들 때 앱 소스도 (읽기 전용)
+  useEffect(() => store("qakit-ai-readsrc", readSource), [readSource]);
   const [stepFiles, setStepFiles] = useState<string[]>([]);
   const [saved, setSaved] = useState<string[]>([]);
   useEffect(() => { store("qakit-ai-mode", mode); store("qakit-ai-start", scStart); }, [mode, scStart]);
@@ -86,7 +88,7 @@ export function AiQa() {
   const start = async () => {
     setStarting(true); setError(null);
     try {
-      await post("/api/ai/start", { goal, engine, minutes, turns, save, mode, name: scName.trim() || null, start: scStart || null,
+      await post("/api/ai/start", { goal, engine, minutes, turns, save, mode, name: scName.trim() || null, start: scStart || null, readSource,
         tags: scTags.split(",").map((t) => t.trim()).filter(Boolean) });
       setSaved([]); await poll();
     }
@@ -159,11 +161,13 @@ export function AiQa() {
                   </select></label>
                 {!isSc && <label className="flex items-end gap-2 pb-1.5 text-[12px]"><input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} disabled={running} />
                   확인한 경로를 시나리오로 저장</label>}
+                {isSc && <label className="flex items-end gap-2 pb-1.5 text-[12px]" title="AI가 앱 소스에서 화면 코드·흐름·ID를 확인합니다 (Read·Grep만, 고칠 수 없음)">
+                  <input type="checkbox" checked={readSource} onChange={(e) => setReadSource(e.target.checked)} disabled={running} />앱 소스도 읽기 (읽기 전용)</label>}
               </div>
               {eng && <div className={cx("flex items-center gap-1.5 text-[11.5px]", eng.ready ? "text-sub" : "text-warn")}>
                 {eng.ready ? <Info className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
                 {eng.name}: {eng.note}{!eng.tested && " · qakit에서 아직 시험하지 못한 연결"}</div>}
-              <div className="text-[11.5px] text-sub">AI는 qakit 도구(화면 읽기·탭·입력·확인·시나리오)만 쓸 수 있습니다 — 셸·파일 수정은 막습니다. 비밀번호는 <code>{"{secret:키}"}</code>로만 칩니다.</div>
+              <div className="text-[11.5px] text-sub">AI는 qakit 도구(화면 읽기·탭·입력·확인·시나리오){isSc && readSource ? "와 앱 소스 읽기" : ""}만 쓸 수 있습니다 — 셸·파일 수정은 막습니다. 비밀번호는 <code>{"{secret:키}"}</code>로만 칩니다.</div>
               {error && <div className="text-[12px] text-bad">{error}</div>}
               <div className="flex justify-end">
                 {running
@@ -214,7 +218,9 @@ export function AiQa() {
           {job?.result?.text && (
             <Card title={<span className="flex items-center gap-1.5">{job.result.error ? <XCircle className="h-3.5 w-3.5 text-bad" /> : <CheckCircle2 className="h-3.5 w-3.5 text-ok" />}보고서</span>}
               actions={job.dir && <span className="flex items-center gap-3 text-[11px]">
-                <a href={`#/${job.dir}`} className="text-link hover:underline">상세 · 시나리오로 저장</a>
+                {job.mode !== "scenario" && <button onClick={() => scenarioFromSession(job.dir!, job.goal).catch((e) => setError(String(e.message)))}
+                  className="font-medium text-link hover:underline">이 결과로 시나리오 만들기</button>}
+                <a href={`#/${job.dir}`} className="text-link hover:underline">상세</a>
                 <a href={fileUrl(job.dir, "report.md")} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-link hover:underline">report.md<ExternalLink className="h-3 w-3" /></a></span>}>
               <pre className="whitespace-pre-wrap p-4 font-sans text-[13px] leading-relaxed">{job.result.text}</pre>
             </Card>

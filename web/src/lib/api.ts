@@ -32,3 +32,17 @@ export const post = <T,>(path: string, body: unknown = {}) =>
     .then((r) => read<T>(r));
 export const fileUrl = (dir: string, name: string) => `/api/file?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent(name)}`;
 export const screenUrl = () => `/api/screen?ts=${Date.now()}`;
+
+/** AI QA 세션 결과 → AI가 화면·앱 소스를 보며 시나리오로 만든다 (사용량이 든다). 시작하면 AI QA 화면으로. */
+export async function scenarioFromSession(dir: string, goal: string | null) {
+  const read = <T,>(k: string, d: T): T => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v) as T; } catch { return d; } };
+  if (!window.confirm("이 AI QA 결과를 바탕으로 AI가 앱 화면과 소스를 보며 시나리오를 만듭니다.\nAI 계정 사용량이 듭니다. 시작할까요?")) return false;
+  await post("/api/ai/start", {
+    goal: `AI QA 결과에서 확인된 흐름을 재사용 시나리오로${goal ? ` (그때 목표: ${goal})` : ""}`,
+    mode: "scenario", fromSession: dir, readSource: true,
+    engine: read("qakit-ai-engine", "claude"), minutes: read("qakit-ai-minutes", 10), turns: read("qakit-ai-turns", 60),
+  });
+  try { localStorage.setItem("qakit-ai-mode", JSON.stringify("scenario")); } catch { /* 없어도 됨 */ }
+  location.hash = "#/ai";
+  return true;
+}
