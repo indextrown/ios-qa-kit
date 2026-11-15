@@ -1,0 +1,99 @@
+# qakit 시나리오를 GitHub Actions에서 돌리는 예시 — 앱 저장소의 .github/workflows/qa.yml로 복사해 고쳐 쓴다.
+#
+#   PR마다: smoke 태그 시나리오 (빠르게) · 매일 밤: 전체 · 손으로: Actions 탭에서 "Run workflow"
+#   결과: PR 체크 ✅/❌, results/(실패 요약·스크린샷·실패 영상·JUnit)를 내려받기로 첨부
+#
+# 준비 (저장소 Settings):
+#   - Secrets: QA_SECRETS — 작업공간 secrets.txt 내용 그대로 (KEY=VALUE 여러 줄). 로그인 계정 등
+#              QA_REPO_TOKEN — QA 작업공간이 따로 된 저장소면, 그걸 읽을 수 있는 토큰 (아래 B)
+#   - Variables: QA_SIMULATOR — 러너에 있는 시뮬레이터 이름 (예: iPhone 16). 없으면 qakit.yml 값
+#                QA_REPO — B일 때 QA 작업공간 저장소 (예: my-org/my-app-qa)
+#
+# 알아 둘 것:
+#   - macOS 러너는 Linux보다 분당 비용이 약 10배 — PR엔 smoke만, 전체는 하루 한 번이 보통.
+#   - 앱이 로그인해야 하는 화면은 러너에서도 로그인해야 한다. 아이디·비밀번호 로그인은 secrets로 되지만,
+#     애플·소셜 로그인처럼 사람이 확인해야 하는 로그인은 자동으로 못 한다 → 로그인 없는 화면만 돌리거나,
+#     precheck(qakit.yml)가 "로그인 상태가 아님"으로 멈춘다(종료 코드 2).
+#   - 종료 코드: 0 모두 통과 · 1 앱 판정 실패 · 2 환경·설정 문제.
+name: QA (qakit)
+
+on:
+  pull_request:
+  schedule:
+    - cron: "0 18 * * *"          # 매일 03:00 (KST)
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "돌릴 태그 (비우면 전체)"
+        required: false
+        default: smoke
+
+concurrency:
+  group: qa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qa:
+    runs-on: macos-15
+    timeout-minutes: 60
+    env:
+      QA: QA                          # 작업공간 폴더 (qakit.yml이 있는 곳)
+    steps:
+      - uses: actions/checkout@v4     # 앱 저장소
+
+      # B) QA 작업공간이 따로 된 저장소면 (A: 앱 저장소 안 QA/ 폴더면 이 단계를 지운다)
+      - name: QA 작업공간 받기
+        if: ${{ vars.QA_REPO != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.QA_REPO }}
+          token: ${{ secrets.QA_REPO_TOKEN }}
+          path: ${{ env.QA }}
+
+      - name: qakit 설치
+        run: |
+          git clone --depth 1 -b main https://github.com/indextrown/ios-qa-kit.git "$HOME/ios-qa-kit"
+          echo "$HOME/ios-qa-kit/bin" >> "$GITHUB_PATH"
+
+      - name: 러너에 맞게 설정 (시뮬레이터 이름, 워크트리 자동 최신화 끔)
+        run: |
+          if [ -n "${{ vars.QA_SIMULATOR }}" ]; then
+            sed -i '' "s/^simulator:.*/simulator: ${{ vars.QA_SIMULATOR }}/" "$QA/qakit.yml"
+          fi
+          # 러너는 이미 이번 커밋을 받았다 → QA 워크트리를 원격 브랜치로 다시 맞추지 않는다
+          if grep -q '^  update:' "$QA/qakit.yml"; then
+            sed -i '' 's/^\(  update:\).*/\1 off/' "$QA/qakit.yml"
+          elif grep -q '^worktree:' "$QA/qakit.yml"; then
+            perl -0pi -e 's/^worktree:\n/worktree:\n  update: off\n/m' "$QA/qakit.yml"
+          fi
+          printf '%s\n' "${{ secrets.QA_SECRETS }}" > "$QA/secrets.txt"
+          xcrun simctl list devices available | grep -E "iPhone|iPad" | head -5
+
+      - name: 점검 · 앱 빌드
+        run: |
+          qakit -w "$QA" doctor
+          qakit -w "$QA" build-app
+
+      - name: 시나리오
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          [ "${{ github.event_name }}" = "pull_request" ] && TAG=smoke
+          [ "${{ github.event_name }}" = "schedule" ] && TAG=
+          if [ -n "$TAG" ]; then
+            qakit -w "$QA" run --tag "$TAG" --reuse-app --junit "$QA/results/junit.xml"
+          else
+            qakit -w "$QA" run '*' --reuse-app --junit "$QA/results/junit.xml"
+          fi
+
+      - name: 결과 첨부 (실패 요약·스크린샷·실패 영상·JUnit)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qakit-results
+          path: |
+            ${{ env.QA }}/results/**/summary.txt
+            ${{ env.QA }}/results/**/failure*
+            ${{ env.QA }}/results/**/output.log
+            ${{ env.QA }}/results/junit.xml
+          if-no-files-found: ignore
+          retention-days: 14
