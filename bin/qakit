@@ -1752,8 +1752,9 @@ def suggest_targets(message, dump_text, limit=3):
                     r = max(r, 0.75)
                 if r >= 0.75:
                     scored.append((r, kind, v, e))
+        best = max((x[0] for x in scored), default=0)
         for r, kind, v, e in sorted(scored, key=lambda x: -x[0]):
-            if id(e) in used:
+            if id(e) in used or r < best - 0.1:   # 가장 비슷한 것보다 한참 덜 비슷하면 빼기 (앞뒤만 같은 home_…_button 등)
                 continue
             if kind == "id":
                 if sum(1 for x in els if x["id"] == v) != 1:
@@ -4453,7 +4454,16 @@ class McpSession:
         self.dir = None
         self.client = None
         self.issues = 0
-        self.udid = None if ws.device else simulator_udid(ws.simulator)[0]
+        self._udid = False   # 사진 찍을 때 처음 찾는다 (시뮬레이터가 없는 곳에서도 서버·다른 도구는 뜨게)
+
+    @property
+    def udid(self):
+        if self._udid is False:
+            self._udid = None
+            if not self.ws.device:
+                with contextlib.suppress(Exception, SystemExit):
+                    self._udid = simulator_udid(self.ws.simulator)[0]
+        return self._udid
 
     def session_dir(self):
         if not self.dir:
