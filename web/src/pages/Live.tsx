@@ -59,7 +59,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     store("qakit-cursor", cursor); store("qakit-click-tap", clickTap); }, [streaming, interval, boxes, cursor, clickTap, mode]);
   useEffect(() => {   // 마지막 탭 자리는 몇 초 뒤 지운다
     if (!lastTap) return;
-    const t = setTimeout(() => setLastTap(null), 4000);
+    const t = setTimeout(() => setLastTap(null), 1500);
     return () => clearTimeout(t);
   }, [lastTap]);
 
@@ -151,7 +151,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   }, [cursor]);
   useEffect(() => {   // 한동안 안 누르면 커서를 숨긴다
     if (!robot) return;
-    const t = setTimeout(() => setRobot(null), 5000);
+    const t = setTimeout(() => setRobot(null), 1500);
     return () => clearTimeout(t);
   }, [robot]);
   const doStep = async (step: string) => {
