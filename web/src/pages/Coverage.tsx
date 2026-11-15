@@ -23,11 +23,15 @@ export function Coverage() {
   const rows = useMemo(() => (c?.screens ?? []).filter((s) => (!onlyGaps || s.used < s.total)
     && (!text || `${s.screen} ${s.ids.map((x) => x.id).join(" ")}`.toLowerCase().includes(text.toLowerCase()))), [c, onlyGaps, text]);
   const toggle = (k: string) => setOpen((p) => { const s = new Set(p); if (s.has(k)) s.delete(k); else s.add(k); return s; });
-  const toAi = (s: Screen) => {
+  const toAi = (s: Screen, mode: "qa" | "scenario") => {
     const gaps = s.ids.filter((x) => !x.scenarios.length).map((x) => x.id);
-    store("qakit-ai-goal", `${s.screen} 화면 QA — 아직 시나리오가 없는 요소: ${gaps.slice(0, 8).join(", ")}${gaps.length > 8 ? " 등" : ""}. `
-      + "각 요소를 눌러 보고 화면이 정상으로 열리고 돌아오는지 확인하고, 확인한 경로는 시나리오로 남겨 줘.");
-    store("qakit-ai-save", true);
+    const list = `${gaps.slice(0, 8).join(", ")}${gaps.length > 8 ? " 등" : ""}`;
+    store("qakit-ai-mode", mode);
+    if (mode === "scenario") store("qakit-ai-goal", `${s.screen} 화면까지 가서 아직 시나리오가 없는 요소(${list})가 보이고 눌리는지 확인하는 시나리오`);
+    else {
+      store("qakit-ai-goal", `${s.screen} 화면 QA — 아직 시나리오가 없는 요소: ${list}. 각 요소를 눌러 보고 화면이 정상으로 열리고 돌아오는지 확인하고, 확인한 경로는 시나리오로 남겨 줘.`);
+      store("qakit-ai-save", true);
+    }
     location.hash = "#/ai";
   };
 
@@ -68,8 +72,10 @@ export function Coverage() {
                         <div className="h-1.5 w-28 shrink-0 rounded-full bg-muted"><div className={cx("h-1.5 rounded-full", s.used === s.total ? "bg-ok" : s.used ? "bg-warn" : "bg-bad/60")} style={{ width: `${Math.max(4, pct(s.used, s.total))}%` }} /></div>
                         <span className="w-14 shrink-0 text-right font-mono text-[12px] text-sub">{s.used}/{s.total}</span>
                         {s.used < s.total
-                          ? <Button size="sm" variant="ghost" onClick={() => toAi(s)} title="이 화면의 빈 요소를 AI QA 목표로"><Bot className="h-3.5 w-3.5" />AI QA로</Button>
-                          : <span className="w-[74px]" />}
+                          ? <span className="flex shrink-0 gap-0.5">
+                              <Button size="sm" variant="ghost" onClick={() => toAi(s, "scenario")} title="이 화면의 빈 요소를 확인하는 시나리오를 AI로 만들기"><Bot className="h-3.5 w-3.5" />AI로 시나리오</Button>
+                              <Button size="sm" variant="ghost" onClick={() => toAi(s, "qa")} title="이 화면의 빈 요소를 AI QA 목표로">AI QA</Button></span>
+                          : <span className="w-[190px]" />}
                       </div>
                       {isOpen && (
                         <div className="space-y-1 bg-muted/30 px-11 py-2.5">

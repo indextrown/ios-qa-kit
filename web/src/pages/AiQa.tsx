@@ -11,17 +11,25 @@ interface Engine { id: string; name: string; version?: string; ready: boolean; n
 interface Ev { kind: "info" | "text" | "tool" | "result" | "error"; text: string; t: number; why?: string }
 interface AiJob {
   running: boolean; engine: string | null; goal: string | null; started: number | null; ended: number | null; code: number | null;
-  limit: number | null; stopped: string | null; dir: string | null; total: number; events: Ev[];
+  limit: number | null; stopped: string | null; dir: string | null; total: number; events: Ev[]; mode?: "qa" | "scenario" | null;
   result: { text: string; cost: number | null; turns: number | null; error: boolean; subtype: string | null } | null;
 }
 
 const noop = () => {};
 const field = "w-full rounded-md bg-muted px-2.5 text-[13px] outline-none placeholder:text-sub";
-const EXAMPLES = [
-  "검색 화면 QA: 빈 검색어, 아주 긴 검색어, 특수문자, 뒤로 가기까지 확인",
-  "홈 화면의 모든 버튼을 한 번씩 눌러 보고 화면이 정상으로 열리고 돌아오는지",
-  "알림 화면 V2: 키워드 등록·삭제 흐름과 빈 목록 안내 문구",
-];
+type Mode = "qa" | "scenario";
+const EXAMPLES: Record<Mode, string[]> = {
+  qa: [
+    "검색 화면 QA: 빈 검색어, 아주 긴 검색어, 특수문자, 뒤로 가기까지 확인",
+    "홈 화면의 모든 버튼을 한 번씩 눌러 보고 화면이 정상으로 열리고 돌아오는지",
+    "알림 화면 V2: 키워드 등록·삭제 흐름과 빈 목록 안내 문구",
+  ],
+  scenario: [
+    "홈에서 검색 버튼 → 검색어 입력 → 첫 결과를 눌러 상세가 열리는지",
+    "마이 탭에서 프로필 설정 화면이 열리고 닉네임 칸이 보이는지",
+    "지도 탭에서 목록 보기로 바꾸고 첫 팝업이 보이는지",
+  ],
+};
 
 /** A3: 목표를 적으면 로그인된 Claude Code·Codex가 qakit 도구만으로 앱을 QA한다 */
 export function AiQa() {
@@ -31,6 +39,14 @@ export function AiQa() {
   const [minutes, setMinutes] = useState(() => stored("qakit-ai-minutes", 10));
   const [turns, setTurns] = useState(() => stored("qakit-ai-turns", 60));
   const [save, setSave] = useState(() => stored("qakit-ai-save", false));
+  const [mode, setMode] = useState<Mode>(() => stored<Mode>("qakit-ai-mode", "qa"));   // QA(문제 찾기) · 시나리오 만들기
+  const [scName, setScName] = useState("");
+  const [scTags, setScTags] = useState("");
+  const [scStart, setScStart] = useState(() => stored("qakit-ai-start", ""));
+  const [stepFiles, setStepFiles] = useState<string[]>([]);
+  const [saved, setSaved] = useState<string[]>([]);
+  useEffect(() => { store("qakit-ai-mode", mode); store("qakit-ai-start", scStart); }, [mode, scStart]);
+  useEffect(() => { get<string[]>("/api/steps-files").then(setStepFiles).catch(() => {}); }, []);
   const [cursor, setCursor] = useState(() => stored("qakit-ai-cursor", true));   // 실행기가 누르는 자리 커서
   const [job, setJob] = useState<AiJob | null>(null);
   const [events, setEvents] = useState<Ev[]>([]);
@@ -69,30 +85,63 @@ export function AiQa() {
 
   const start = async () => {
     setStarting(true); setError(null);
-    try { await post("/api/ai/start", { goal, engine, minutes, turns, save }); await poll(); }
+    try {
+      await post("/api/ai/start", { goal, engine, minutes, turns, save, mode, name: scName.trim() || null, start: scStart || null,
+        tags: scTags.split(",").map((t) => t.trim()).filter(Boolean) });
+      setSaved([]); await poll();
+    }
     catch (e) { setError((e as Error).message); }
     setStarting(false);
   };
   const stop = async () => { try { await post("/api/ai/stop"); await poll(); } catch (e) { setError((e as Error).message); } };
 
+  useEffect(() => {   // 끝나면 이번 세션에서 저장된 시나리오
+    if (!job?.dir || job.running) return;
+    get<{ saved: string[] }>(`/api/ai/session?dir=${encodeURIComponent(job.dir)}`).then((d) => setSaved(d.saved)).catch(() => {});
+  }, [job?.dir, job?.running]);
+  const runSaved = async (name: string) => {
+    try { await post("/api/run", { scenarios: [name], options: { reuse: false, precheck: false } }); location.hash = "#/scenarios"; }
+    catch (e) { setError((e as Error).message); }
+  };
   const eng = engines?.find((e) => e.id === engine);
+  const isSc = mode === "scenario";
   const elapsed = job?.started ? Math.round(((job.ended ?? now / 1000) - job.started)) : 0;
   const mmss = (s: number) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
   const running = !!job?.running;
 
   return (
     <>
-      <PageHeader title="AI QA" description="목표를 적으면 로그인해 둔 Claude Code·Codex가 qakit 도구만으로 앱을 직접 눌러 보며 QA합니다. 사용량은 그 AI 계정에서 씁니다."
+      <PageHeader title="AI QA" description={isSc
+          ? "확인할 흐름을 적으면 AI가 앱을 직접 눌러 보며 경로를 찾고, 확인(expect)을 넣어 시나리오로 저장합니다 — 새로 켠 앱에서 재생해 통과해야 저장. 사용량은 그 AI 계정에서 씁니다."
+          : "목표를 적으면 로그인해 둔 Claude Code·Codex가 qakit 도구만으로 앱을 직접 눌러 보며 QA합니다. 사용량은 그 AI 계정에서 씁니다."}
         actions={running && <Badge tone="warn">AI QA 중 · {mmss(elapsed)}</Badge>} />
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-4">
-          <Card title={<span className="flex items-center gap-1.5"><Bot className="h-3.5 w-3.5" />목표</span>}>
+          <Card title={<span className="flex items-center gap-1.5"><Bot className="h-3.5 w-3.5" />{isSc ? "만들 시나리오" : "목표"}</span>}
+            actions={<div className="inline-flex rounded-md bg-muted p-0.5">
+              {([["qa", "QA (문제 찾기)"], ["scenario", "시나리오 만들기"]] as const).map(([v, l]) => (
+                <button key={v} onClick={() => setMode(v)} disabled={running}
+                  className={cx("rounded px-2.5 py-0.5 text-[12px]", mode === v ? "bg-card font-medium shadow-e1" : "text-sub hover:text-fg")}>{l}</button>))}
+            </div>}>
             <div className="space-y-3 p-4">
               <textarea value={goal} onChange={(e) => setGoal(e.target.value)} disabled={running} rows={3}
-                placeholder="무엇을 QA할지 한두 문장으로 (예: 검색 화면 QA — 빈 검색어, 긴 검색어, 뒤로 가기까지)"
+                placeholder={isSc ? "어떤 흐름을 확인하는 시나리오인지 (예: 홈 → 검색 → 첫 결과 상세가 열리는지)"
+                  : "무엇을 QA할지 한두 문장으로 (예: 검색 화면 QA — 빈 검색어, 긴 검색어, 뒤로 가기까지)"}
                 className={cx(field, "py-2 leading-relaxed")} />
+              {isSc && (
+                <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+                  <input value={scName} onChange={(e) => setScName(e.target.value)} disabled={running} placeholder="이름 (비우면 AI가 정함, 예: search-03-detail)"
+                    className={cx(field, "h-8 font-mono text-[12px]")} />
+                  <input value={scTags} onChange={(e) => setScTags(e.target.value)} disabled={running} placeholder="태그 (쉼표로: smoke, search)"
+                    className={cx(field, "h-8 font-mono text-[12px]")} />
+                  <select value={scStart} onChange={(e) => setScStart(e.target.value)} disabled={running} className={cx(field, "h-8")} title="앱을 켠 뒤 먼저 밟을 공통 단계">
+                    <option value="">시작 공통 단계: AI가 고름</option>
+                    {stepFiles.map((x) => <option key={x} value={x}>use: {x}</option>)}
+                  </select>
+                </div>
+              )}
               <div className="flex flex-wrap gap-1.5">
-                {EXAMPLES.map((x) => <button key={x} onClick={() => setGoal(x)} disabled={running}
+                {EXAMPLES[mode].map((x) => <button key={x} onClick={() => setGoal(x)} disabled={running}
                   className="rounded-md bg-muted px-2 py-1 text-left text-[11.5px] text-sub hover:bg-line hover:text-fg">{x}</button>)}
               </div>
               <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
@@ -108,8 +157,8 @@ export function AiQa() {
                   <select value={turns} onChange={(e) => setTurns(Number(e.target.value))} disabled={running} className={cx(field, "mt-1 h-8 text-fg")}>
                     {[20, 40, 60, 100, 200].map((m) => <option key={m} value={m}>{m}번</option>)}
                   </select></label>
-                <label className="flex items-end gap-2 pb-1.5 text-[12px]"><input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} disabled={running} />
-                  확인한 경로를 시나리오로 저장</label>
+                {!isSc && <label className="flex items-end gap-2 pb-1.5 text-[12px]"><input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} disabled={running} />
+                  확인한 경로를 시나리오로 저장</label>}
               </div>
               {eng && <div className={cx("flex items-center gap-1.5 text-[11.5px]", eng.ready ? "text-sub" : "text-warn")}>
                 {eng.ready ? <Info className="h-3.5 w-3.5" /> : <AlertTriangle className="h-3.5 w-3.5" />}
@@ -119,7 +168,7 @@ export function AiQa() {
               <div className="flex justify-end">
                 {running
                   ? <Button variant="danger" onClick={stop}><Square className="h-3.5 w-3.5" />멈춤</Button>
-                  : <Button variant="primary" onClick={start} loading={starting} disabled={!goal.trim() || !eng?.ready}><Play className="h-3.5 w-3.5" />AI QA 시작</Button>}
+                  : <Button variant="primary" onClick={start} loading={starting} disabled={!goal.trim() || !eng?.ready}><Play className="h-3.5 w-3.5" />{isSc ? "AI로 시나리오 만들기" : "AI QA 시작"}</Button>}
               </div>
             </div>
           </Card>
@@ -148,6 +197,20 @@ export function AiQa() {
             )}
           </Card>
 
+          {!running && saved.length > 0 && (
+            <Card title={<span className="flex items-center gap-1.5"><CheckCircle2 className="h-3.5 w-3.5 text-ok" />저장된 시나리오 {saved.length}</span>}
+              actions={<span className="text-[11px] text-sub">새로 켠 앱에서 재생 통과</span>}>
+              <div className="divide-y divide-line">
+                {saved.map((n) => (
+                  <div key={n} className="flex items-center gap-3 px-4 py-2.5 text-[13px]">
+                    <span className="flex-1 font-mono">{n}</span>
+                    <a href={`#/edit/scenario/${encodeURIComponent(n)}`} className="text-[12px] text-link hover:underline">편집에서 보기</a>
+                    <Button size="sm" onClick={() => runSaved(n)}><Play className="h-3.5 w-3.5" />실행</Button>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
           {job?.result?.text && (
             <Card title={<span className="flex items-center gap-1.5">{job.result.error ? <XCircle className="h-3.5 w-3.5 text-bad" /> : <CheckCircle2 className="h-3.5 w-3.5 text-ok" />}보고서</span>}
               actions={job.dir && <span className="flex items-center gap-3 text-[11px]">
@@ -163,7 +226,8 @@ export function AiQa() {
                   <a key={s.name} href={`#/${s.dir}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/50">
                     <span className="w-24 shrink-0 font-mono text-[11px] text-sub">{aiWhen(s.started)}</span>
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px]">{s.goal ?? "(터미널에서 연결)"}</span>
+                      <span className="flex min-w-0 items-center gap-1.5"><span className="truncate text-[13px]">{s.goal ?? "(터미널에서 연결)"}</span>
+                        {s.mode === "scenario" && <Badge>시나리오 만들기</Badge>}</span>
                       <span className="text-[11px] text-sub">{s.client ?? "AI"} · 도구 {s.calls}번{s.seconds != null ? ` · ${aiSecs(s.seconds)}` : ""}{s.saved.length ? ` · 시나리오 ${s.saved.length}개 저장` : ""}</span>
                     </span>
                     {s.issues > 0 ? <Badge tone="bad">문제 {s.issues}</Badge> : s.report ? <Badge>문제 없음</Badge> : <Badge>보고서 없음</Badge>}
