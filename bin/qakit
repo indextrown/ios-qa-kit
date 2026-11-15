@@ -3867,16 +3867,15 @@ def do_steps(ws):
     print("   → 시나리오로: qakit do save <이름>")
 
 
-def do_save(ws, name, force=False):
-    """qakit do save <이름>: 기록된 단계로 scenarios/<이름>.qa.yml 초안을 쓰고 바로 검사한다."""
-    if not re.fullmatch(r"[A-Za-z0-9가-힣_.-]+", name or ""):
-        fail(f"시나리오 이름으로 쓸 수 없습니다: {name!r}", "영문·숫자·한글·-·_ 만. 예) qakit do save home-12-banner")
+SCENARIO_NAME_RE = re.compile(r"[A-Za-z0-9가-힣_.-]+")
+
+
+def build_scenario_text(ws, name, title=None, description=None, tags=None, start=None):
+    """qakit do 기록 → 시나리오 글. 탭 바로 다음 기다림은 탭의 expect로 합친다.
+    (글, 합친 수, 단계 수, launch부터인지). 기록이 없으면 ValueError."""
     steps, from_launch = do_log_read(ws)
     if not steps:
-        fail("저장할 단계가 없습니다.", "qakit do launch 뒤 단계를 실행하세요 (통과한 단계만 기록됩니다)")
-    target = ws.root / "scenarios" / f"{name}.qa.yml"
-    if target.exists() and not force:
-        fail(f"이미 있습니다: {target}", "덮어쓰려면 --force")
+        raise ValueError("기록된 단계가 없습니다 (앱을 다시 켠 뒤 통과한 단계만 기록됩니다)")
     parsed = []
     for st in steps:
         try:
@@ -3884,8 +3883,9 @@ def do_save(ws, name, force=False):
             parsed.append(v[0] if isinstance(v, list) and len(v) == 1 else v)
         except Exception:  # noqa: BLE001 — 기록된 글자를 그대로 쓴다
             parsed.append(st)
-    # 탭 바로 다음 기다림은 탭의 expect로 합친다. 합치지 않는 단계는 기록된 글자를 그대로 쓴다
     body, merged, i = [], 0, 0
+    if start:
+        body.append(f"  - use: {start}")
     while i < len(steps):
         pair = merge_tap_wait(parsed[i:i + 2])
         if len(parsed) > i + 1 and pair[1] == 1:
@@ -3905,12 +3905,30 @@ def do_save(ws, name, force=False):
         body += [f"    {line}" for line in rest]
         i += 1
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    text = "\n".join([f"name: {name}",
-                      f"# (qakit do 기록에서 만든 초안, {stamp}) 무엇을 확인하는지 1~2줄로 바꿔 쓰고, 판정(expect)을 더한다.",
-                      "steps:"] + body) + "\n"
+    head = [f"name: {flow_text(title) if title else name}"]
+    head += [f"# {line}" for line in (description or "").splitlines() if line.strip()] or [
+        f"# (qakit do 기록에서 만든 초안, {stamp}) 무엇을 확인하는지 1~2줄로 바꿔 쓰고, 판정(expect)을 더한다."]
+    if tags:
+        head.append("tags: [" + ", ".join(flow_text(t) for t in tags) + "]")
+    return "\n".join(head + ["steps:"] + body) + "\n", merged, len(steps) + (1 if start else 0) - merged, from_launch
+
+
+def do_save(ws, name, force=False, title=None, tags=None, start=None):
+    """qakit do save <이름>: 기록된 단계로 scenarios/<이름>.qa.yml 초안을 쓰고 바로 검사한다."""
+    if not SCENARIO_NAME_RE.fullmatch(name or ""):
+        fail(f"시나리오 이름으로 쓸 수 없습니다: {name!r}", "영문·숫자·한글·-·_ 만. 예) qakit do save home-12-banner")
+    if start and not (ws.root / "steps" / f"{start}.qa.yml").exists():
+        fail(f"공통 단계가 없습니다: steps/{start}.qa.yml")
+    target = ws.root / "scenarios" / f"{name}.qa.yml"
+    if target.exists() and not force:
+        fail(f"이미 있습니다: {target}", "덮어쓰려면 --force")
+    try:
+        text, merged, nsteps, from_launch = build_scenario_text(ws, name, title=title, tags=tags, start=start)
+    except ValueError as e:
+        fail(str(e), "qakit do launch 뒤 단계를 실행하세요")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8")
-    ok(f"시나리오 초안: {target} (단계 {len(steps) - merged}개"
+    ok(f"시나리오 초안: {target} (단계 {nsteps}개"
        + (f", 탭 다음 기다림 {merged}곳을 탭의 expect로 합침" if merged else "") + ")")
     if not from_launch:
         warn("qakit do launch 뒤의 기록이 아닙니다. 시나리오는 앱을 새로 켜고 시작하므로 앞부분(진입 단계)이 빠졌을 수 있습니다")
@@ -4093,12 +4111,14 @@ def cmd_ui(args):
     job = {"proc": None, "lines": [], "args": None, "started": None, "ended": None, "code": None,
            "lock": threading.Lock()}
 
-    def start_job(body):
-        """UI에서 고른 시나리오·태그·옵션으로 qakit run을 따로 띄운다 (한 번에 하나)."""
+    def start_job(body, draft=None):
+        """UI에서 고른 시나리오·태그·옵션으로 qakit run을 따로 띄운다 (한 번에 하나). draft: 초안 재생(U4)."""
         with job["lock"]:
             if job["proc"] and job["proc"].poll() is None:
                 return None, "이미 실행 중입니다 (멈춘 뒤 다시)"
             names = [str(n) for n in body.get("scenarios") or [] if re.fullmatch(r"[A-Za-z0-9가-힣_.*?-]+", str(n))]
+            if draft:
+                names = [str(draft_path(draft))]
             tags = [str(t) for t in body.get("tags") or [] if re.fullmatch(r"[A-Za-z0-9가-힣_-]+", str(t))]
             if not names and not tags:
                 return None, "실행할 시나리오나 태그를 고르세요"
@@ -4112,7 +4132,9 @@ def cmd_ui(args):
             cmd += ["--no-precheck"] if o.get("precheck") is False else ["--precheck"] if o.get("precheck") else []
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
                                     env=dict(os.environ, PYTHONUNBUFFERED="1"), start_new_session=True)
-            job.update(proc=proc, lines=[], args=["qakit run", *cmd[5:]], started=time.time(), ended=None, code=None)
+            job.update(proc=proc, lines=[], args=["qakit run", *([f"(초안) {draft}"] if draft else cmd[5:5 + len(names)]), *cmd[5 + len(names):]],
+                       started=time.time(), ended=None, code=None, draft=draft,
+                       draftHash=hashlib.sha1(draft_path(draft).read_bytes()).hexdigest() if draft else None)
 
         def pump():
             for line in proc.stdout:
@@ -4166,7 +4188,56 @@ def cmd_ui(args):
         with job["lock"]:
             running = bool(job["proc"]) and job["proc"].poll() is None
             return {"running": running, "args": job["args"], "started": job["started"], "ended": job["ended"],
-                    "code": job["code"], "total": len(job["lines"]), "lines": job["lines"][since:]}
+                    "code": job["code"], "total": len(job["lines"]), "lines": job["lines"][since:], "draft": job.get("draft")}
+
+    def draft_path(name):
+        return ws.root / ".qakit" / "drafts" / f"{name}.qa.yml"
+
+    def make_draft(body):
+        """기록 → 초안 (.qakit/drafts/<이름>.qa.yml, git 제외). 형식·ID를 검사해 함께 돌려준다."""
+        name = str(body.get("name") or "").strip()
+        if not SCENARIO_NAME_RE.fullmatch(name):
+            return None, "이름은 영문·숫자·한글·-·_ 만 (예: home-12-banner)"
+        start = str(body.get("start") or "").strip() or None
+        if start and not (ws.root / "steps" / f"{start}.qa.yml").exists():
+            return None, f"공통 단계가 없습니다: steps/{start}.qa.yml"
+        tags = [t.strip() for t in body.get("tags") or [] if re.fullmatch(r"[A-Za-z0-9가-힣_-]+", t.strip())]
+        try:
+            text, merged, nsteps, from_launch = build_scenario_text(
+                ws, name, title=(body.get("title") or "").strip() or None,
+                description=body.get("description") or None, tags=tags, start=start)
+        except ValueError as e:
+            return None, str(e)
+        f = draft_path(name)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text, encoding="utf-8")
+        try:
+            scenario = scenario_tools.load_scenario(f, ws.root)
+            unknown = scenario_tools.check_ids(scenario, known_ids(ws), extra_ok=("Mapbox",))
+            problem = None
+        except Exception as e:  # noqa: BLE001 — 형식 오류를 그대로 보여 준다
+            unknown, problem = [], str(e)
+        return {"name": name, "text": text, "merged": merged, "steps": nsteps, "fromLaunch": from_launch,
+                "unknownIds": unknown, "problem": problem,
+                "exists": (ws.root / "scenarios" / f"{name}.qa.yml").exists()}, None
+
+    def publish_draft(body):
+        """재생이 통과한 초안만 scenarios/로 옮긴다 (재생 뒤 초안이 바뀌었으면 거절)."""
+        name = str(body.get("name") or "")
+        f = draft_path(name)
+        with job["lock"]:
+            if job.get("draft") != name or job["proc"] is None or job["proc"].poll() is None or job["code"] != 0:
+                return None, "먼저 이 초안을 재생해서 통과해야 저장할 수 있습니다"
+            if not f.exists() or hashlib.sha1(f.read_bytes()).hexdigest() != job.get("draftHash"):
+                return None, "재생한 뒤 초안이 바뀌었습니다 — 다시 재생하세요"
+        target = ws.root / "scenarios" / f"{name}.qa.yml"
+        if target.exists() and not body.get("force"):
+            return None, f"이미 있습니다: scenarios/{name}.qa.yml (덮어쓰기를 고르세요)"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+        f.unlink()
+        update_readme(ws)
+        return {"saved": f"scenarios/{name}.qa.yml"}, None
 
     def grab_screen():
         with screen["lock"]:
@@ -4217,6 +4288,18 @@ def cmd_ui(args):
                 return self.send(409 if err else 200, {"error": err} if err else {"started": True, "args": args_})
             if path == "/api/job/stop":
                 return self.send(200, {"stopping": stop_job()})
+            if path == "/api/draft":
+                res, err = make_draft(body)
+                return self.send(400 if err else 200, {"error": err} if err else res)
+            if path == "/api/draft/verify":
+                name = str(body.get("name") or "")
+                if not SCENARIO_NAME_RE.fullmatch(name) or not draft_path(name).exists():
+                    return self.send(400, {"error": "초안이 없습니다 — 먼저 초안을 만드세요"})
+                args_, err = start_job({}, draft=name)
+                return self.send(409 if err else 200, {"error": err} if err else {"started": True})
+            if path == "/api/draft/publish":
+                res, err = publish_draft(body)
+                return self.send(409 if err else 200, {"error": err} if err else res)
             if path == "/api/do":
                 step = str(body.get("step") or "").strip()
                 if not step or len(step) > 2000:
@@ -4274,6 +4357,8 @@ def cmd_ui(args):
                     if res["code"] != 0:
                         return self.send(500, {"error": res["output"][-400:]})
                     return self.send(200, ui_parse_dump(res["output"]))
+                if path == "/api/steps-files":
+                    return self.send(200, sorted(f.name[:-len(".qa.yml")] for f in (ws.root / "steps").glob("*.qa.yml")))
                 if path == "/api/do-steps":
                     steps, from_launch = do_log_read(ws)
                     return self.send(200, {"steps": steps, "fromLaunch": from_launch})
@@ -4342,7 +4427,7 @@ def cmd_do(args):
     if args.step[0] == "save":
         if len(args.step) != 2:
             fail("저장할 시나리오 이름이 필요합니다.", "예) qakit do save home-12-banner")
-        return do_save(ws, args.step[1], force=args.force)
+        return do_save(ws, args.step[1], force=args.force, title=args.title, tags=args.tag, start=args.start)
     udid = _serve_udid(ws)
     text = " ".join(args.step).strip()
     if not text:
@@ -4570,6 +4655,9 @@ def main():
     p.add_argument("step", nargs="+",
                    help="단계(시나리오 문법) 또는 dump · launch · ping · reset · steps(기록 보기) · save <이름>(기록으로 시나리오 초안)")
     p.add_argument("--force", action="store_true", help="save: 같은 이름의 시나리오가 있어도 덮어씀")
+    p.add_argument("--title", help="save: 시나리오 제목 (name:)")
+    p.add_argument("--tag", action="append", help="save: 태그 (여러 번)")
+    p.add_argument("--start", metavar="공통단계", help="save: 맨 앞에 use: <공통단계> (예: home)")
     p.add_argument("--timeout", type=int, default=120, help="이 시간(초) 안에 안 끝나면 실행기를 멈춤 (기본 120)")
     p.add_argument("--settle", type=float, default=0.5, help="dump 전에 기다릴 시간(초)")
     p.set_defaults(func=cmd_do)

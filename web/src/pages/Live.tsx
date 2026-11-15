@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Eye, EyeOff, Hand, Pause, Play, RotateCcw, ScanLine, TerminalSquare, Timer, CheckCircle2, ArrowUp, ArrowDown, Loader2 } from "lucide-react";
-import { get, post, screenUrl, type DoResult, type El, type Elements } from "../lib/api";
+import { get, post, screenUrl, type DoResult, type El, type Elements, type Job } from "../lib/api";
+import { SaveScenario } from "../components/SaveScenario";
 import { cx, store, stored } from "../lib/util";
 import { Badge, Button, Card, Empty, Mono, PageHeader } from "../components/ui";
 
@@ -24,7 +25,8 @@ function selectorFor(e: El, all: El[]) {
   return `{ type: ${type}, label: ${yq(raw)}${dup.length > 1 ? `, index: ${dup.indexOf(e)}` : ""} }`;
 }
 
-export function Live({ busy }: { busy: boolean }) {
+export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => void }) {
+  const busy = !!job?.running;
   const [img, setImg] = useState<string | null>(null);
   const [shotError, setShotError] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(() => stored("qakit-live", true));
@@ -69,6 +71,11 @@ export function Live({ busy }: { busy: boolean }) {
   }, []);
   const loadSteps = useCallback(() => { get<{ steps: string[]; fromLaunch: boolean }>("/api/do-steps").then(setSteps).catch(() => {}); }, []);
   useEffect(() => { loadEls(); loadSteps(); }, [loadEls, loadSteps]);
+  const wasBusy = useRef(false);
+  useEffect(() => {   // 재생(시나리오 실행)이 끝나면 화면 구조·기록을 다시 읽는다
+    if (wasBusy.current && !busy) { loadEls(); loadSteps(); }
+    wasBusy.current = busy;
+  }, [busy, loadEls, loadSteps]);
 
   const doStep = async (step: string) => {
     if (!step) return;
@@ -167,6 +174,7 @@ export function Live({ busy }: { busy: boolean }) {
               </div>
             )}
           </Card>
+          <SaveScenario job={job} refreshJob={refreshJob} stepsCount={steps?.steps.length ?? 0} />
           <Card title="기록된 단계" actions={steps && <span className="text-[11px] text-sub">{steps.fromLaunch ? "앱을 다시 켠 뒤부터" : steps.steps.length ? "다시 켜기 전 것 포함" : ""}</span>}>
             {!steps?.steps.length ? <Empty>통과한 단계가 여기에 쌓입니다</Empty> : (
               <ol className="space-y-1 p-4 pl-9 text-[12px] [list-style:decimal]">

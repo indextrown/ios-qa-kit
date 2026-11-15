@@ -10,7 +10,7 @@ export interface RunDetail { dir: string; summary: string | null; log: string; t
 export interface Scenario { name: string; title: string; description: string; tags: string[]; recent: ("pass" | "fail" | "env")[];
   last: { result: Result; at: string; dir?: string } | null; flaky: boolean }
 export interface Job { running: boolean; args: string[] | null; started: number | null; ended: number | null; code: number | null;
-  total: number; lines: string[] }
+  total: number; lines: string[]; draft?: string | null }
 export interface El { type: string; id: string | null; label: string | null; labelRaw: string | null; value: string | null;
   x: number; y: number; w: number; h: number; depth: number }
 export interface Elements { screen: { w: number; h: number } | null; elements: El[] }
