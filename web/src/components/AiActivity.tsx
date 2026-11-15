@@ -62,11 +62,11 @@ export function AiActivity({ onBusy }: { onBusy: (busy: boolean, client?: string
   if (!ai?.session) return null;
   const started = ai.session.replace("_", " ").replace(/-(\d\d)-(\d\d)$/, ":$1:$2");
   return (
-    <Card title={<button onClick={() => setOpen(!open)} className="flex items-center gap-1.5">
+    <Card title={<button onClick={() => setOpen(!open)} className="flex items-center gap-1.5 whitespace-nowrap">
         {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}<Bot className="h-3.5 w-3.5" />AI 활동
         {ai.active ? <Badge tone="warn">{ai.now ? "조작 중" : "연결됨"}</Badge> : <span className="text-[11px] font-normal text-sub">끝남</span>}
       </button>}
-      actions={<span className="text-[11px] text-sub">{ai.client ?? "AI"} · {started} · {ai.total ?? 0}번</span>}>
+      actions={<span className="truncate text-[11px] text-sub">{ai.client ?? "AI"} · {started} · {ai.total ?? 0}번</span>}>
       {open && (
         <div>
           <div ref={listRef} className="max-h-72 space-y-1.5 overflow-auto px-4 py-3">

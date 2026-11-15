@@ -4457,11 +4457,16 @@ class McpSession:
 
     def session_dir(self):
         if not self.dir:
-            self.dir = ws_dir = self.ws.results_dir / "ai" / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            given = os.environ.get("QAKIT_AI_DIR")   # qakit ui에서 시작한 AI QA면 그 폴더 (에이전트 기록과 함께)
+            self.dir = ws_dir = Path(given) if given else \
+                self.ws.results_dir / "ai" / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             ws_dir.mkdir(parents=True, exist_ok=True)
-            (ws_dir / "meta.json").write_text(json.dumps({
-                "client": self.client, "started": datetime.datetime.now().isoformat(timespec="seconds"),
-                "pid": os.getpid(), "kit": kit_version()}, ensure_ascii=False), encoding="utf-8")
+            meta = {}
+            with contextlib.suppress(OSError, ValueError):
+                meta = json.loads((ws_dir / "meta.json").read_text(encoding="utf-8"))
+            meta.update({"client": meta.get("client") or self.client, "pid": os.getpid(), "kit": kit_version()})
+            meta.setdefault("started", datetime.datetime.now().isoformat(timespec="seconds"))
+            (ws_dir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
         return self.dir
 
     def now(self, tool=None, args=None):
@@ -4619,6 +4624,99 @@ class McpSession:
         return text(f"모르는 도구: {name}"), True
 
 
+def ai_engines():
+    """UI에서 고를 AI: 설치·로그인 상태. qakit은 토큰을 다루지 않고 이 CLI들을 부른다."""
+    out = []
+    claude = shutil.which("claude")
+    if claude:
+        ver = run([claude, "--version"], check=False).stdout.strip().split(" ")[0]
+        auth = {}
+        with contextlib.suppress(ValueError):
+            auth = json.loads(run([claude, "auth", "status"], check=False).stdout or "{}")
+        out.append({"id": "claude", "name": "Claude Code", "version": ver, "ready": bool(auth.get("loggedIn")),
+                    "note": f"로그인: {auth.get('authMethod')}" if auth.get("loggedIn") else "로그인 필요: 터미널에서 claude 실행 후 /login",
+                    "tested": True})
+    else:
+        out.append({"id": "claude", "name": "Claude Code", "ready": False, "note": "설치 필요 (claude.com/claude-code)", "tested": True})
+    codex = shutil.which("codex")
+    if codex:
+        ver = run([codex, "--version"], check=False).stdout.strip()
+        st = run([codex, "login", "status"], check=False)
+        out.append({"id": "codex", "name": "Codex", "version": ver, "ready": st.returncode == 0,
+                    "note": (st.stdout or st.stderr).strip()[:80] or ("로그인됨" if st.returncode == 0 else "codex login 필요"),
+                    "tested": False})
+    else:
+        out.append({"id": "codex", "name": "Codex", "ready": False, "note": "설치 필요 (npm i -g @openai/codex)", "tested": False})
+    return out
+
+
+def ai_prompt(goal, minutes, save):
+    rule = ("확인한 정상 경로는 launch부터 다시 깨끗하게 밟은 뒤 save_scenario로 남긴다 (재생 통과해야 저장)."
+            if save else "시나리오는 저장하지 않는다 (save_scenario 쓰지 않음). 남길 만한 경로는 보고서에 단계로 적는다.")
+    return f"""목표: {goal}
+
+qakit MCP 도구로 이 iOS 앱(시뮬레이터)을 직접 QA한다. qakit 도구 말고 다른 도구는 없다.
+1. get_testing_guide를 먼저 읽고 그대로 따른다.
+2. launch로 시작하고 screen으로 화면을 읽으며 진행한다. 조작 도구마다 why(왜 하는지 한 줄)를 준다.
+3. 문제는 launch부터 같은 단계로 재현한 뒤 report_issue로 남긴다. 확실하지 않으면 보고서에 '확인 필요'로만.
+4. {rule}
+5. 시간은 약 {minutes}분이다. 목표 범위 밖은 하지 않는다.
+6. 마지막 답변은 지침의 보고 형식으로, 한국어 마크다운."""
+
+
+def ai_command(engine, ws, d, prompt, turns):
+    """AI CLI 명령 (qakit 도구만 허용). → (명령, MCP 설정 파일)"""
+    mcp = {"command": str(KIT_DIR / "bin" / "qakit"), "args": ["-w", str(ws.root), "mcp"], "env": {"QAKIT_AI_DIR": str(d)}}
+    if engine == "claude":
+        cfg = d / "mcp.json"
+        cfg.write_text(json.dumps({"mcpServers": {"qakit": mcp}}, ensure_ascii=False, indent=2), encoding="utf-8")
+        return [shutil.which("claude") or "claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
+                "--strict-mcp-config", "--mcp-config", str(cfg), "--tools", "", "--allowedTools", "mcp__qakit",
+                "--permission-mode", "dontAsk", "--max-turns", str(turns), "--no-session-persistence"]
+    # codex (이 Mac에 없어 시험하지 못함): exec + JSON 이벤트, 읽기 전용 샌드박스, MCP는 -c로
+    toml = lambda v: json.dumps(v, ensure_ascii=False)
+    return [shutil.which("codex") or "codex", "exec", "--json", "--skip-git-repo-check", "-s", "read-only",
+            "-c", f"mcp_servers.qakit.command={toml(mcp['command'])}", "-c", f"mcp_servers.qakit.args={toml(mcp['args'])}",
+            "-c", f"mcp_servers.qakit.env={{QAKIT_AI_DIR={toml(str(d))}}}", prompt]
+
+
+def ai_events(engine, obj):
+    """에이전트 출력 한 줄(JSON) → 보여 줄 사건들 [{kind: info|text|tool|result|error, text}] + 결과 정보"""
+    ev, res = [], None
+    if engine == "claude":
+        t = obj.get("type")
+        if t == "system" and obj.get("subtype") == "init":
+            st = {m.get("name"): m.get("status") for m in obj.get("mcp_servers") or []}
+            n = sum(1 for x in obj.get("tools") or [] if str(x).startswith("mcp__qakit"))
+            ev.append({"kind": "info" if st.get("qakit") == "connected" else "error",
+                       "text": f"시작 · 모델 {obj.get('model')} · qakit {st.get('qakit', '없음')} (도구 {n}개)"})
+        elif t == "assistant":
+            for c in (obj.get("message") or {}).get("content") or []:
+                if c.get("type") == "text" and c.get("text", "").strip():
+                    ev.append({"kind": "text", "text": c["text"].strip()})
+                elif c.get("type") == "tool_use":
+                    inp = dict(c.get("input") or {})
+                    why = inp.pop("why", None)
+                    ev.append({"kind": "tool", "text": f"{str(c.get('name', '')).replace('mcp__qakit__', '')} "
+                               f"{json.dumps(inp, ensure_ascii=False)[:160] if inp else ''}".strip(), "why": why})
+        elif t == "result":
+            res = {"text": obj.get("result") or "", "cost": obj.get("total_cost_usd"), "turns": obj.get("num_turns"),
+                   "error": bool(obj.get("is_error")), "subtype": obj.get("subtype")}
+    else:   # codex: 알려진 몇 가지 꼴만, 나머지는 건너뜀
+        item = obj.get("item") or obj.get("msg") or {}
+        typ = item.get("type") or obj.get("type")
+        text = item.get("text") or item.get("message")
+        if typ in ("agent_message", "assistant_message") and text:
+            ev.append({"kind": "text", "text": str(text).strip()})
+            res = {"text": str(text).strip(), "cost": None, "turns": None, "error": False, "subtype": None} \
+                if obj.get("type") in ("item.completed",) else None
+        elif typ in ("mcp_tool_call", "tool_call") and item.get("tool"):
+            ev.append({"kind": "tool", "text": f"{item.get('tool')} {json.dumps(item.get('arguments') or {}, ensure_ascii=False)[:160]}"})
+        elif obj.get("type") == "error" or typ == "error":
+            ev.append({"kind": "error", "text": str(obj.get("message") or item)[:300]})
+    return ev, res
+
+
 def cmd_mcp(args):
     if args.action == "install":
         return mcp_install(find_workspace(args.workspace), args)
@@ -4730,6 +4828,8 @@ def cmd_ui(args):
 
     def start_job(body, draft=None):
         """UI에서 고른 시나리오·태그·옵션으로 qakit run을 따로 띄운다 (한 번에 하나). draft: 초안 재생(U4)."""
+        if aij["proc"] and aij["proc"].poll() is None:
+            return None, "AI QA가 도는 중입니다 (멈춘 뒤 다시)"
         with job["lock"]:
             if job["proc"] and job["proc"].poll() is None:
                 return None, "이미 실행 중입니다 (멈춘 뒤 다시)"
@@ -4789,6 +4889,8 @@ def cmd_ui(args):
         """qakit do <…> (UI 라이브 조작). 실행(U2) 중이면 거절."""
         if job["proc"] and job["proc"].poll() is None:
             return None, "시나리오 실행 중에는 조작할 수 없습니다"
+        if args_ and args_[0] != "dump" and aij["proc"] and aij["proc"].poll() is None:
+            return None, "AI QA가 조작하는 중에는 조작할 수 없습니다"
         if not do_lock.acquire(blocking=False):
             return None, "앞선 조작이 끝나지 않았습니다"
         try:
@@ -4989,6 +5091,105 @@ def cmd_ui(args):
             return None, "녹화 파일이 비었습니다"
         return {"dir": "recordings", "name": out.name, "bytes": out.stat().st_size}, None
 
+    aij = {"proc": None, "engine": None, "goal": None, "started": None, "ended": None, "code": None, "events": [],
+           "result": None, "dir": None, "limit": None, "stopped": None, "lock": threading.Lock()}
+
+    def ai_start(body):
+        """UI에서 AI QA 시작: 로그인된 claude/codex를 qakit 도구만 허용해 실행 (qakit은 토큰을 다루지 않음)."""
+        goal = str(body.get("goal") or "").strip()
+        engine = body.get("engine") or "claude"
+        minutes = max(1, min(60, int(body.get("minutes") or 10)))
+        turns = max(5, min(300, int(body.get("turns") or 60)))
+        if not goal or len(goal) > 2000:
+            return None, "목표를 적어 주세요 (2000자 이내)"
+        if not udid:
+            return None, "AI QA는 지금 시뮬레이터만"
+        eng = next((e for e in ai_engines() if e["id"] == engine), None)
+        if not eng or not eng["ready"]:
+            return None, f"{engine}: {(eng or {}).get('note', '없음')}"
+        with aij["lock"]:
+            if aij["proc"] and aij["proc"].poll() is None:
+                return None, "이미 AI QA가 돌고 있습니다"
+        if job["proc"] and job["proc"].poll() is None:
+            return None, "시나리오 실행 중에는 시작할 수 없습니다"
+        d = ws.results_dir / "ai" / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "meta.json").write_text(json.dumps({"client": eng["name"], "goal": goal, "via": "qakit ui", "minutes": minutes,
+                                                 "turns": turns, "started": datetime.datetime.now().isoformat(timespec="seconds")},
+                                                ensure_ascii=False), encoding="utf-8")
+        cmd = ai_command(engine, ws, d, ai_prompt(goal, minutes, bool(body.get("save"))), turns)
+        try:
+            proc = subprocess.Popen(cmd, cwd=str(ws.root), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=open(d / "agent.err", "w"), text=True, start_new_session=True)
+        except OSError as e:
+            return None, f"실행하지 못함: {e}"
+        with aij["lock"]:
+            aij.update(proc=proc, engine=engine, goal=goal, started=time.time(), ended=None, code=None, events=[],
+                       result=None, dir=d, limit=minutes * 60, stopped=None)
+
+        def reader():
+            mask = masker(ws.secrets())
+            with open(d / "agent.jsonl", "w", encoding="utf-8") as raw:
+                for line in proc.stdout:
+                    raw.write(mask(line))
+                    raw.flush()
+                    try:
+                        obj = json.loads(line)
+                    except ValueError:
+                        continue
+                    ev, res = ai_events(engine, obj)
+                    with aij["lock"]:
+                        aij["events"] += [dict(e, t=round(time.time() - aij["started"], 1), text=mask(e["text"])) for e in ev]
+                        if res:
+                            aij["result"] = dict(res, text=mask(res["text"]))
+            proc.wait()
+            with aij["lock"]:
+                aij.update(ended=time.time(), code=proc.returncode)
+                result = aij["result"]
+                if not result:
+                    err = (d / "agent.err").read_text(encoding="utf-8", errors="replace").strip()[-600:]
+                    aij["events"].append({"kind": "error", "t": round(time.time() - aij["started"], 1),
+                                          "text": aij["stopped"] or f"보고서 없이 끝남 (종료 코드 {proc.returncode}) {err}"})
+            if result and result.get("text"):
+                (d / "report.md").write_text(result["text"] + "\n", encoding="utf-8")
+            with contextlib.suppress(OSError, ValueError):
+                meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+                meta.update(ended=datetime.datetime.now().isoformat(timespec="seconds"), code=proc.returncode,
+                            cost=(result or {}).get("cost"), turns_used=(result or {}).get("turns"))
+                (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+        def watchdog():   # 시간 한도
+            try:
+                proc.wait(timeout=minutes * 60)
+            except subprocess.TimeoutExpired:
+                ai_stop(f"시간 한도 {minutes}분이 지나 멈춤")
+        threading.Thread(target=reader, daemon=True).start()
+        threading.Thread(target=watchdog, daemon=True).start()
+        return {"started": True, "dir": results_rel(ws, d)}, None
+
+    def ai_stop(why="멈춤 (사용자)"):
+        with aij["lock"]:
+            proc = aij["proc"]
+            if not proc or proc.poll() is not None:
+                return None, "돌고 있는 AI QA가 없음"
+            aij["stopped"] = why
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGTERM)   # 에이전트와 그 아래 MCP 서버까지
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(OSError):
+                os.killpg(proc.pid, signal.SIGKILL)
+        return {"stopped": True}, None
+
+    def ai_state(since):
+        with aij["lock"]:
+            running = bool(aij["proc"]) and aij["proc"].poll() is None
+            return {"running": running, "engine": aij["engine"], "goal": aij["goal"], "started": aij["started"],
+                    "ended": aij["ended"], "code": aij["code"], "limit": aij["limit"], "stopped": aij["stopped"],
+                    "dir": results_rel(ws, aij["dir"]) if aij["dir"] else None, "total": len(aij["events"]),
+                    "events": aij["events"][since:], "result": aij["result"]}
+
     def live_stop():
         with live["cond"]:
             proc = live["proc"]
@@ -5098,6 +5299,9 @@ def cmd_ui(args):
             if path == "/api/draft/publish":
                 res, err = publish_draft(body)
                 return self.send(409 if err else 200, {"error": err} if err else res)
+            if path in ("/api/ai/start", "/api/ai/stop"):
+                res, err = ai_start(body) if path.endswith("start") else ai_stop()
+                return self.send(409 if err else 200, {"error": err} if err else res)
             if path in ("/api/record/start", "/api/record/stop"):
                 if not udid:
                     return self.send(404, {"error": "녹화는 시뮬레이터만"})
@@ -5203,6 +5407,10 @@ def cmd_ui(args):
                         except ValueError:
                             pass
                     return self.send(200, {"offset": since + end, "taps": taps[-20:]})
+                if path == "/api/ai/engines":
+                    return self.send(200, ai_engines())
+                if path == "/api/ai/job":
+                    return self.send(200, ai_state(int(q.get("since", 0) or 0)))
                 if path == "/api/ai":   # 가장 최근 AI 세션 (qakit mcp) — 활동 기록·지금 하는 일·보고한 문제
                     root = ws.results_dir / "ai"
                     sessions = sorted([d for d in root.iterdir() if d.is_dir()], reverse=True) if root.is_dir() else []
@@ -5301,6 +5509,8 @@ def cmd_ui(args):
     finally:
         stop_job()   # UI를 끄면 UI에서 시작한 실행도 멈춘다
         live_stop()
+        if aij["proc"] and aij["proc"].poll() is None:
+            ai_stop("qakit ui 종료")
         if rec["proc"]:
             record_stop()
         server.server_close()
