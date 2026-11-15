@@ -261,6 +261,7 @@ public final class QAScenarioRunner {
                 throw fail("누르기 전에 이미 기대 효과가 맞음 → 탭의 효과를 확인할 수 없음: \(compact(effect))")
             }
             waitUntilSettled(element)
+            recordTouch(element)
             element.tap()
             if let effect {
                 guard try evaluate(effect, timeout: number(step["expect-timeout"]) ?? 10) else {
@@ -272,6 +273,7 @@ public final class QAScenarioRunner {
             if let tapTarget = spec["tap"] {
                 let element = resolve(tapTarget)
                 try waitFor(element, timeout: 10, what: tapTarget)
+                recordTouch(element)
                 element.tap()
             }
             let alert = app.alerts.firstMatch
@@ -705,7 +707,27 @@ public final class QAScenarioRunner {
         }
     }
 
+    /// 누르는 자리를 파일에 남긴다 (QA_TAPS_FILE, 시뮬레이터만) — qakit ui 라이브 화면이 커서를 그 자리로 옮겨 보여 준다.
+    /// 화면 크기 대비 요소 영역(포인트). 파일이 없거나 못 쓰면 조용히 넘어간다.
+    private static let touchFile = ProcessInfo.processInfo.environment["QA_TAPS_FILE"].flatMap { $0.isEmpty ? nil : $0 }
+    private func recordTouch(_ element: XCUIElement, _ kind: String = "tap") {
+        guard let path = Self.touchFile else { return }
+        let f = element.frame, s = app.frame
+        guard !f.isEmpty, s.width > 0, s.height > 0 else { return }
+        let n = { (v: CGFloat) in String(format: "%.1f", Double(v)) }
+        let line = "{\"t\":\(String(format: "%.3f", Date().timeIntervalSince1970)),\"kind\":\"\(kind)\","
+            + "\"x\":\(n(f.minX - s.minX)),\"y\":\(n(f.minY - s.minY)),\"w\":\(n(f.width)),\"h\":\(n(f.height)),"
+            + "\"sw\":\(n(s.width)),\"sh\":\(n(s.height))}\n"
+        guard let data = line.data(using: .utf8) else { return }
+        if let h = FileHandle(forWritingAtPath: path) {
+            h.seekToEndOfFile(); h.write(data); try? h.close()
+        } else {
+            FileManager.default.createFile(atPath: path, contents: data)
+        }
+    }
+
     private func swipe(_ element: XCUIElement, _ dir: String) {
+        recordTouch(element, "swipe-\(dir)")
         switch dir {
         case "down": element.swipeDown()
         case "left": element.swipeLeft()
