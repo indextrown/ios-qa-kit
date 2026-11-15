@@ -88,17 +88,27 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     loop();
     return () => { alive = false; clearTimeout(t); };
   }, [shot, streaming, interval, liveOn]);
+  // 화면 구조 자동 갱신: 실시간 화면이 바뀌었다가 0.8초 멈추면(애니메이션 끝) 다시 읽는다.
+  // AI 조작·시나리오 실행·직접 실행 중엔 하지 않음 (실행기를 같이 쓰면 그쪽이 늦어짐)
+  const seenChange = useRef(0), serverNow = useRef(0), canAuto = useRef(false), loadElsRef = useRef<() => Promise<void>>(async () => {});
   useEffect(() => {   // 실시간: 상태(초당 장수)를 보고, 도구가 멈췄으면 스크린샷으로 돌아간다
     if (!liveOn) { setFps(0); return; }
-    let alive = true;
+    let alive = true, n = 0;
     const t = setInterval(async () => {
       try {
-        const st = await get<{ running: boolean; error: string | null; fps: number }>("/api/stream-status");
+        const st = await get<{ running: boolean; error: string | null; fps: number; changedAt: number | null; now: number }>("/api/stream-status");
         if (!alive) return;
-        setFps(st.fps);
-        if (!st.running && st.error) { setMode("shot"); setStreamNote(`실시간 화면 멈춤 (${st.error}) — 스크린샷으로 봅니다`); }
+        serverNow.current = st.now;
+        if (n++ % 3 === 0) setFps(st.fps);
+        if (!st.running && st.error) { setMode("shot"); setStreamNote(`실시간 화면 멈춤 (${st.error}) — 스크린샷으로 봅니다`); return; }
+        const c = st.changedAt ?? 0;
+        if (!seenChange.current) seenChange.current = c;   // 열었을 때는 이미 읽음
+        else if (c > seenChange.current && st.now - c >= 0.8 && canAuto.current) {
+          seenChange.current = c;
+          loadElsRef.current();
+        }
       } catch { /* 다음에 */ }
-    }, 2000);
+    }, 600);
     return () => { alive = false; clearInterval(t); };
   }, [liveOn]);
 
@@ -112,6 +122,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     setDumping(false);
   }, []);
   const loadSteps = useCallback(() => { get<{ steps: string[]; fromLaunch: boolean }>("/api/do-steps").then(setSteps).catch(() => {}); }, []);
+  loadElsRef.current = loadEls;
   useEffect(() => { loadEls(); loadSteps(); }, [loadEls, loadSteps]);
   const wasAi = useRef(false);
   useEffect(() => {   // AI 세션이 끝나면 화면 구조·기록을 한 번 다시 읽는다 (세션 중에는 상자를 숨김)
@@ -175,6 +186,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     catch (e) { setResult({ step, error: (e as Error).message }); }
     if (!liveOn) await shot();
     await loadEls(); loadSteps();
+    seenChange.current = Math.max(seenChange.current, serverNow.current);   // 이 조작으로 바뀐 화면은 방금 읽었음
   };
 
   // 캡처: 사진은 지금 화면(원래 해상도)을 내 컴퓨터로, 녹화는 results/recordings/에 남기고 내려받기
@@ -220,6 +232,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   const scr = els?.screen;
   const selector = sel && els ? selectorFor(sel, els.elements) : null;
   const working = !!result?.running || busy;
+  canAuto.current = !working && !dumping && !ai.active;
   const isInput = !!sel && ["TextField", "SecureTextField", "SearchField", "TextView"].includes(sel.type);
   const actions: [string, string, typeof Hand][] = selector ? [
     ["탭", `tap: ${selector}`, Hand], ["나타날 때까지", `wait: { for: ${selector}, timeout: 10 }`, Timer],
