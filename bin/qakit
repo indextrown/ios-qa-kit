@@ -1601,14 +1601,17 @@ def summarize(xcresult, mask):
     for c in failed:
         test_id = c.get("nodeIdentifier", c.get("name"))
         out.append(f"\n❌ {test_id}")
+        reason = ""
         for child in c.get("children", []):
             if child.get("nodeType") == "Failure Message":
-                out.append(f"   원인: {child.get('name')}")
+                reason = child.get("name") or ""
+                out.append(f"   원인: {reason}")
         steps = last_steps(xcresult, test_id)
         if steps:
             out.append("   마지막 단계:")
             out += [f"     - {s}" for s in steps]
         tree_text = attachments.get(test_id, {}).get("qakit-ui-tree")
+        out += suggestion_lines(reason, tree_text)
         if tree_text:
             out.append("   실패 시점 화면 구조 (ID/라벨 있는 요소):")
             compact = compact_tree(tree_text)
@@ -1665,6 +1668,123 @@ def last_steps(xcresult, test_id, limit=8):
     except json.JSONDecodeError:
         return []
     return titles[-limit:]
+
+
+# 실패하면 "대신 이 대상" 제안 — 실패 시점 화면에서 비슷하고, 그 화면에 하나만 있는 요소 (AI 없이)
+DUMP_TYPE = {"Button": "button", "StaticText": "text", "Text": "text", "Image": "image", "Cell": "cell",
+             "TextField": "textfield", "SecureTextField": "securetextfield", "Switch": "switch", "Other": "other",
+             "CollectionView": "collectionview", "ScrollView": "scrollview", "Table": "table"}
+FAIL_TARGET_RE = re.compile(r"(?:나타나지 않음|찾지 못함|기대 조건 실패|기대 효과가 나타나지 않음[^:]*): (.+)$", re.M)
+
+
+def dump_elements(text):
+    """화면 구조 텍스트(qakit 덤프 또는 XCUITest debugDescription) → [{type, id, label}]."""
+    els = [{"type": e["type"], "id": e["id"], "label": e["labelRaw"]} for e in ui_parse_dump(text)["elements"]]
+    if els:
+        return els
+    for raw in text.splitlines():
+        m = re.match(r"^\s*(\w[\w ]*?), 0x[0-9a-f]+, .*$", raw)
+        if not m:
+            continue
+        i = re.search(r"identifier: '((?:[^'\\]|\\.)*)'", raw)
+        lab = re.search(r"label: '((?:[^'\\]|\\.)*)'", raw)
+        if i or lab:
+            els.append({"type": m.group(1).strip(), "id": i.group(1) if i else None, "label": lab.group(1) if lab else None})
+    return els
+
+
+def failed_targets(message):
+    """원인 문구 → 찾지 못한 대상들 [("id", 값) | ("label", 값, type)]."""
+    m = FAIL_TARGET_RE.search(message or "")
+    if not m:
+        return []
+    raw = m.group(1).strip()
+    out = []
+
+    def walk(v):
+        if isinstance(v, str):
+            out.append(("id", v))
+        elif isinstance(v, dict):
+            if "id" in v and isinstance(v["id"], str):
+                out.append(("id", v["id"]))
+            elif "label" in v or "contains" in v:
+                out.append(("label", v.get("label") or v.get("contains"), v.get("type")))
+            else:
+                for k in ("visible", "exists", "hittable", "for", "target", "on", "not"):
+                    if k in v:
+                        walk(v[k])
+                for k in ("all", "any"):
+                    for x in v.get(k) or []:
+                        walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+    try:
+        walk(json.loads(raw))
+    except ValueError:
+        walk(raw.split(", ")[0] if raw and not raw.startswith("{") else raw)
+    return out
+
+
+def suggest_targets(message, dump_text, limit=3):
+    """실패 대상과 비슷한 요소 → 시나리오에 쓸 대상 문자열 (실패 시점 화면에서 하나만 맞는 것만)."""
+    import difflib
+    els = dump_elements(dump_text or "")
+    if not els:
+        return []
+    yq = lambda v: v if re.fullmatch(r"[A-Za-z0-9_.\-]+", v) else json.dumps(v, ensure_ascii=False)
+    found = []
+    for t in failed_targets(message):
+        want = (t[1] or "").lower()
+        if not want:
+            continue
+        scored = []
+        for e in els:
+            for kind, val in (("id", e["id"]), ("label", e["label"])):
+                if not val or val.startswith("_Tt"):
+                    continue
+                v = val.split("\n")[0]
+                if v.lower() == want and kind == t[0]:
+                    continue   # 같은 이름이 있는데 실패 = 가려졌거나 늦게 뜸 → 이름을 바꿀 문제가 아님
+                r = difflib.SequenceMatcher(None, want, v.lower()).ratio()
+                if want in v.lower() or v.lower() in want:
+                    r = max(r, 0.75)
+                if r >= 0.75:
+                    scored.append((r, kind, v, e))
+        for r, kind, v, e in sorted(scored, key=lambda x: -x[0]):
+            if kind == "id":
+                if sum(1 for x in els if x["id"] == v) != 1:
+                    continue
+                sel = yq(v)
+            else:
+                typ = DUMP_TYPE.get(e["type"], "any")
+                same = [x for x in els if (x["label"] or "").split("\n")[0] == v and DUMP_TYPE.get(x["type"], "any") == typ]
+                if len(same) != 1:
+                    continue
+                key = "contains" if "\n" in (e["label"] or "") else "label"
+                sel = f"{{ type: {typ}, {key}: {json.dumps(v, ensure_ascii=False)} }}"
+            desc = f'{e["type"]}' + (f' "{(e["label"] or "").splitlines()[0][:30]}"' if e["label"] and kind == "id" else "")
+            line = f"{sel}  ({desc}, 비슷함 {int(r * 100)}%)"
+            if sel not in [x.split("  (")[0] for x in found]:
+                found.append(line)
+            if len(found) >= limit:
+                return found
+    return found
+
+
+def suggestion_lines(message, dump_text):
+    els = dump_elements(dump_text or "")
+    text = dump_text or ""
+    present = [t[1] for t in failed_targets(message) if t[1] and (
+        any((e["id"] if t[0] == "id" else (e["label"] or "").split("\n")[0]) == t[1] for e in els)
+        or (t[0] == "id" and re.search(r"(#|identifier: ')" + re.escape(t[1]) + r"(\s|'|$)", text, re.M)))]
+    if present:   # 이름은 맞다 → 바꿀 게 아니라 가려졌거나 화면 밖이거나 늦게 뜬 것
+        return [f"   '{present[0]}'은(는) 실패 시점 화면 구조에 있습니다 → 이름 문제가 아님. 가려졌거나(팝업·시트) 화면 밖이면 "
+                "scroll-to·swipe, 늦게 뜨면 timeout을 늘리세요"]
+    tips = suggest_targets(message, dump_text)
+    if not tips:
+        return []
+    return ["   대신 이 대상? (실패 시점 화면에 하나만 있는 비슷한 요소):"] + [f"     → {t}" for t in tips]
 
 
 def compact_tree(text):
@@ -2484,6 +2604,7 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
     if res.get("steps"):
         out.append("   마지막 단계:")
         out += [f"     - {x}" for x in res["steps"]]
+    out += suggestion_lines(res.get("message", ""), res.get("dump"))
     if res.get("dump"):
         lines = [l.strip() for l in res["dump"].splitlines() if l.startswith("#") is False and ("#" in l or '"' in l)]
         if len(lines) > 60:   # 팝업 등 최상단 요소는 보통 끝에 있으므로 뒤쪽을 남긴다
@@ -2619,7 +2740,11 @@ def load_checked_scenario(ws, name, strict=True):
         fail(f"시나리오 형식 오류: {e}")
     unknown = scenario_tools.check_ids(scenario, known_ids(ws), extra_ok=("Mapbox",))
     if unknown:
-        msg = "앱에 없는 ID: " + ", ".join(unknown)
+        import difflib
+        ids = known_ids(ws)
+        msg = "앱에 없는 ID: " + ", ".join(
+            u + (f" (비슷한 ID: {', '.join(c)})" if (c := difflib.get_close_matches(u, ids, n=3, cutoff=0.7)) else "")
+            for u in unknown)
         if strict:
             fail(msg, "앱에서 이름이 바뀌었는지 Generated/QAIDs.swift 또는 qakit dump-ui로 확인하세요")
         warn(msg)
