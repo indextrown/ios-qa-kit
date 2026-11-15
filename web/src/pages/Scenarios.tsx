@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Play, Square, Search, CheckSquare, XSquare, Tag } from "lucide-react";
+import { Play, Square, Search, CheckSquare, XSquare, Tag, ChevronDown, ChevronRight, Pencil, Bot } from "lucide-react";
 import { get, post, type Job, type Scenario } from "../lib/api";
 import { cx, store, stored, when } from "../lib/util";
-import { Badge, Button, Card, Empty, PageHeader, Spinner, StatusBadge, th, td } from "../components/ui";
+import { Badge, Button, Card, Empty, PageHeader, Spinner, StatusBadge } from "../components/ui";
 
 const CODE: Record<string, string> = { "0": "모두 통과", "1": "앱 판정 실패가 있음", "2": "실행 환경·설정 문제", "-2": "멈춤", "-15": "멈춤", "130": "멈춤" };
 type Stop = "" | "never" | "first";
@@ -29,8 +29,16 @@ export function Scenarios({ job, refreshJob }: { job: Job | null; refreshJob: ()
   }, [job, load]);
   useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [job?.lines.length]);
 
+  const [fold, setFold] = useState<Set<string>>(() => new Set(stored<string[]>("qakit-fold", [])));
+  useEffect(() => store("qakit-fold", [...fold]), [fold]);
   const visible = useMemo(() => (list ?? []).filter((s) => !text
     || `${s.name} ${s.title} ${s.description}`.toLowerCase().includes(text.toLowerCase())), [list, text]);
+  // 이름 앞부분(alert-01 → alert)으로 묶는다
+  const groups = useMemo(() => {
+    const m = new Map<string, Scenario[]>();
+    for (const s of visible) { const g = s.name.split("-")[0] || s.name; m.set(g, [...(m.get(g) ?? []), s]); }
+    return [...m.entries()];
+  }, [visible]);
   const tags = useMemo(() => [...new Set((list ?? []).flatMap((s) => s.tags))].sort(), [list]);
   const chosen = (list ?? []).filter((s) => sel.has(s.name)).map((s) => s.name);
   const toggle = (n: string) => setSel((p) => { const s = new Set(p); if (s.has(n)) s.delete(n); else s.add(n); return s; });
@@ -44,6 +52,11 @@ export function Scenarios({ job, refreshJob }: { job: Job | null; refreshJob: ()
     } catch (e) { alert(`실행하지 못함: ${(e as Error).message}`); }
     setStarting(false);
   };
+  const runOne = async (name: string) => {
+    try { await post("/api/run", { scenarios: [name], options: { reuse, stop: null, precheck: false } }); refreshJob(); }
+    catch (e) { alert(`실행하지 못함: ${(e as Error).message}`); }
+  };
+  const aiCreate = () => { store("qakit-ai-mode", "scenario"); location.hash = "#/ai"; };
   const elapsed = job?.started ? Math.round(((job.ended ?? Date.now() / 1000) - job.started)) : 0;
 
   return (
@@ -51,7 +64,8 @@ export function Scenarios({ job, refreshJob }: { job: Job | null; refreshJob: ()
       <PageHeader title="시나리오" description="골라서 실행합니다. 최근 10번 결과는 왼쪽이 오래된 것 (회색: 환경 실패). 통과·실패가 섞이면 불안정."
         actions={job?.running
           ? <Button variant="danger" onClick={() => post("/api/job/stop").then(refreshJob)}><Square className="h-3.5 w-3.5" />멈춤</Button>
-          : <Button variant="primary" onClick={run} loading={starting} disabled={!chosen.length}><Play className="h-3.5 w-3.5" />선택한 {chosen.length}개 실행</Button>} />
+          : <div className="flex gap-2"><Button onClick={aiCreate} title="흐름을 말로 적으면 AI가 앱을 눌러 보며 시나리오를 만든다"><Bot className="h-3.5 w-3.5" />AI로 만들기</Button>
+            <Button variant="primary" onClick={run} loading={starting} disabled={!chosen.length}><Play className="h-3.5 w-3.5" />선택한 {chosen.length}개 실행</Button></div>} />
 
       <Card className="mb-4">
         <div className="flex flex-wrap items-center gap-2 px-4 py-3">
@@ -83,41 +97,71 @@ export function Scenarios({ job, refreshJob }: { job: Job | null; refreshJob: ()
         </Card>
       )}
 
-      <Card>
-        {error ? <Empty>불러오지 못함: {error}</Empty> : list == null ? <Spinner /> : visible.length === 0 ? <Empty>맞는 시나리오가 없습니다</Empty> : (
-          <table className="w-full">
-            <thead className="border-b border-line"><tr>
-              <th className={cx(th, "w-10")}></th><th className={th}>시나리오</th><th className={th}>태그</th><th className={th}>최근 결과</th><th className={th}>마지막</th>
-            </tr></thead>
-            <tbody>
-              {visible.map((s) => (
-                <tr key={s.name} onClick={() => toggle(s.name)}
-                  className={cx("cursor-pointer border-b border-line last:border-0", sel.has(s.name) ? "bg-muted/70" : "hover:bg-muted/40")}>
-                  <td className={td}><input type="checkbox" readOnly checked={sel.has(s.name)} aria-label={`${s.name} 선택`} /></td>
-                  <td className={td}>
-                    <div className="flex items-center gap-2"><span className="font-mono text-[12px] font-medium">{s.name}</span>{s.flaky && <Badge tone="warn">불안정</Badge>}
-                      <a href={`#/edit/scenario/${encodeURIComponent(s.name)}`} onClick={(e) => e.stopPropagation()} className="text-[11px] text-link hover:underline">편집</a></div>
-                    <div className="text-[13px]">{s.title}</div>
-                    {s.description && <div className="mt-0.5 max-w-2xl text-[12px] text-sub">{s.description}</div>}
-                  </td>
-                  <td className={td}><div className="flex flex-wrap gap-1">{s.tags.map((t) => <Badge key={t} tone="mono">{t}</Badge>)}</div></td>
-                  <td className={td}>
-                    {s.recent.length ? <div className="flex gap-1">{s.recent.map((r, i) => (
-                      <span key={i} title={r === "pass" ? "통과" : r === "env" ? "환경 실패" : "실패"}
-                        className={cx("h-2.5 w-2.5 rounded-sm", r === "pass" ? "bg-ok" : r === "env" ? "bg-sub/50" : "bg-bad")} />))}</div>
-                      : <span className="text-[12px] text-sub">기록 없음</span>}
-                  </td>
-                  <td className={cx(td, "text-[12px]")} onClick={(e) => e.stopPropagation()}>
-                    {s.last && <div className="flex items-center gap-2"><StatusBadge result={s.last.result} />
-                      <span className="font-mono text-sub">{when(s.last.at)}</span>
-                      {s.last.dir && <a href={`#/run/${s.last.dir}`} className="text-link hover:underline">상세</a>}</div>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
+      {error ? <Card><Empty>불러오지 못함: {error}</Empty></Card> : list == null ? <Card><Spinner /></Card> : visible.length === 0 ? <Card><Empty>맞는 시나리오가 없습니다</Empty></Card> : (
+        <div className="space-y-3">
+          {groups.map(([g, items]) => {
+            const folded = fold.has(g);
+            const allSel = items.every((x) => sel.has(x.name));
+            const passed = items.filter((x) => x.last?.result === "Passed").length;
+            const failed = items.filter((x) => x.last?.result === "Failed").length;
+            return (
+              <Card key={g}>
+                <div className="flex items-center gap-3 px-4 py-2.5">
+                  <input type="checkbox" checked={allSel} onChange={() => setSel((p) => { const n = new Set(p); items.forEach((x) => (allSel ? n.delete(x.name) : n.add(x.name))); return n; })}
+                    aria-label={`${g} 묶음 선택`} />
+                  <button onClick={() => setFold((p) => { const n = new Set(p); if (n.has(g)) n.delete(g); else n.add(g); return n; })} className="flex flex-1 items-center gap-2 text-left">
+                    {folded ? <ChevronRight className="h-3.5 w-3.5 text-sub" /> : <ChevronDown className="h-3.5 w-3.5 text-sub" />}
+                    <span className="font-mono text-[13px] font-semibold">{g}</span>
+                    <span className="text-[12px] text-sub">{items.length}개</span>
+                    {failed > 0 && <Badge tone="bad">실패 {failed}</Badge>}
+                    {failed === 0 && passed === items.length && <span className="text-[11px] text-ok">모두 통과</span>}
+                  </button>
+                </div>
+                {!folded && (
+                  <div className="divide-y divide-line border-t border-line">
+                    {items.map((s) => (
+                      <div key={s.name} onClick={() => toggle(s.name)}
+                        className={cx("group grid cursor-pointer grid-cols-[20px_minmax(0,1fr)_auto] items-center gap-x-4 px-4 py-2.5 md:grid-cols-[20px_minmax(0,1fr)_150px_200px_64px]",
+                          sel.has(s.name) ? "bg-muted/70" : "hover:bg-muted/40")}>
+                        <input type="checkbox" readOnly checked={sel.has(s.name)} aria-label={`${s.name} 선택`} />
+                        <div className="min-w-0">
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span className="truncate text-[13.5px] font-medium">{s.title || s.name}</span>
+                            {s.flaky && <Badge tone="warn">불안정</Badge>}
+                          </div>
+                          <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[11.5px] text-sub">
+                            <span className="shrink-0 font-mono">{s.name}</span>
+                            {s.tags.map((t) => <span key={t} className="shrink-0 rounded bg-muted px-1.5 font-mono text-[10.5px] text-fg/80">{t}</span>)}
+                            {s.description && <span className="truncate" title={s.description}>· {s.description}</span>}
+                          </div>
+                        </div>
+                        <div className="hidden md:block">
+                          {s.recent.length ? <div className="flex gap-[3px]" title="최근 결과 (왼쪽이 오래된 것)">{s.recent.map((r, i) => (
+                            <span key={i} title={r === "pass" ? "통과" : r === "env" ? "환경 실패" : "실패"}
+                              className={cx("h-3 w-2 rounded-[2px]", r === "pass" ? "bg-ok" : r === "env" ? "bg-sub/50" : "bg-bad")} />))}</div>
+                            : <span className="text-[11.5px] text-sub">기록 없음</span>}
+                        </div>
+                        <div className="hidden items-center gap-2 whitespace-nowrap text-[12px] md:flex" onClick={(e) => e.stopPropagation()}>
+                          {s.last ? <>
+                            <StatusBadge result={s.last.result} />
+                            {s.last.dir ? <a href={`#/run/${s.last.dir}`} className="font-mono text-sub hover:text-link hover:underline" title="실행 상세">{when(s.last.at)}</a>
+                              : <span className="font-mono text-sub">{when(s.last.at)}</span>}
+                          </> : null}
+                        </div>
+                        <div className="flex items-center justify-end gap-0.5 opacity-60 group-hover:opacity-100" onClick={(e) => e.stopPropagation()}>
+                          <button title="이것만 실행" disabled={!!job?.running} onClick={() => runOne(s.name)}
+                            className="rounded p-1.5 text-sub hover:bg-muted hover:text-fg disabled:opacity-30"><Play className="h-3.5 w-3.5" /></button>
+                          <a title="편집" href={`#/edit/scenario/${encodeURIComponent(s.name)}`} className="rounded p-1.5 text-sub hover:bg-muted hover:text-fg"><Pencil className="h-3.5 w-3.5" /></a>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
+            );
+          })}
+        </div>
+      )}
     </>
   );
 }

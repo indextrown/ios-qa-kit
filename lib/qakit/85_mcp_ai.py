@@ -104,6 +104,11 @@ def mcp_tools():
              {"yaml": {"type": "string"}}, ["yaml"]),
         tool("recorded_steps", "마지막 launch 이후 통과한 단계 목록 (save_scenario가 이것으로 시나리오를 만든다)."),
         tool("list_scenarios", "이미 있는 시나리오 (이름·제목·태그·최근 결과)."),
+        tool("list_common_steps", "공통 단계(steps/) 목록 — 여러 시나리오가 앞에 쓰는 경로 (예: home = 앱 켜고 홈 탭까지). "
+                                  "step 도구로 \"use: <이름>\"을 실행하면 그 단계를 밟는다."),
+        tool("read_scenario", "시나리오(scenarios/)나 공통 단계(steps/)의 .qa.yml 내용 — 새 시나리오를 만들 때 스타일을 맞추려고 읽는다.",
+             {"name": {"type": "string"}, "kind": {"type": "string", "enum": ["scenario", "step"], "description": "기본 scenario"}},
+             ["name"]),
         tool("run_scenario", "시나리오 하나를 실행하고 결과 요약 (실패하면 원인·제안·화면 구조).",
              {"name": {"type": "string"}, "reuse_app": {"type": "boolean", "description": "앱이 시작 화면이면 다시 켜지 않음"}},
              ["name"]),
@@ -323,6 +328,22 @@ class McpSession:
                     + (f" 최근: {''.join('✓' if r == 'pass' else '✗' if r == 'fail' else '·' for r in s['recent'][-5:])}" if s["recent"] else "")
                     for s in ui_scenarios(self.ws)]
             return text(f"시나리오 {len(rows)}개\n" + "\n".join(rows)), False
+        if name == "list_common_steps":
+            rows = []
+            for f in sorted((self.ws.root / "steps").glob("*.qa.yml")):
+                head = {}
+                with contextlib.suppress(Exception):
+                    head = scenario_tools.parse_yaml(f.read_text(encoding="utf-8")) or {}
+                rows.append(f"{f.name[:-len('.qa.yml')]} — {head.get('name', '')}"
+                            + (f" (끝나면: {json.dumps(head['start'], ensure_ascii=False)})" if head.get("start") else ""))
+            return text(f"공통 단계 {len(rows)}개 (step 도구로 \"use: <이름>\")\n" + "\n".join(rows)), False
+        if name == "read_scenario":
+            folder = "steps" if a.get("kind") == "step" else "scenarios"
+            nm = str(a["name"]).removesuffix(".qa.yml")
+            f = self.ws.root / folder / f"{nm}.qa.yml"
+            if not re.fullmatch(r"[A-Za-z0-9가-힣_.\-]+", nm) or not f.exists():
+                return text(f"{folder}/{nm}.qa.yml 없음"), True
+            return text(self.mask(f.read_text(encoding="utf-8"))[:6000]), False
         if name == "run_scenario":
             code, out = self.qakit("run", a["name"], "--serve", *(["--reuse-app"] if a.get("reuse_app") else []), timeout=900)
             return text(out[-6000:]), code != 0
@@ -399,6 +420,26 @@ def ai_engines():
     else:
         out.append({"id": "codex", "name": "Codex", "ready": False, "note": "설치 필요 (npm i -g @openai/codex)", "tested": False})
     return out
+
+
+def ai_scenario_prompt(goal, minutes, name=None, tags=None, start=None):
+    """시나리오 만들기 모드: 문제 찾기가 아니라, 다음부터 AI 없이 매번 통과하는 시나리오 하나를 남긴다."""
+    meta = [f"이름: {name}" if name else "이름: 직접 정한다 (화면-번호-내용, 예: login-03-empty-password. list_scenarios로 겹치지 않게)",
+            f"태그: {', '.join(tags)}" if tags else "태그: 알맞게 (없어도 됨)",
+            f"시작 공통 단계: {start} — launch 다음에 step 도구로 \"use: {start}\"를 밟는다 (save_scenario에는 start를 주지 않음, 이미 기록됨)"
+            if start else "시작 공통 단계: 필요하면 list_common_steps에서 골라 launch 다음 step으로 \"use: <이름>\""]
+    return f"""만들 시나리오: {goal}
+{chr(10).join(meta)}
+
+qakit MCP 도구로 이 흐름의 시나리오(.qa.yml)를 만든다. 문제 찾기가 목적이 아니라, 다음부터 AI 없이 매번 통과하는 시나리오를 남기는 것이 목적이다. qakit 도구 말고 다른 도구는 없다.
+1. list_scenarios·list_common_steps로 있는 것을 보고, 비슷한 시나리오 하나를 read_scenario로 읽어 스타일을 맞춘다. 같은 흐름이 이미 있으면 새로 만들지 말고 그 이름을 보고한다.
+2. launch로 시작하고 screen으로 화면을 읽으며 흐름을 밟는다. 조작 도구마다 why(왜 하는지 한 줄)를 준다.
+3. 대상은 screen에 나온 #ID를 우선 쓴다. 라벨은 바뀌기 쉬우니 ID가 없을 때만. 화면이 바뀌는 tap에는 expect(다음 화면의 핵심 요소)를 붙이고, 마지막에 목표가 이뤄졌는지 expect로 확인한다.
+4. 실패하거나 헤맨 단계가 섞였으면 launch부터 다시 깨끗하게 밟는다 (recorded_steps로 확인 — 저장되는 것은 마지막 launch 이후 통과한 단계).
+5. save_scenario로 저장한다 — 새로 켠 앱에서 재생해 통과해야 남는다. 실패하면 원인(대신 이 대상? 제안 포함)을 보고 고쳐 launch부터 다시.
+6. 앱 데이터를 지우거나 되돌릴 수 없는 일(삭제·탈퇴·결제·게시)은 하지 않는다. 그런 흐름이면 그 직전까지만 만들고 보고한다.
+7. 시간은 약 {minutes}분이다.
+8. 마지막 답변은 한국어 마크다운으로: 저장한 시나리오 이름·제목, 단계 요약, 확인(expect)한 것, 넣지 못한 것과 이유."""
 
 
 def ai_prompt(goal, minutes, save):
@@ -501,7 +542,7 @@ def ai_session_info(ws, d, full=False):
     seconds = None
     with contextlib.suppress(TypeError, ValueError):
         seconds = round((datetime.datetime.fromisoformat(ended) - datetime.datetime.fromisoformat(started)).total_seconds())
-    info_ = {"dir": results_rel(ws, d), "name": d.name, "goal": meta.get("goal"), "client": meta.get("client"),
+    info_ = {"dir": results_rel(ws, d), "name": d.name, "goal": meta.get("goal"), "client": meta.get("client"), "mode": meta.get("mode") or "qa",
              "via": meta.get("via") or "MCP", "started": started, "ended": ended, "seconds": seconds,
              "cost": meta.get("cost"), "turns": meta.get("turns_used"), "code": meta.get("code"), "calls": len(rows),
              "failed": sum(1 for r in rows if not r.get("ok")), "issues": len(issues), "report": report is not None,

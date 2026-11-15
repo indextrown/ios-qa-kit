@@ -309,6 +309,14 @@ def cmd_ui(args):
         turns = max(5, min(300, int(body.get("turns") or 60)))
         if not goal or len(goal) > 2000:
             return None, "목표를 적어 주세요 (2000자 이내)"
+        mode = "scenario" if body.get("mode") == "scenario" else "qa"
+        sc_name = str(body.get("name") or "").strip() or None
+        if sc_name and not re.fullmatch(r"[a-z0-9][a-z0-9\-]*", sc_name):
+            return None, "시나리오 이름은 영문 소문자·숫자·- 만 (예: login-03-empty-password)"
+        sc_tags = [t.strip() for t in body.get("tags") or [] if re.fullmatch(r"[A-Za-z0-9가-힣_-]+", str(t).strip())]
+        sc_start = str(body.get("start") or "").strip() or None
+        if sc_start and not (ws.root / "steps" / f"{sc_start}.qa.yml").exists():
+            return None, f"공통 단계가 없습니다: steps/{sc_start}.qa.yml"
         if not udid:
             return None, "AI QA는 지금 시뮬레이터만"
         eng = next((e for e in ai_engines() if e["id"] == engine), None)
@@ -322,16 +330,19 @@ def cmd_ui(args):
         d = ws.results_dir / "ai" / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         d.mkdir(parents=True, exist_ok=True)
         (d / "meta.json").write_text(json.dumps({"client": eng["name"], "goal": goal, "via": "qakit ui", "minutes": minutes,
+                                                 "mode": mode, **({"name": sc_name} if sc_name else {}),
                                                  "turns": turns, "started": datetime.datetime.now().isoformat(timespec="seconds")},
                                                 ensure_ascii=False), encoding="utf-8")
-        cmd = ai_command(engine, ws, d, ai_prompt(goal, minutes, bool(body.get("save"))), turns)
+        prompt = ai_scenario_prompt(goal, minutes, sc_name, sc_tags, sc_start) if mode == "scenario" \
+            else ai_prompt(goal, minutes, bool(body.get("save")))
+        cmd = ai_command(engine, ws, d, prompt, turns)
         try:
             proc = subprocess.Popen(cmd, cwd=str(ws.root), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                     stderr=open(d / "agent.err", "w"), text=True, start_new_session=True)
         except OSError as e:
             return None, f"실행하지 못함: {e}"
         with aij["lock"]:
-            aij.update(proc=proc, engine=engine, goal=goal, started=time.time(), ended=None, code=None, events=[],
+            aij.update(proc=proc, engine=engine, goal=goal, mode=mode, started=time.time(), ended=None, code=None, events=[],
                        result=None, dir=d, limit=minutes * 60, stopped=None)
 
         def reader():
@@ -392,7 +403,7 @@ def cmd_ui(args):
     def ai_state(since):
         with aij["lock"]:
             running = bool(aij["proc"]) and aij["proc"].poll() is None
-            return {"running": running, "engine": aij["engine"], "goal": aij["goal"], "started": aij["started"],
+            return {"running": running, "engine": aij["engine"], "goal": aij["goal"], "started": aij["started"], "mode": aij.get("mode"),
                     "ended": aij["ended"], "code": aij["code"], "limit": aij["limit"], "stopped": aij["stopped"],
                     "dir": results_rel(ws, aij["dir"]) if aij["dir"] else None, "total": len(aij["events"]),
                     "events": aij["events"][since:], "result": aij["result"]}
