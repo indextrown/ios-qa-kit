@@ -37,7 +37,7 @@ export function App() {
   let page;
   if (hash.startsWith("#/run/")) page = <RunDetail dir={decodeURIComponent(hash.slice(6))} />;
   else if (active === "scenarios") page = <Scenarios job={job} refreshJob={refreshJob} />;
-  else if (active === "live") page = <Live busy={!!job?.running} />;
+  else if (active === "live") page = <Live job={job} refreshJob={refreshJob} />;
   else page = <Runs />;
   return <Layout active={active} info={info} running={!!job?.running}>{page}</Layout>;
 }
