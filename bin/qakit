@@ -2448,6 +2448,7 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
         f.write(json.dumps({
             "at": datetime.datetime.now().isoformat(timespec="seconds"), "kind": "run", "test": name,
             "result": "Passed" if success else "Failed", "seconds": seconds, "via": "serve", "dir": results_rel(ws, rd),
+            **({"failure": "env"} if not success and res.get("env") else {}),
             "app": {k: state.get(k) for k in ("branch", "commit", "dirtyFiles") if k in state},
             "kit": kit_version(),
         }, ensure_ascii=False) + "\n")
@@ -4043,11 +4044,12 @@ def ui_scenarios(ws):
             desc.append(line.lstrip("# ").strip())
         tags = data.get("tags") if isinstance(data, dict) else None
         recent = by_test.get(name, [])[-10:]
-        results = [r.get("result") == "Passed" for r in recent]
+        results = ["pass" if r.get("result") == "Passed" else "env" if r.get("failure") == "env" else "fail" for r in recent]
+        judged = [x for x in results if x != "env"]   # 환경 실패(실행기·연결 등)는 불안정 판정에서 뺀다
         out.append({"name": name, "title": (data.get("name") if isinstance(data, dict) else None) or name,
                     "description": " ".join(desc), "tags": tags if isinstance(tags, list) else ([tags] if tags else []),
                     "recent": results, "last": recent[-1] if recent else None,
-                    "flaky": len(set(results)) > 1})
+                    "flaky": len(set(judged)) > 1})
     return out
 
 
@@ -4062,6 +4064,66 @@ def cmd_ui(args):
     udid = None if ws.device else simulator_udid(ws.simulator)[0]
     screen = {"at": 0.0, "data": None, "lock": threading.Lock()}
     static = {"app.js": "text/javascript; charset=utf-8", "style.css": "text/css; charset=utf-8"}
+
+    job = {"proc": None, "lines": [], "args": None, "started": None, "ended": None, "code": None,
+           "lock": threading.Lock()}
+
+    def start_job(body):
+        """UI에서 고른 시나리오·태그·옵션으로 qakit run을 따로 띄운다 (한 번에 하나)."""
+        with job["lock"]:
+            if job["proc"] and job["proc"].poll() is None:
+                return None, "이미 실행 중입니다 (멈춘 뒤 다시)"
+            names = [str(n) for n in body.get("scenarios") or [] if re.fullmatch(r"[A-Za-z0-9가-힣_.*?-]+", str(n))]
+            tags = [str(t) for t in body.get("tags") or [] if re.fullmatch(r"[A-Za-z0-9가-힣_-]+", str(t))]
+            if not names and not tags:
+                return None, "실행할 시나리오나 태그를 고르세요"
+            o = body.get("options") or {}
+            cmd = [sys.executable, str(KIT_DIR / "bin" / "qakit"), "-w", str(ws.root), "run", *names]
+            for t in tags:
+                cmd += ["--tag", t]
+            cmd += ["--serve"] if not ws.device else []
+            cmd += ["--reuse-app"] if o.get("reuse") else []
+            cmd += ["--fail-fast"] if o.get("stop") == "first" else ["--keep-going"] if o.get("stop") == "never" else []
+            cmd += ["--no-precheck"] if o.get("precheck") is False else ["--precheck"] if o.get("precheck") else []
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                    env=dict(os.environ, PYTHONUNBUFFERED="1"), start_new_session=True)
+            job.update(proc=proc, lines=[], args=["qakit run", *cmd[5:]], started=time.time(), ended=None, code=None)
+
+        def pump():
+            for line in proc.stdout:
+                with job["lock"]:
+                    job["lines"].append(masker(ws.secrets())(line.rstrip("\n")))
+                    del job["lines"][:-5000]
+            code = proc.wait()
+            with job["lock"]:
+                job.update(ended=time.time(), code=code)
+        threading.Thread(target=pump, daemon=True).start()
+        return job["args"], None
+
+    def stop_job():
+        proc = job["proc"]
+        if not proc or proc.poll() is not None:
+            return False
+        try:
+            os.killpg(proc.pid, 2)   # Ctrl+C와 같게: 실행 중인 시나리오를 끝내고 정리
+        except OSError:
+            pass
+
+        def force():
+            time.sleep(10)
+            if proc.poll() is None:
+                try:
+                    os.killpg(proc.pid, 15)
+                except OSError:
+                    pass
+        threading.Thread(target=force, daemon=True).start()
+        return True
+
+    def job_state(since):
+        with job["lock"]:
+            running = bool(job["proc"]) and job["proc"].poll() is None
+            return {"running": running, "args": job["args"], "started": job["started"], "ended": job["ended"],
+                    "code": job["code"], "total": len(job["lines"]), "lines": job["lines"][since:]}
 
     def grab_screen():
         with screen["lock"]:
@@ -4091,6 +4153,27 @@ def cmd_ui(args):
                 self.send_header(k, v)
             self.end_headers()
             self.wfile.write(data)
+
+        def authed(self):
+            cookies = dict(c.strip().split("=", 1) for c in (self.headers.get("Cookie") or "").split(";") if "=" in c)
+            return cookies.get("qakit_ui") == token
+
+        def do_POST(self):
+            # 실행 요청은 쿠키 + 전용 헤더 (다른 사이트가 몰래 보내는 요청 막기)
+            if not self.authed() or self.headers.get("X-Qakit-UI") != "1":
+                return self.send(401, {"error": "권한 없음"})
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(min(length, 100_000)) or b"{}")
+            except ValueError:
+                return self.send(400, {"error": "JSON이 아님"})
+            path = urllib.parse.urlparse(self.path).path
+            if path == "/api/run":
+                args_, err = start_job(body)
+                return self.send(409 if err else 200, {"error": err} if err else {"started": True, "args": args_})
+            if path == "/api/job/stop":
+                return self.send(200, {"stopping": stop_job()})
+            return self.send(404, {"error": "없는 주소"})
 
         def do_GET(self):
             url = urllib.parse.urlparse(self.path)
@@ -4129,6 +4212,8 @@ def cmd_ui(args):
                                      "text/plain; charset=utf-8")
                 if path == "/api/scenarios":
                     return self.send(200, ui_scenarios(ws))
+                if path == "/api/job":
+                    return self.send(200, job_state(int(q.get("from", 0))))
                 if path == "/api/screen":
                     if not udid:
                         return self.send(404, {"error": "라이브 화면은 시뮬레이터만 (실기기는 아직)"})
@@ -4141,7 +4226,7 @@ def cmd_ui(args):
     server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{server.server_address[1]}/?token={token}"
     ok(f"qakit ui: {url}")
-    info("결과 보기 + 시뮬레이터 라이브 화면 (보기 전용). 끝내려면 Ctrl+C")
+    info("실행 기록·시나리오 실행·시뮬레이터 라이브 화면. 끝내려면 Ctrl+C")
     if not args.no_open:
         run(["open", url], check=False)
     try:
@@ -4149,6 +4234,7 @@ def cmd_ui(args):
     except KeyboardInterrupt:
         print()
     finally:
+        stop_job()   # UI를 끄면 UI에서 시작한 실행도 멈춘다
         server.server_close()
 
 
