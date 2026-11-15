@@ -4024,6 +4024,28 @@ def ui_run_detail(ws, rel):
             "files": sorted(f.name for f in d.iterdir())}
 
 
+DUMP_LINE_RE = re.compile(
+    r'^(?P<indent> *)(?P<type>[A-Za-z0-9]+)(?: #(?P<id>\S+))?(?: "(?P<label>.*?)")?(?: value="(?P<value>.*?)")?'
+    r' @(?P<x>-?\d+),(?P<y>-?\d+) (?P<w>\d+)x(?P<h>\d+)$', re.M | re.S)
+
+
+def ui_parse_dump(text):
+    """qakit do dump 텍스트 → 요소 목록 (라벨에 줄바꿈이 있어도). 화면 크기는 Application 프레임."""
+    body = "\n".join(l for l in text.splitlines() if not l.startswith("#"))
+    elements, screen = [], None
+    for m in DUMP_LINE_RE.finditer(body):
+        e = {"type": m["type"], "id": m["id"], "label": (m["label"] or "").replace("\n", " ") or None,
+             "labelRaw": m["label"],
+             "value": m["value"], "x": int(m["x"]), "y": int(m["y"]), "w": int(m["w"]), "h": int(m["h"]),
+             "depth": len(m["indent"]) // 2}
+        if e["type"] == "Application" and screen is None:
+            screen = {"w": e["w"], "h": e["h"]}
+            continue
+        if e["w"] > 0 and e["h"] > 0 and (e["id"] or e["label"]):
+            elements.append(e)
+    return {"screen": screen, "elements": elements}
+
+
 def ui_scenarios(ws):
     hist = [r for r in ui_history(ws) if r.get("kind") == "run"]
     by_test = {}
@@ -4119,6 +4141,24 @@ def cmd_ui(args):
         threading.Thread(target=force, daemon=True).start()
         return True
 
+    do_lock = threading.Lock()
+
+    def run_do(args_, timeout=150):
+        """qakit do <…> (UI 라이브 조작). 실행(U2) 중이면 거절."""
+        if job["proc"] and job["proc"].poll() is None:
+            return None, "시나리오 실행 중에는 조작할 수 없습니다"
+        if not do_lock.acquire(blocking=False):
+            return None, "앞선 조작이 끝나지 않았습니다"
+        try:
+            r = subprocess.run([sys.executable, str(KIT_DIR / "bin" / "qakit"), "-w", str(ws.root), "do", *args_],
+                               capture_output=True, text=True, timeout=timeout,
+                               env=dict(os.environ, PYTHONUNBUFFERED="1"))
+            return {"code": r.returncode, "output": masker(ws.secrets())((r.stdout or "") + (r.stderr or ""))}, None
+        except subprocess.TimeoutExpired:
+            return None, f"{timeout}초 안에 끝나지 않음"
+        finally:
+            do_lock.release()
+
     def job_state(since):
         with job["lock"]:
             running = bool(job["proc"]) and job["proc"].poll() is None
@@ -4173,6 +4213,12 @@ def cmd_ui(args):
                 return self.send(409 if err else 200, {"error": err} if err else {"started": True, "args": args_})
             if path == "/api/job/stop":
                 return self.send(200, {"stopping": stop_job()})
+            if path == "/api/do":
+                step = str(body.get("step") or "").strip()
+                if not step or len(step) > 2000:
+                    return self.send(400, {"error": "단계가 비었거나 너무 김"})
+                res, err = run_do([step] if step not in ("launch", "reset") else [step])
+                return self.send(409 if err else 200, {"error": err} if err else res)
             return self.send(404, {"error": "없는 주소"})
 
         def do_GET(self):
@@ -4214,6 +4260,16 @@ def cmd_ui(args):
                     return self.send(200, ui_scenarios(ws))
                 if path == "/api/job":
                     return self.send(200, job_state(int(q.get("from", 0))))
+                if path == "/api/elements":
+                    res, err = run_do(["dump", "--settle", "0.3"])
+                    if err:
+                        return self.send(409, {"error": err})
+                    if res["code"] != 0:
+                        return self.send(500, {"error": res["output"][-400:]})
+                    return self.send(200, ui_parse_dump(res["output"]))
+                if path == "/api/do-steps":
+                    steps, from_launch = do_log_read(ws)
+                    return self.send(200, {"steps": steps, "fromLaunch": from_launch})
                 if path == "/api/screen":
                     if not udid:
                         return self.send(404, {"error": "라이브 화면은 시뮬레이터만 (실기기는 아직)"})

@@ -203,10 +203,145 @@ function updateRunningBadge() {
   b.hidden = !job.running;
 }
 
+// ── 라이브 조작 (U3): 화면 위 요소 → ID·라벨로 단계, qakit do로 실행
+const TYPE = { Button: "button", StaticText: "text", Text: "text", Image: "image", Cell: "cell", TextField: "textfield",
+  SecureTextField: "securetextfield", Switch: "switch", Other: "other", CollectionView: "collectionview",
+  ScrollView: "scrollview", Table: "table", SegmentedControl: "segment" };
+const PREFER = new Set(["Button", "Cell", "TextField", "SecureTextField", "Switch", "Link", "Tab", "SegmentedControl"]);
+const lv = { els: [], screen: null, sel: null, timer: null, at: null };
+const yq = (v) => (/^[^\s"'{}\[\],:#&*!|>%@`-][^{}\[\],:#"]*$/.test(v) && !/\s$/.test(v) && !/: /.test(v) ? v : JSON.stringify(v));
+function selectorFor(e) {
+  const same = (k) => lv.els.filter((x) => x[k] === e[k]);
+  if (e.id && !e.id.startsWith("_Tt")) {
+    const dup = same("id");
+    return dup.length > 1 ? `{ id: ${yq(e.id)}, index: ${dup.indexOf(e)} }` : yq(e.id);
+  }
+  const type = TYPE[e.type] || "any";
+  const raw = e.labelRaw || "";
+  if (raw.includes("\n")) return `{ type: ${type}, contains: ${yq(raw.split("\n")[0])} }`;
+  const dup = lv.els.filter((x) => x.labelRaw === raw && x.type === e.type);
+  return `{ type: ${type}, label: ${yq(raw)}${dup.length > 1 ? `, index: ${dup.indexOf(e)}` : ""} }`;
+}
+async function showLive() {
+  $("#main").innerHTML = `<h1>라이브 조작</h1>
+    <p class="muted">화면을 눌러 요소를 고르고 동작을 실행합니다 (qakit do — ID 우선, 없으면 라벨). 통과한 단계는 기록됩니다.
+      <span class="legend small"><span style="color:#2f6fed">━ ID 있음</span><span style="color:#b45309">┅ 라벨만</span></span></p>
+    <div class="live-wrap">
+      <div><div class="stage"><div class="screen"><img id="lv-img" alt="시뮬레이터 화면"><div id="lv-overlay" class="overlay"></div></div></div>
+        <p class="small muted" id="lv-status"></p></div>
+      <div>
+        <div class="panel"><h3>앱·화면</h3><div class="actions">
+          <button type="button" id="lv-launch">앱 다시 켜기 (기록 새로 시작)</button>
+          <button type="button" id="lv-dump">화면 구조 새로고침</button>
+          <label class="small"><input type="checkbox" id="lv-boxes" checked> 요소 테두리</label></div></div>
+        <div class="panel sel-info"><h3>고른 요소</h3><div id="lv-sel" class="muted">화면을 눌러 요소를 고르세요</div>
+          <div class="actions" id="lv-actions" hidden>
+            <button type="button" data-act="tap" class="primary">탭</button>
+            <button type="button" data-act="wait">나타날 때까지 기다림</button>
+            <button type="button" data-act="expect">보이는지 확인</button>
+            <button type="button" data-act="up">위로 쓸기</button>
+            <button type="button" data-act="down">아래로 쓸기</button>
+          </div></div>
+        <div class="panel"><h3>단계 직접 실행</h3>
+          <input id="do-input" placeholder="예) tap: home_search_button  ·  { tap: X, expect: { visible: Y } }">
+          <div class="actions"><button type="button" id="do-run">실행</button></div>
+          <pre id="do-result" hidden></pre></div>
+        <div class="panel steps"><h3>기록된 단계 <span id="lv-steps-note" class="muted small"></span></h3><div id="lv-steps" class="muted small">없음</div></div>
+      </div>
+    </div>`;
+  $("#lv-launch").addEventListener("click", () => doStep("launch"));
+  $("#lv-dump").addEventListener("click", loadElements);
+  $("#lv-boxes").addEventListener("change", drawBoxes);
+  $("#do-run").addEventListener("click", () => doStep($("#do-input").value.trim()));
+  $("#do-input").addEventListener("keydown", (e) => { if (e.key === "Enter") doStep($("#do-input").value.trim()); });
+  document.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => {
+    const s = selectorFor(lv.sel);
+    const step = { tap: `tap: ${s}`, wait: `wait: { for: ${s}, timeout: 10 }`, expect: `expect: { visible: ${s} }`,
+      up: `swipe: { on: ${s}, dir: up }`, down: `swipe: { on: ${s}, dir: down }` }[b.dataset.act];
+    doStep(step);
+  }));
+  const ov = $("#lv-overlay");
+  ov.addEventListener("click", (ev) => { const e = hit(ev); if (e) { lv.sel = e; renderSel(); drawBoxes(); } });
+  ov.addEventListener("mousemove", (ev) => { const e = hit(ev); ov.title = e ? `${e.type} ${e.id ? "#" + e.id : ""} ${e.label ? `"${e.label}"` : ""}` : ""; });
+  liveLoop();
+  loadElements();
+  loadSteps();
+}
+function hit(ev) {
+  if (!lv.screen) return null;
+  const r = $("#lv-overlay").getBoundingClientRect();
+  const x = ((ev.clientX - r.left) / r.width) * lv.screen.w, y = ((ev.clientY - r.top) / r.height) * lv.screen.h;
+  const inside = lv.els.filter((e) => x >= e.x && x <= e.x + e.w && y >= e.y && y <= e.y + e.h);
+  const pick = inside.filter((e) => PREFER.has(e.type)).length ? inside.filter((e) => PREFER.has(e.type)) : inside;
+  return pick.sort((a, b) => a.w * a.h - b.w * b.h || b.depth - a.depth)[0] || null;
+}
+function drawBoxes() {
+  const ov = $("#lv-overlay");
+  if (!ov || !lv.screen) return;
+  const show = $("#lv-boxes").checked;
+  ov.innerHTML = lv.els.filter((e) => show || e === lv.sel).map((e) => `<div class="box ${e.id && !e.id.startsWith("_Tt") ? "" : "noid"} ${e === lv.sel ? "sel" : ""}"
+    style="left:${(e.x / lv.screen.w) * 100}%;top:${(e.y / lv.screen.h) * 100}%;width:${(e.w / lv.screen.w) * 100}%;height:${(e.h / lv.screen.h) * 100}%"></div>`).join("");
+}
+function renderSel() {
+  const e = lv.sel;
+  $("#lv-actions").hidden = !e;
+  $("#lv-sel").innerHTML = e ? `<div>${esc(e.type)} ${e.id ? `<code>#${esc(e.id)}</code>` : `<span class="pill flaky">ID 없음 — 라벨로</span>`} ${e.label ? `"${esc(e.label)}"` : ""}</div>
+    <div class="small muted">@${e.x},${e.y} ${e.w}x${e.h}</div><div>단계 대상: <code>${esc(selectorFor(e))}</code></div>` : "화면을 눌러 요소를 고르세요";
+}
+async function loadElements() {
+  $("#lv-status").textContent = "화면 구조 읽는 중…";
+  try {
+    const d = await api("/api/elements");
+    lv.screen = d.screen; lv.els = d.elements; lv.at = new Date();
+    if (lv.sel) lv.sel = lv.els.find((e) => e.id === lv.sel.id && e.labelRaw === lv.sel.labelRaw && e.type === lv.sel.type) || null;
+    renderSel(); drawBoxes();
+    $("#lv-status").textContent = `요소 ${lv.els.length}개 · 구조 ${lv.at.toLocaleTimeString()}`;
+  } catch (e) { $("#lv-status").textContent = `화면 구조를 읽지 못함: ${e.message}`; }
+}
+async function loadSteps() {
+  try {
+    const d = await api("/api/do-steps");
+    $("#lv-steps-note").textContent = d.fromLaunch ? "(앱을 다시 켠 뒤부터)" : d.steps.length ? "(앱 다시 켜기 전 것 포함)" : "";
+    $("#lv-steps").innerHTML = d.steps.length ? `<ol>${d.steps.map((s) => `<li><code>${esc(s)}</code></li>`).join("")}</ol>` : "없음";
+  } catch (_) { /* 무시 */ }
+}
+async function doStep(step) {
+  if (!step) return;
+  const out = $("#do-result");
+  out.hidden = false; out.className = ""; out.textContent = `실행 중: ${step}`;
+  document.querySelectorAll("#main button").forEach((b) => { b.disabled = true; });
+  try {
+    const r = await post("/api/do", { step });
+    out.className = r.code === 0 ? "result-ok" : "result-fail";
+    out.textContent = `${step}\n${r.output.trim()}`;
+  } catch (e) { out.className = "result-fail"; out.textContent = `${step}\n${e.message}`; }
+  document.querySelectorAll("#main button").forEach((b) => { b.disabled = false; });
+  await liveShot();
+  await loadElements();
+  loadSteps();
+}
+async function liveShot() {
+  try {
+    const r = await fetch(`/api/screen?ts=${Date.now()}`, { cache: "no-store" });
+    if (!r.ok) throw new Error((await r.json()).error || r.status);
+    const url = URL.createObjectURL(await r.blob());
+    const img = $("#lv-img");
+    if (!img) return;
+    if (img.dataset.url) URL.revokeObjectURL(img.dataset.url);
+    img.src = url; img.dataset.url = url;
+  } catch (e) { if ($("#lv-status")) $("#lv-status").textContent = `화면을 가져오지 못함: ${e.message}`; }
+}
+function liveLoop() {
+  clearTimeout(lv.timer);
+  if (!location.hash.startsWith("#/live")) return;
+  liveShot().finally(() => { lv.timer = setTimeout(liveLoop, 1000); });
+}
+
 // ── 라이브 화면 (보기 전용)
 const live = { on: false, timer: null, url: null };
 async function tick() {
-  if (!live.on) return;
+  live.timer = null;
+  if (!live.on || location.hash.startsWith("#/live")) return;
   const started = performance.now();
   try {
     const r = await fetch(`/api/screen?ts=${Date.now()}`, { cache: "no-store" });
@@ -237,6 +372,9 @@ $("#live-interval").addEventListener("change", () => { if (live.on) { clearTimeo
 function route() {
   const h = location.hash || "#/runs";
   document.querySelectorAll("[data-nav]").forEach((a) => a.classList.toggle("on", h.startsWith(`#/${a.dataset.nav}`) || (a.dataset.nav === "runs" && h.startsWith("#/run/"))));
+  document.body.classList.toggle("live-page", h.startsWith("#/live"));
+  if (h.startsWith("#/live")) return showLive();   // 오른쪽 라이브 화면은 이 화면에서 쉰다 (tick이 건너뜀)
+  if (live.on && !live.timer) tick();
   if (h.startsWith("#/run/")) return showRun(decodeURIComponent(h.slice(6)));
   if (h.startsWith("#/scenarios")) return showScenarios();
   return showRuns();

@@ -64,3 +64,25 @@ button:disabled { opacity: .5; cursor: default; }
 .dots span.env { background: var(--muted); }
 #job-log { max-height: 320px; }
 label { display: inline-flex; gap: 4px; align-items: center; }
+
+/* 라이브 조작 (U3) */
+body.live-page .live { display: none; }
+body.live-page .layout { grid-template-columns: 150px minmax(0, 1fr); }
+.live-wrap { display: grid; grid-template-columns: minmax(280px, 420px) minmax(0, 1fr); gap: 20px; align-items: start; }
+.stage { position: relative; background: #000; border-radius: 28px; padding: 10px; }
+.stage .screen { position: relative; }
+.stage img { width: 100%; display: block; border-radius: 20px; }
+.overlay { position: absolute; inset: 0; cursor: crosshair; }
+.overlay .box { position: absolute; border: 1px solid rgba(47,111,237,.55); border-radius: 3px; pointer-events: none; }
+.overlay .box.noid { border-color: rgba(180,83,9,.45); border-style: dashed; }
+.overlay .box.sel { border: 2px solid #f43f5e; background: rgba(244,63,94,.15); }
+.overlay .box.hover { background: rgba(47,111,237,.15); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
+.panel h3 { margin: 0 0 8px; font-size: 14px; }
+.sel-info code, .steps code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.result-ok { color: var(--pass); } .result-fail { color: var(--fail); }
+.steps ol { margin: 0; padding-left: 22px; } .steps li { margin: 2px 0; }
+#do-input { width: 100%; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.legend span { margin-right: 10px; }
+@media (max-width: 1100px) { .live-wrap { grid-template-columns: 1fr; } }
