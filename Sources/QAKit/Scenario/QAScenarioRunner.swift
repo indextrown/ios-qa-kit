@@ -572,6 +572,7 @@ public final class QAScenarioRunner {
         case "hidden": return !resolve(value).isVisibleOnScreen(in: app)
         case "selected": let e = resolve(value); return e.exists && e.isSelected
         case "hittable": let e = resolve(value); return e.exists && e.isHittable
+        case "not-hittable": let e = resolve(value); return !(e.exists && e.isHittable)   // 탭 expect의 missing·hidden (frontmost)
         case "right-of":
             guard let pair = value as? [Any], pair.count == 2 else { throw fail("right-of: [A, B] 형식") }
             let a = resolve(pair[0]), b = resolve(pair[1])
@@ -689,6 +690,7 @@ public final class QAScenarioRunner {
         guard let c = raw as? [String: Any], let (key, value) = c.first, c.count == 1 else { return raw }
         switch key {
         case "visible": return ["hittable": value]
+        case "missing", "hidden": return ["not-hittable": value]   // 덮인 아래 화면 요소는 남아 있어도 "사라짐"으로
         case "all", "any": return [key: (value as? [Any] ?? []).map(frontmost)]
         default: return raw
         }
