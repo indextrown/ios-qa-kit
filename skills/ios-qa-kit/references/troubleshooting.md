@@ -31,6 +31,12 @@
 | 같은 SwiftUI ID가 여러 요소에 | 동적 라벨 버튼(`X.Button.0`)이 반복 컴포넌트 안에, 또는 행(`X.row`) | 라벨·index로 고른다 (`{ id, label }`, `.element(boundBy:)`) |
 | 빌드 에러가 `.accessibilityIdentifier(` 줄을 가리킴 | 삽입 도구가 수식어를 붙일 수 없는 자리에 붙임 | `qakit swiftui-ids --insert` 뒤 `git diff`로 위치 확인 → 도구 버그로 보고. 임시로 `swiftui: off` |
 
+## qakit ui 실시간 화면
+
+| 증상 | 원인 | 해결 |
+|---|---|---|
+| 라이브 세션 아래에 "실시간 화면을 열지 못했습니다" / "실시간 화면 멈춤 (…)" 후 스크린샷으로 바뀜 | 화면 읽는 도구(`Tools/simscreen`)가 빌드되지 않거나, Xcode가 바뀌어 비공개 부품(CoreSimulator)이 달라짐, 또는 시뮬레이터가 꺼짐 | 시뮬레이터를 켜고 툴바의 "스크린샷"을 눌러 "실시간"으로 다시 (실패 뒤 30초는 다시 시도하지 않음). 직접 확인: `xcrun swiftc -O Tools/simscreen/simscreen.swift -o /tmp/simscreen && /tmp/simscreen <udid> --once /tmp/s.jpg`. 계속 안 되면 스크린샷 방식으로 쓰고 도구 버그로 보고 |
+
 ## 상주 실행기 (`qakit serve` · `qakit do`)
 
 | 증상 | 원인 | 해결 |
