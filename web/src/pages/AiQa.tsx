@@ -44,6 +44,8 @@ export function AiQa() {
   const [scTags, setScTags] = useState("");
   const [scStart, setScStart] = useState(() => stored("qakit-ai-start", ""));
   const [readSource, setReadSource] = useState(() => stored("qakit-ai-readsrc", true));   // 시나리오 만들 때 앱 소스도 (읽기 전용)
+  const [directTouch, setDirectTouch] = useState(() => stored("qakit-ai-direct", true));   // AI QA 누르기를 직접 터치로 (tapflow 방식)
+  useEffect(() => store("qakit-ai-direct", directTouch), [directTouch]);
   useEffect(() => store("qakit-ai-readsrc", readSource), [readSource]);
   const [stepFiles, setStepFiles] = useState<string[]>([]);
   const [saved, setSaved] = useState<string[]>([]);
@@ -88,7 +90,7 @@ export function AiQa() {
   const start = async () => {
     setStarting(true); setError(null);
     try {
-      await post("/api/ai/start", { goal, engine, minutes, turns, save, mode, name: scName.trim() || null, start: scStart || null, readSource,
+      await post("/api/ai/start", { goal, engine, minutes, turns, save, mode, name: scName.trim() || null, start: scStart || null, readSource, directTouch,
         tags: scTags.split(",").map((t) => t.trim()).filter(Boolean) });
       setSaved([]); await poll();
     }
@@ -159,8 +161,12 @@ export function AiQa() {
                   <select value={turns} onChange={(e) => setTurns(Number(e.target.value))} disabled={running} className={cx(field, "mt-1 h-8 text-fg")}>
                     {[20, 40, 60, 100, 200].map((m) => <option key={m} value={m}>{m}번</option>)}
                   </select></label>
-                {!isSc && <label className="flex items-end gap-2 pb-1.5 text-[12px]"><input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} disabled={running} />
-                  확인한 경로를 시나리오로 저장</label>}
+                {!isSc && <div className="flex flex-col justify-end gap-1 pb-1 text-[12px]">
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={save} onChange={(e) => setSave(e.target.checked)} disabled={running} />
+                    확인한 경로를 시나리오로 저장</label>
+                  <label className="flex items-center gap-2" title="손가락처럼 화면에 터치 신호를 직접 넣는다 (탭 약 0.1초, 길게 누르기·끌기). 끄면 XCUITest로 (탭 1~2초)">
+                    <input type="checkbox" checked={directTouch} onChange={(e) => setDirectTouch(e.target.checked)} disabled={running} />직접 터치 (빠름 · tapflow 방식)</label>
+                </div>}
                 {isSc && <label className="flex items-end gap-2 pb-1.5 text-[12px]" title="AI가 앱 소스에서 화면 코드·흐름·ID를 확인합니다 (Read·Grep만, 고칠 수 없음)">
                   <input type="checkbox" checked={readSource} onChange={(e) => setReadSource(e.target.checked)} disabled={running} />앱 소스도 읽기 (읽기 전용)</label>}
               </div>

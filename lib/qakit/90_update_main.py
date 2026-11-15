@@ -157,6 +157,7 @@ def main():
     p.add_argument("step", nargs="+",
                    help="단계(시나리오 문법) 또는 dump · launch · ping · reset · steps(기록 보기) · save <이름>(기록으로 시나리오 초안)")
     p.add_argument("--force", action="store_true", help="save: 같은 이름의 시나리오가 있어도 덮어씀")
+    p.add_argument("--no-record", action="store_true", help="통과해도 기록하지 않음 (확인용 — AI QA 직접 터치가 씀)")
     p.add_argument("--title", help="save: 시나리오 제목 (name:)")
     p.add_argument("--tag", action="append", help="save: 태그 (여러 번)")
     p.add_argument("--start", metavar="공통단계", help="save: 맨 앞에 use: <공통단계> (예: home)")

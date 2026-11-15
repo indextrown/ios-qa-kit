@@ -337,15 +337,16 @@ def cmd_ui(args):
         d = ws.results_dir / "ai" / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         d.mkdir(parents=True, exist_ok=True)
         (d / "meta.json").write_text(json.dumps({"client": eng["name"], "goal": goal, "via": "qakit ui", "minutes": minutes,
-                                                 "mode": mode, **({"name": sc_name} if sc_name else {}),
+                                                 "mode": mode, "touch": "direct" if direct else "xcuitest", **({"name": sc_name} if sc_name else {}),
                                                  **({"fromSession": str(body["fromSession"])} if body.get("fromSession") else {}),
                                                  "turns": turns, "started": datetime.datetime.now().isoformat(timespec="seconds")},
                                                 ensure_ascii=False), encoding="utf-8")
         read_src = mode == "scenario" and body.get("readSource", True) is not False and bool(ws.app_dir)
+        direct = mode == "qa" and body.get("directTouch", True) is not False   # AI QA는 직접 터치 (tapflow 방식)
         prompt = ai_scenario_prompt(goal, minutes, sc_name, sc_tags, sc_start, source=str(ws.app_dir) if read_src else None,
                                     context=context) if mode == "scenario" \
-            else ai_prompt(goal, minutes, bool(body.get("save")))
-        cmd = ai_command(engine, ws, d, prompt, turns, read_source=read_src)
+            else ai_prompt(goal, minutes, bool(body.get("save")), direct=direct)
+        cmd = ai_command(engine, ws, d, prompt, turns, read_source=read_src, direct=direct)
         try:
             proc = subprocess.Popen(cmd, cwd=str(ws.root), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                     stderr=open(d / "agent.err", "w"), text=True, start_new_session=True)
@@ -868,7 +869,7 @@ def cmd_do(args):
     if res.get("ok"):
         if path == "/launch":
             do_log_write(ws, {"event": "launch"}, reset=True)   # 새 기록 시작
-        elif path == "/step":
+        elif path == "/step" and not getattr(args, "no_record", False):
             do_log_write(ws, {"step": text})
         if path == "/dump" and dump:
             text_out = masker(ws.secrets())(dump)
