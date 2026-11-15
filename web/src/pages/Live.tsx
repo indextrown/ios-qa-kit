@@ -243,12 +243,13 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                         : hasId(e) ? "border-sky-400/50" : "border-dashed border-amber-400/50")}
                       style={{ left: `${(e.x / scr.w) * 100}%`, top: `${(e.y / scr.h) * 100}%`, width: `${(e.w / scr.w) * 100}%`, height: `${(e.h / scr.h) * 100}%` }} />
                   ))}
-                  <RobotCursor enabled={cursor} size="h-7 w-7" />   {/* 실행기가 누르는 자리 (라이브 조작·qakit do·시나리오 실행·AI) */}
                   {cursor && pt && (   // 손가락 커서
                     <div className={cx("pointer-events-none absolute h-9 w-9 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white/90 bg-neutral-900/30 shadow-[0_0_0_1px_rgba(0,0,0,0.35)] transition-transform duration-75",
                       down && "scale-75 bg-neutral-900/50")} style={{ left: `${pt.x}%`, top: `${pt.y}%` }} />)}
                 </div>
               )}
+              {/* 실행기가 누르는 자리 (라이브 조작·qakit do·시나리오 실행·AI) — 화면 구조와 상관없이 (시나리오 실행 중엔 화면 구조를 못 읽음) */}
+              {(img || liveOn) && <RobotCursor enabled={cursor} size="h-7 w-7" />}
             </div>
           </div>
           <p className="mt-2 h-4 text-[12px] text-sub">
