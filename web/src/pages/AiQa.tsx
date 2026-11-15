@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, Play, Square, Loader2, CheckCircle2, XCircle, AlertTriangle, Wrench, MessageSquare, Info, ExternalLink } from "lucide-react";
-import { fileUrl, get, post } from "../lib/api";
+import { fileUrl, get, post, type AiSession } from "../lib/api";
+import { aiSecs, aiWhen } from "./AiSession";
 import { cx, store, stored } from "../lib/util";
 import { AiActivity } from "../components/AiActivity";
 import { Badge, Button, Card, Empty, PageHeader } from "../components/ui";
@@ -34,11 +35,16 @@ export function AiQa() {
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [now, setNow] = useState(Date.now());
+  const [past, setPast] = useState<AiSession[] | null>(null);
   const since = useRef(0);
   const started = useRef<number | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { get<Engine[]>("/api/ai/engines").then(setEngines).catch((e) => setError(String(e.message))); }, []);
+  const loadPast = useCallback(() => { get<AiSession[]>("/api/ai/sessions").then(setPast).catch(() => {}); }, []);
+  useEffect(loadPast, [loadPast]);
+  const wasRunning = useRef(false);
+  useEffect(() => { if (wasRunning.current && !job?.running) loadPast(); wasRunning.current = !!job?.running; }, [job?.running, loadPast]);
   useEffect(() => { store("qakit-ai-goal", goal); store("qakit-ai-engine", engine); store("qakit-ai-minutes", minutes); store("qakit-ai-turns", turns); store("qakit-ai-save", save); },
     [goal, engine, minutes, turns, save]);
 
@@ -142,10 +148,28 @@ export function AiQa() {
 
           {job?.result?.text && (
             <Card title={<span className="flex items-center gap-1.5">{job.result.error ? <XCircle className="h-3.5 w-3.5 text-bad" /> : <CheckCircle2 className="h-3.5 w-3.5 text-ok" />}보고서</span>}
-              actions={job.dir && <a href={fileUrl(job.dir, "report.md")} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-[11px] text-link hover:underline">results/{job.dir}/report.md<ExternalLink className="h-3 w-3" /></a>}>
+              actions={job.dir && <span className="flex items-center gap-3 text-[11px]">
+                <a href={`#/${job.dir}`} className="text-link hover:underline">상세 · 시나리오로 저장</a>
+                <a href={fileUrl(job.dir, "report.md")} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-link hover:underline">report.md<ExternalLink className="h-3 w-3" /></a></span>}>
               <pre className="whitespace-pre-wrap p-4 font-sans text-[13px] leading-relaxed">{job.result.text}</pre>
             </Card>
           )}
+          <Card title="지난 AI QA" actions={<span className="text-[11px] text-sub">results/ai/</span>}>
+            {past == null ? <Empty>불러오는 중…</Empty> : past.length === 0 ? <Empty>아직 없습니다 (터미널의 Claude Code·Codex가 qakit mcp로 한 것도 여기에 쌓입니다)</Empty> : (
+              <div className="divide-y divide-line">
+                {past.map((s) => (
+                  <a key={s.name} href={`#/${s.dir}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-muted/50">
+                    <span className="w-24 shrink-0 font-mono text-[11px] text-sub">{aiWhen(s.started)}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-[13px]">{s.goal ?? "(터미널에서 연결)"}</span>
+                      <span className="text-[11px] text-sub">{s.client ?? "AI"} · 도구 {s.calls}번{s.seconds != null ? ` · ${aiSecs(s.seconds)}` : ""}{s.saved.length ? ` · 시나리오 ${s.saved.length}개 저장` : ""}</span>
+                    </span>
+                    {s.issues > 0 ? <Badge tone="bad">문제 {s.issues}</Badge> : s.report ? <Badge>문제 없음</Badge> : <Badge>보고서 없음</Badge>}
+                  </a>
+                ))}
+              </div>
+            )}
+          </Card>
         </div>
 
         <div className="space-y-4">

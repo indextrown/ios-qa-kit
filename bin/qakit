@@ -4097,10 +4097,10 @@ def do_steps(ws):
 SCENARIO_NAME_RE = re.compile(r"[A-Za-z0-9가-힣_.-]+")
 
 
-def build_scenario_text(ws, name, title=None, description=None, tags=None, start=None):
-    """qakit do 기록 → 시나리오 글. 탭 바로 다음 기다림은 탭의 expect로 합친다.
+def build_scenario_text(ws, name, title=None, description=None, tags=None, start=None, recorded=None):
+    """qakit do 기록(또는 recorded=(단계 목록, launch부터인지) — AI 세션) → 시나리오 글. 탭 바로 다음 기다림은 탭의 expect로 합친다.
     (글, 합친 수, 단계 수, launch부터인지). 기록이 없으면 ValueError."""
-    steps, from_launch = do_log_read(ws)
+    steps, from_launch = recorded if recorded is not None else do_log_read(ws)
     if not steps:
         raise ValueError("기록된 단계가 없습니다 (앱을 다시 켠 뒤 통과한 단계만 기록됩니다)")
     parsed = []
@@ -4134,7 +4134,7 @@ def build_scenario_text(ws, name, title=None, description=None, tags=None, start
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     head = [f"name: {flow_text(title) if title else name}"]
     head += [f"# {line}" for line in (description or "").splitlines() if line.strip()] or [
-        f"# (qakit do 기록에서 만든 초안, {stamp}) 무엇을 확인하는지 1~2줄로 바꿔 쓰고, 판정(expect)을 더한다."]
+        f"# ({'AI QA 세션에서 통과한 단계로' if recorded is not None else 'qakit do 기록에서'} 만든 초안, {stamp}) 무엇을 확인하는지 1~2줄로 바꿔 쓰고, 판정(expect)을 더한다."]
     if tags:
         head.append("tags: [" + ", ".join(flow_text(t) for t in tags) + "]")
     return "\n".join(head + ["steps:"] + body) + "\n", merged, len(steps) + (1 if start else 0) - merged, from_launch
@@ -4717,6 +4717,62 @@ def ai_events(engine, obj):
     return ev, res
 
 
+AI_STEP_TOOLS = ("tap", "type_text", "swipe", "wait_for", "expect", "step")
+
+
+def ai_session_info(ws, d, full=False):
+    """results/ai/<시각>/ → 요약 (목록용) 또는 전체 (상세: 보고서·기록·문제·에이전트 사건·제안 단계)."""
+    meta, rows, issues = {}, [], []
+    with contextlib.suppress(OSError, ValueError):
+        meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+    with contextlib.suppress(OSError):
+        for line in (d / "log.jsonl").read_text(encoding="utf-8").splitlines():
+            with contextlib.suppress(ValueError):
+                rows.append(json.loads(line))
+    with contextlib.suppress(OSError):
+        for line in (d / "issues.jsonl").read_text(encoding="utf-8").splitlines():
+            with contextlib.suppress(ValueError):
+                issues.append(json.loads(line))
+    # 제안 단계: 마지막으로 성공한 launch 이후 통과한 조작 (도구 결과 첫 줄 "단계: <글>")
+    steps, from_launch, saved = [], False, []
+    for r in rows:
+        if not r.get("ok"):
+            continue
+        if r.get("tool") == "launch":
+            steps, from_launch = [], True
+        elif r.get("tool") in AI_STEP_TOOLS and str(r.get("summary", "")).startswith("단계: "):
+            steps.append(r["summary"].split("\n")[0][len("단계: "):])
+        elif r.get("tool") == "save_scenario":
+            saved.append((r.get("args") or {}).get("name"))
+    report = (d / "report.md").read_text(encoding="utf-8") if (d / "report.md").exists() else None
+    started = meta.get("started") or (rows[0]["at"] if rows else None)
+    ended = meta.get("ended") or (rows[-1]["at"] if rows else None)
+    seconds = None
+    with contextlib.suppress(TypeError, ValueError):
+        seconds = round((datetime.datetime.fromisoformat(ended) - datetime.datetime.fromisoformat(started)).total_seconds())
+    info_ = {"dir": results_rel(ws, d), "name": d.name, "goal": meta.get("goal"), "client": meta.get("client"),
+             "via": meta.get("via") or "MCP", "started": started, "ended": ended, "seconds": seconds,
+             "cost": meta.get("cost"), "turns": meta.get("turns_used"), "code": meta.get("code"), "calls": len(rows),
+             "failed": sum(1 for r in rows if not r.get("ok")), "issues": len(issues), "report": report is not None,
+             "steps": len(steps), "saved": [x for x in saved if x]}
+    if not full:
+        return info_
+    events = []
+    engine = "codex" if "codex" in str(meta.get("client") or "").lower() else "claude"
+    with contextlib.suppress(OSError):
+        for line in (d / "agent.jsonl").read_text(encoding="utf-8").splitlines():
+            with contextlib.suppress(ValueError):
+                events += ai_events(engine, json.loads(line))[0]
+    return dict(info_, report=report, rows=rows, issueList=issues, events=events, stepList=steps, fromLaunch=from_launch)
+
+
+def ai_sessions(ws):
+    root = ws.results_dir / "ai"
+    if not root.is_dir():
+        return []
+    return [ai_session_info(ws, d) for d in sorted((x for x in root.iterdir() if x.is_dir()), reverse=True)]
+
+
 def cmd_mcp(args):
     if args.action == "install":
         return mcp_install(find_workspace(args.workspace), args)
@@ -4921,10 +4977,17 @@ def cmd_ui(args):
         if start and not (ws.root / "steps" / f"{start}.qa.yml").exists():
             return None, f"공통 단계가 없습니다: steps/{start}.qa.yml"
         tags = [t.strip() for t in body.get("tags") or [] if re.fullmatch(r"[A-Za-z0-9가-힣_-]+", t.strip())]
+        recorded = None
+        if body.get("aiSession"):   # AI QA 세션에서 통과한 단계로 (A4)
+            d = ui_safe_dir(ws, str(body["aiSession"]))
+            if not d or d.parent != (ws.results_dir / "ai").resolve():
+                return None, "AI 세션을 찾지 못함"
+            full = ai_session_info(ws, d, full=True)
+            recorded = (full["stepList"], full["fromLaunch"])
         try:
             text, merged, nsteps, from_launch = build_scenario_text(
                 ws, name, title=(body.get("title") or "").strip() or None,
-                description=body.get("description") or None, tags=tags, start=start)
+                description=body.get("description") or None, tags=tags, start=start, recorded=recorded)
         except ValueError as e:
             return None, str(e)
         f = draft_path(name)
@@ -5407,6 +5470,13 @@ def cmd_ui(args):
                         except ValueError:
                             pass
                     return self.send(200, {"offset": since + end, "taps": taps[-20:]})
+                if path == "/api/ai/sessions":
+                    return self.send(200, ai_sessions(ws))
+                if path == "/api/ai/session":
+                    d = ui_safe_dir(ws, q.get("dir"))
+                    if not d or d.parent != (ws.results_dir / "ai").resolve():
+                        return self.send(404, {"error": "AI 세션 없음"})
+                    return self.send(200, ai_session_info(ws, d, full=True))
                 if path == "/api/ai/engines":
                     return self.send(200, ai_engines())
                 if path == "/api/ai/job":
