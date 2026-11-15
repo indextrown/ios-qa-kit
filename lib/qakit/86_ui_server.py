@@ -517,6 +517,28 @@ def cmd_ui(args):
             if path == "/api/draft/publish":
                 res, err = publish_draft(body)
                 return self.send(409 if err else 200, {"error": err} if err else res)
+            if path == "/api/worktree/update":   # 기준 브랜치의 새 커밋을 QA 브랜치로 병합 (push 안 함)
+                if (job["proc"] and job["proc"].poll() is None) or (aij["proc"] and aij["proc"].poll() is None):
+                    return self.send(409, {"error": "시나리오 실행·AI QA가 끝난 뒤에 최신화하세요"})
+                base = str(body.get("base") or "").strip()
+                if base and not re.fullmatch(r"[A-Za-z0-9._/#*\-]+", base):
+                    return self.send(400, {"error": "브랜치 이름이 이상합니다"})
+                r = subprocess.run([sys.executable, str(KIT_DIR / "bin" / "qakit"), "-w", str(ws.root), "worktree-update",
+                                    *(["--from", base] if base else [])], capture_output=True, text=True, timeout=180)
+                out = re.sub(r"\x1b\[[0-9;]*m", "", (r.stdout or "") + (r.stderr or "")).strip()
+                return self.send(200, {"ok": r.returncode == 0, "output": masker(ws.secrets())(out),
+                                       "status": worktree_info(Workspace(ws.root))})
+            if path == "/api/worktree/config":   # qakit.yml worktree.base·update
+                base = body.get("base")
+                mode = body.get("mode")
+                if base is not None and not re.fullmatch(r"[A-Za-z0-9._/#*\-]+", str(base)):
+                    return self.send(400, {"error": "브랜치 이름이 이상합니다"})
+                if mode is not None and mode not in ("auto", "warn", "off"):
+                    return self.send(400, {"error": "update는 auto·warn·off"})
+                set_worktree_config(ws, base=base, mode=mode)
+                fresh = Workspace(ws.root)
+                ws.worktree_base, ws.worktree_update = fresh.worktree_base, fresh.worktree_update
+                return self.send(200, worktree_info(ws))
             if path in ("/api/ai/start", "/api/ai/stop"):
                 res, err = ai_start(body) if path.endswith("start") else ai_stop()
                 return self.send(409 if err else 200, {"error": err} if err else res)
@@ -625,6 +647,8 @@ def cmd_ui(args):
                         except ValueError:
                             pass
                     return self.send(200, {"offset": since + end, "taps": taps[-20:]})
+                if path == "/api/worktree":
+                    return self.send(200, worktree_info(ws, fetch=bool(q.get("fetch"))))
                 if path == "/api/coverage":
                     return self.send(200, coverage(ws))
                 if path == "/api/ai/sessions":

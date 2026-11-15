@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { ChartPie, Bot, History, ListChecks, MonitorSmartphone, Smartphone, GitBranch, Loader2, FileCode2 } from "lucide-react";
 import { cx } from "../lib/util";
 import type { Info } from "../lib/api";
+import { WorktreePanel } from "./WorktreePanel";
 
 const NAV = [
   { id: "live", href: "#/live", label: "라이브 세션", icon: MonitorSmartphone },
@@ -38,10 +39,10 @@ export function Layout({ active, info, running, children }: { active: string; in
         </nav>
         <div className="space-y-1.5 border-t border-line p-3 text-[11px] text-sub">
           <div className="flex items-center gap-1.5"><MonitorSmartphone className="h-3.5 w-3.5" />{info?.device ? `실기기 ${info.device}` : info?.simulator ?? "…"}</div>
-          {info?.app?.branch && (
+          <WorktreePanel fallback={info?.app?.branch && (
             <div className="flex items-center gap-1.5 font-mono"><GitBranch className="h-3.5 w-3.5" />{info.app.branch}@{info.app.commit}
               {info.app.dirtyFiles ? <span className="text-warn">±{info.app.dirtyFiles}</span> : null}</div>
-          )}
+          )} />
           <div className="font-mono">qakit {info?.kit ?? ""}</div>
         </div>
       </aside>

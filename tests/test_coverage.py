@@ -32,3 +32,26 @@ class Coverage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WorktreeConfig(unittest.TestCase):
+    def test_set_keeps_comments(self):
+        tmp, root = make_workspace()
+        with tmp:
+            p = root / "qakit.yml"
+            p.write_text(p.read_text() + "\n# 따라갈 브랜치\nworktree:\n  base: main        # 이 저장소엔 develop이 없음\n\nprecheck: precheck\n", encoding="utf-8")
+            ws = q.Workspace(root)
+            q.set_worktree_config(ws, base="develop", mode="warn")
+            text = p.read_text(encoding="utf-8")
+            self.assertIn("  base: develop        # 이 저장소엔 develop이 없음", text)   # 주석 그대로
+            self.assertIn("  update: warn", text)
+            self.assertIn("precheck: precheck", text)
+            w2 = q.Workspace(root)
+            self.assertEqual((w2.worktree_base, w2.worktree_update), ("develop", "warn"))
+
+    def test_adds_block_when_missing(self):
+        tmp, root = make_workspace()
+        with tmp:
+            ws = q.Workspace(root)
+            q.set_worktree_config(ws, base="release/*")
+            self.assertEqual(q.Workspace(root).worktree_base, "release/*")
