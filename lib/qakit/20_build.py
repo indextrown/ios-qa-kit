@@ -39,24 +39,101 @@ def ensure_swiftui_ids():
     return SWIFTUI_IDS_BIN
 
 
-SIMSCREEN_SRC = KIT_DIR / "Tools" / "simscreen" / "simscreen.swift"
-SIMSCREEN_BIN = KIT_DIR / "Tools" / "simscreen" / ".build" / "simscreen"
+def ensure_swift_tool(name):
+    """Tools/<name>/<name>.swift 한 파일짜리 도구를 소스가 바뀌었을 때만 swiftc로 빌드 (몇 초). 안 되면 None."""
+    src = KIT_DIR / "Tools" / name / f"{name}.swift"
+    out = KIT_DIR / "Tools" / name / ".build" / name
+    if not src.exists():
+        return None
+    digest = hashlib.sha1(src.read_bytes()).hexdigest()
+    stamp = out.with_suffix(".stamp")
+    if not out.exists() or not stamp.exists() or stamp.read_text().strip() != digest:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        r = run(["xcrun", "swiftc", "-O", str(src), "-o", str(out)], check=False)
+        if r.returncode != 0 or not out.exists():
+            return None
+        stamp.write_text(digest)
+    return out
 
 
 def ensure_simscreen():
-    """시뮬레이터 화면을 바로 읽는 도구(qakit ui 실시간 화면). 소스가 바뀌었을 때만 swiftc로 빌드 (몇 초).
-    빌드가 안 되면 None — UI는 스크린샷 방식으로 돌아간다."""
-    if not SIMSCREEN_SRC.exists():
-        return None
-    digest = hashlib.sha1(SIMSCREEN_SRC.read_bytes()).hexdigest()
-    stamp = SIMSCREEN_BIN.with_suffix(".stamp")
-    if not SIMSCREEN_BIN.exists() or not stamp.exists() or stamp.read_text().strip() != digest:
-        SIMSCREEN_BIN.parent.mkdir(parents=True, exist_ok=True)
-        r = run(["xcrun", "swiftc", "-O", str(SIMSCREEN_SRC), "-o", str(SIMSCREEN_BIN)], check=False)
-        if r.returncode != 0 or not SIMSCREEN_BIN.exists():
+    """시뮬레이터 화면을 바로 읽는 도구(qakit ui 실시간 화면). 빌드가 안 되면 None — UI는 스크린샷 방식으로 돌아간다."""
+    return ensure_swift_tool("simscreen")
+
+
+class TouchHelper:
+    """시뮬레이터에 터치 신호를 직접 넣는 도우미(simtouch)를 계속 띄워 두고 한 줄 명령을 보낸다 (AI QA 직접 터치).
+    좌표는 화면 대비 0~1. XCUITest가 켠 앱은 이 신호를 무시하므로, 앱은 simctl로 켜고 실행기는 붙기만 해야 한다."""
+
+    def __init__(self, udid, tool=None, ready_timeout=15):
+        self.udid, self.tool, self.ready_timeout = udid, tool, ready_timeout
+        self.proc = None
+        self.mode = None
+        self.lock = threading.Lock()
+        self.lines = queue.Queue()
+
+    def start(self):
+        """→ None 또는 띄우지 못한 이유"""
+        if self.proc and self.proc.poll() is None:
             return None
-        stamp.write_text(digest)
-    return SIMSCREEN_BIN
+        tool = self.tool or ensure_swift_tool("simtouch")
+        if not tool:
+            return "터치 도우미(simtouch)를 빌드하지 못함"
+        self.proc = subprocess.Popen([str(tool), self.udid], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True, bufsize=1)
+        self.lines = queue.Queue()
+        threading.Thread(target=self._read, args=(self.proc, self.lines), daemon=True).start()
+        try:
+            first = self.lines.get(timeout=self.ready_timeout)
+        except queue.Empty:
+            first = None
+        if not first or not first.startswith("ready"):
+            err = (self.proc.stderr.read() if self.proc.poll() is not None else "") or ""
+            self.stop()
+            return (err.strip().splitlines() or [first or f"{self.ready_timeout}초 안에 준비되지 않음"])[-1]
+        self.mode = first.split()[-1]
+        return None
+
+    @staticmethod
+    def _read(proc, lines):
+        for line in proc.stdout:
+            lines.put(line.strip())
+        lines.put(None)   # 끝남
+
+    def send(self, cmd, timeout=None):
+        """명령 한 줄 → (성공, 답). 도우미가 죽어 있으면 한 번 다시 띄운다."""
+        with self.lock:
+            for attempt in (1, 2):
+                why = self.start()
+                if why:
+                    return False, why
+                try:
+                    self.proc.stdin.write(cmd.strip() + "\n")
+                    self.proc.stdin.flush()
+                    line = self.lines.get(timeout=timeout or 30)
+                except (BrokenPipeError, OSError, queue.Empty) as e:
+                    line = None
+                    why = f"{type(e).__name__}"
+                if line is None:   # 죽음 → 다시
+                    self.stop()
+                    if attempt == 2:
+                        return False, why or "터치 도우미가 끝남"
+                    continue
+                return line.startswith("ok"), line
+        return False, "?"
+
+    def tap(self, x, y, hold_ms=60):
+        return self.send(f"tap {x:.4f} {y:.4f} {hold_ms}")
+
+    def stop(self):
+        if self.proc and self.proc.poll() is None:
+            with contextlib.suppress(OSError):
+                self.proc.stdin.close()
+            try:
+                self.proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.proc = None
 
 
 def swiftui_sources(ws):

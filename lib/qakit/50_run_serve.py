@@ -278,6 +278,7 @@ def serve_start(ws, udid, idle=1800, launch=True):
     runner = json.loads(ready_file.read_text())
     st = {"udid": udid, "pid": proc.pid, "port": runner["port"], "token": runner["token"],
           "workspace": str(ws.root), "bundleId": ws.bundle_id, "runnerHash": scenario_runner_source_hash(),
+          "attachOnly": not launch,   # 앱을 켜지 않고 붙기만 (직접 터치가 먹히는 상태)
           "started": datetime.datetime.now().isoformat(timespec="seconds"), "log": str(log)}
     st.update(transport)
     serve_state_file(udid).write_text(json.dumps(st, ensure_ascii=False, indent=2))
@@ -510,6 +511,29 @@ def _known_ids(ws):
     ids = sorted(gen_ids.all_ids(trees))
     save_state(ws, "ids-check", {"key": key, "ids": ids})
     return set(ids)
+
+
+def cmd_touch(args):
+    """qakit touch tap x y — 직접 터치 확인용. XCUITest가 켠 앱은 무시하므로, 상주 실행기가 앱을 켰다면 알려 준다."""
+    ws = find_workspace(args.workspace)
+    if ws.device:
+        fail("직접 터치는 시뮬레이터만")
+    udid = ensure_booted(ws)
+    st = serve_load(udid)
+    if st and serve_alive(st) and not st.get("attachOnly"):
+        warn("상주 실행기가 앱을 켜 두었습니다 — XCUITest가 켠 앱은 직접 터치를 무시합니다 "
+             "(qakit serve --stop 뒤 시뮬레이터에서 앱을 다시 켜거나, serve --no-launch)")
+    helper = TouchHelper(udid)
+    started = time.time()
+    why = helper.start()
+    if why:
+        fail(f"터치 도우미를 띄우지 못함: {why}", "Xcode가 바뀌었으면 비공개 API가 달라졌을 수 있습니다 (docs/PLAN.md 'AI QA 직접 터치')")
+    ready = time.time() - started
+    good, line = helper.send(" ".join(args.action))
+    helper.stop()
+    (ok if good else warn)(f"{line} · 도우미 준비 {ready:.1f}초 ({helper.mode})")
+    if not good:
+        sys.exit(1)
 
 
 def coverage(ws):

@@ -19,6 +19,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import queue
 import threading
 import time
 import xml.etree.ElementTree as ET
