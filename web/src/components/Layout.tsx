@@ -1,10 +1,11 @@
 import type { ReactNode } from "react";
-import { History, ListChecks, MonitorSmartphone, Smartphone, GitBranch, Loader2, FileCode2 } from "lucide-react";
+import { Bot, History, ListChecks, MonitorSmartphone, Smartphone, GitBranch, Loader2, FileCode2 } from "lucide-react";
 import { cx } from "../lib/util";
 import type { Info } from "../lib/api";
 
 const NAV = [
   { id: "live", href: "#/live", label: "라이브 세션", icon: MonitorSmartphone },
+  { id: "ai", href: "#/ai", label: "AI QA", icon: Bot },
   { id: "scenarios", href: "#/scenarios", label: "시나리오", icon: ListChecks },
   { id: "edit", href: "#/edit", label: "편집", icon: FileCode2 },
   { id: "runs", href: "#/runs", label: "실행 기록", icon: History },

@@ -549,7 +549,7 @@ tapflow 대시보드처럼 보이게: 왼쪽 사이드바(실행 기록·시나�
 
 ## AI QA 설계 (다음 단계)
 
-> 상태: A1 ✅ A2 ✅ (2026-11-15). 다음 A3 UI에서 시작.
+> 상태: A1 ✅ A2 ✅ A3 ✅ (2026-11-15). 다음 A4 결과 모아 보기.
 
 ### 왜
 
@@ -603,6 +603,20 @@ qakit은 OAuth를 직접 하지 않는다. 사용자가 로그인해 둔 공식 
 | 문제 보고 | "보고한 문제 1" 심각도·사진·issues.md 링크 |
 | MCP 종료 | "연결됨" → "끝남", 잠금 풀림, 상자 0 → 59 (다시 읽음) |
 
+### A3 결과 (2026-11-15)
+
+- **AI QA 메뉴**: 목표, AI(설치·로그인 감지 — `claude auth status`, `codex login status`), 시간 한도(3~30분), 횟수 한도(AI 응답 20~200번), "확인한 경로를 시나리오로 저장", 시작/멈춤. 진행(AI가 하는 말·도구·이유), 보고서, 사용량, 작은 실시간 화면, AI 활동.
+- **실행**: `claude -p <목표+규칙> --output-format stream-json --verbose --strict-mcp-config --mcp-config <세션>/mcp.json --tools "" --allowedTools mcp__qakit --permission-mode dontAsk --max-turns N --no-session-persistence` — 기본 도구(셸·파일)를 끄고 qakit 도구만, 묻지 않고 거절. MCP 서버에 `QAKIT_AI_DIR`를 넘겨 에이전트 출력(`agent.jsonl`)과 도구 기록(`log.jsonl`)이 한 폴더에. 시간 한도·멈춤은 프로세스 그룹째 끝냄 (MCP 서버까지).
+- **Codex**: `codex exec --json -s read-only -c mcp_servers.qakit…` 어댑터를 넣었지만 이 Mac에 없어 **시험하지 못함** (UI에 표시).
+- AI QA 중에는 UI의 손 조작·시나리오 실행을 서버에서도 거절.
+
+| 확인 (시범 앱, 실제 Claude Code 2.1.325, claude.ai 로그인) | 결과 |
+|---|---|
+| 목표 "검색 화면 열림·빈 검색어 안내·홈 복귀" (3분·20번) | 48초, 응답 8번, $0.15 상당. qakit connected (도구 15개) |
+| AI가 쓴 도구 | 지침 → launch → screen → tap+missing → screen → expect(안내 문구·최근 검색어) → 뒤로 tap+visible. 모두 why |
+| 보고서 | 확인한 것 4, 문제 없음, 확인하지 못한 것과 이유("최근 검색어를 지우는 건 사용자 데이터라 안 함"), 남길 만한 단계 4 |
+| UI | 진행·생각하는 중·경과/한도, 실시간 화면, AI 활동 (화면 없는 Chrome) |
+
 ### qakit만의 점
 
 AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌표 탭 없음). 그래서 AI가 한 번 확인한 경로가 그대로 `.qa.yml`이 되고, 이후 AI 없이 돈다.
@@ -632,7 +646,7 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 | 7. SwiftUI | QA 빌드 직전 소스에 ID 삽입 ([설계](#swiftui-지원-설계-다음-단계)) | S1 ✅ S2 ✅ S3 ✅ (시범 앱 로그인 화면 100%, `build-app`이 삽입·복원 자동). 다음 S4 둘째 앱 |
 | 8. 상주 실행기 | 실행기를 한 번 띄워 두고 명령만 주고받기 ([설계](#상주-실행기-설계-다음-단계)) | R1 ✅ R2 ✅ R3 ✅ (`qakit do` 1~2초, `qakit run` 약 8초 단축). R4 ✅ R5 ✅ (실기기 USB·Wi-Fi) |
 | 9. UI | `qakit ui` ([설계](#ui-설계-다음-단계)) | U1~U5 ✅, 실시간 화면·커서·캡처 ✅ |
-| 10. AI QA | AI가 MCP로 앱을 직접 QA ([설계](#ai-qa-설계-다음-단계)) | A1 ✅ (`qakit mcp`, 실제 Claude Code에서 확인) · A2 ✅ (라이브 세션 AI 활동). 다음 A3 |
+| 10. AI QA | AI가 MCP로 앱을 직접 QA ([설계](#ai-qa-설계-다음-단계)) | A1 ✅ (`qakit mcp`, 실제 Claude Code에서 확인) · A2 ✅ (라이브 세션 AI 활동) · A3 ✅ (UI에서 AI QA 시작, 실제 Claude Code로 끝까지). 다음 A4 |
 
 ## 주요 결정과 배운 것
 
