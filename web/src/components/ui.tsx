@@ -64,10 +64,10 @@ export function StatusBadge({ result }: { result: Result }) {
   );
 }
 
-export function Badge({ children, tone = "muted", className }: { children: ReactNode; tone?: "muted" | "warn" | "mono"; className?: string }) {
+export function Badge({ children, tone = "muted", className }: { children: ReactNode; tone?: "muted" | "warn" | "bad" | "mono"; className?: string }) {
   return (
     <span className={cx("inline-flex items-center rounded px-1.5 py-0.5 text-[11px]",
-      tone === "warn" ? "bg-warn/15 text-warn font-medium" : "bg-muted text-sub", tone === "mono" && "font-mono", className)}>
+      tone === "warn" ? "bg-warn/15 text-warn font-medium" : tone === "bad" ? "bg-bad/10 text-bad font-medium" : "bg-muted text-sub", tone === "mono" && "font-mono", className)}>
       {children}
     </span>
   );

@@ -3,6 +3,7 @@ import { Eye, EyeOff, Hand, Camera, Circle, Square as StopIcon, Keyboard, Radio,
 import { fileUrl, get, post, screenUrl, type DoResult, type El, type Elements, type Job } from "../lib/api";
 import { SaveScenario } from "../components/SaveScenario";
 import { RunScenario } from "../components/RunScenario";
+import { AiActivity } from "../components/AiActivity";
 import { cx, store, stored } from "../lib/util";
 import { Badge, Button, Card, Empty, Mono, PageHeader } from "../components/ui";
 
@@ -28,7 +29,10 @@ function selectorFor(e: El, all: El[]) {
 }
 
 export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => void }) {
-  const busy = !!job?.running;
+  const [ai, setAi] = useState<{ busy: boolean; client?: string | null; active?: boolean }>({ busy: false });
+  const onAiBusy = useCallback((b: boolean, client?: string | null, active?: boolean) =>
+    setAi((p) => (p.busy === b && p.client === client && p.active === active ? p : { busy: b, client, active })), []);
+  const busy = !!job?.running || ai.busy;   // 시나리오 실행 중이거나 AI가 조작 중이면 손 조작을 잠근다
   const [img, setImg] = useState<string | null>(null);
   const [shotError, setShotError] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(() => stored("qakit-live", true));
@@ -109,11 +113,17 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   }, []);
   const loadSteps = useCallback(() => { get<{ steps: string[]; fromLaunch: boolean }>("/api/do-steps").then(setSteps).catch(() => {}); }, []);
   useEffect(() => { loadEls(); loadSteps(); }, [loadEls, loadSteps]);
+  const wasAi = useRef(false);
+  useEffect(() => {   // AI 세션이 끝나면 화면 구조·기록을 한 번 다시 읽는다 (세션 중에는 상자를 숨김)
+    if (wasAi.current && !ai.active) { loadEls(); loadSteps(); }
+    wasAi.current = !!ai.active;
+  }, [ai.active, loadEls, loadSteps]);
   const wasBusy = useRef(false);
-  useEffect(() => {   // 재생(시나리오 실행)이 끝나면 화면 구조·기록을 다시 읽는다
-    if (wasBusy.current && !busy) { loadEls(); loadSteps(); }
-    wasBusy.current = busy;
-  }, [busy, loadEls, loadSteps]);
+  const jobBusy = !!job?.running;
+  useEffect(() => {   // 재생(시나리오 실행)이 끝나면 화면 구조·기록을 다시 읽는다. AI 조작 사이에는 읽지 않음 (실행기를 같이 쓰면 AI 조작이 늦어짐)
+    if (wasBusy.current && !jobBusy) { loadEls(); loadSteps(); }
+    wasBusy.current = jobBusy;
+  }, [jobBusy, loadEls, loadSteps]);
 
   // 실행기가 누른 자리(.qakit/taps.jsonl) — 라이브 세션 조작·qakit do·시나리오 실행 모두. 차례로 커서를 옮겨 누른다
   const queue = useRef<Touch[]>([]);
@@ -219,7 +229,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   return (
     <>
       <PageHeader title="라이브 세션" description="화면을 눌러 요소를 고르고 실행합니다 ('누르면 탭'을 켜면 바로 탭) (qakit do — ID 우선, 없으면 라벨). 통과한 단계는 기록됩니다."
-        actions={busy && <Badge tone="warn">시나리오 실행 중 — 조작 잠김</Badge>} />
+        actions={ai.busy ? <Badge tone="warn">AI({ai.client ?? "MCP"}) 조작 중 — 조작 잠김</Badge> : busy && <Badge tone="warn">시나리오 실행 중 — 조작 잠김</Badge>} />
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex flex-col items-center">
           <div className="mb-3 flex flex-wrap items-center gap-1 rounded-lg bg-card p-1 shadow-e1">
@@ -264,7 +274,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                     setSel(h);
                     if (clickTap && !working && els) doStep(`tap: ${selectorFor(h, els.elements)}`);
                   }}>
-                  {(els?.elements ?? []).filter((e) => boxes || e === sel || e === hover).map((e, i) => (
+                  {(ai.active ? [] : els?.elements ?? []).filter((e) => boxes || e === sel || e === hover).map((e, i) => (
                     <div key={i} className={cx("pointer-events-none absolute rounded-[3px] border",
                       e === sel ? "border-2 border-rose-500 bg-rose-500/15" : e === hover ? "border-sky-400 bg-sky-400/15"
                         : hasId(e) ? "border-sky-400/50" : "border-dashed border-amber-400/50")}
@@ -295,6 +305,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
         </div>
 
         <div className="space-y-4">
+          <AiActivity onBusy={onAiBusy} />
           <RunScenario job={job} refreshJob={refreshJob} />
           <Card title="고른 요소">
             {!sel ? <Empty>화면을 눌러 요소를 고르세요</Empty> : (

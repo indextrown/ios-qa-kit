@@ -4333,7 +4333,7 @@ MCP_INSTRUCTIONS = """qakit: iOS 시뮬레이터의 앱을 ID·라벨로 조작�
 - 대상(target)은 screen에 나온 #ID를 우선 쓴다. ID가 없으면 { type, label } (줄바꿈 라벨은 contains). 좌표 탭은 없다.
 - 비밀번호 등은 {secret:키} (작업공간 secrets.txt의 키)로만 친다. 실제 값을 묻거나 출력하지 않는다.
 - 문제는 같은 단계로 한 번 더 재현한 뒤 report_issue로 남긴다. 확인된 경로는 save_scenario로 시나리오로 남긴다 (재생해서 통과해야 남음).
-- 사람은 `qakit ui` 라이브 세션에서 실시간 화면과 커서로 지켜볼 수 있다."""
+- 조작 도구에는 why(왜 하는지 한 줄)를 같이 준다 — 사람이 `qakit ui` 라이브 세션에서 실시간 화면·커서·활동 기록으로 지켜본다."""
 
 MCP_GUIDE = """# qakit으로 앱 QA하기
 
@@ -4393,10 +4393,17 @@ MCP_CONDITION = {"type": "object", "description": "조건: { visible: 대상 } �
                                                   "tap의 expect에서 visible은 '보이고 누를 수 있음', missing·hidden은 '누를 수 없음'(위에 다른 화면이 덮음 포함)"}
 
 
+MCP_WHY = {"type": "string", "description": "왜 하는지 한 줄 (사람이 qakit ui에서 지켜볼 때 보임). 예) 빈 검색어로 검색해 안내 문구 확인"}
+MCP_ACTIONS = ("launch", "tap", "type_text", "swipe", "wait_for", "expect", "step", "run_scenario", "save_scenario")
+
+
 def mcp_tools():
     def tool(name, desc, props=None, required=()):
+        props = dict(props or {})
+        if name in MCP_ACTIONS:
+            props["why"] = MCP_WHY
         return {"name": name, "description": desc,
-                "inputSchema": {"type": "object", "properties": props or {}, "required": list(required)}}
+                "inputSchema": {"type": "object", "properties": props, "required": list(required)}}
     return [
         tool("get_testing_guide", "QA할 때 확인할 항목·여기서 못 하는 것·거짓 버그 피하기·보고 형식. 테스트 전에 한 번 읽는다."),
         tool("launch", "앱을 종료하고 새로 켠다. 기록(recorded_steps)도 여기서부터 새로 시작한다."),
@@ -4444,6 +4451,7 @@ class McpSession:
         self.ws = ws
         self.mask = masker(ws.secrets())
         self.dir = None
+        self.client = None
         self.issues = 0
         self.udid = None if ws.device else simulator_udid(ws.simulator)[0]
 
@@ -4451,11 +4459,23 @@ class McpSession:
         if not self.dir:
             self.dir = ws_dir = self.ws.results_dir / "ai" / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             ws_dir.mkdir(parents=True, exist_ok=True)
+            (ws_dir / "meta.json").write_text(json.dumps({
+                "client": self.client, "started": datetime.datetime.now().isoformat(timespec="seconds"),
+                "pid": os.getpid(), "kit": kit_version()}, ensure_ascii=False), encoding="utf-8")
         return self.dir
 
-    def log(self, tool, args, ok_, seconds, summary):
+    def now(self, tool=None, args=None):
+        """지금 하는 일 (qakit ui가 'AI 조작 중'으로 보여 줌). tool=None이면 끝."""
+        f = self.session_dir() / "now.json"
+        if tool is None:
+            f.unlink(missing_ok=True)
+            return
+        f.write_text(self.mask(json.dumps({"tool": tool, "args": args, "started": time.time(), "pid": os.getpid()},
+                                          ensure_ascii=False)), encoding="utf-8")
+
+    def log(self, tool, args, ok_, seconds, summary, why=None):
         row = {"at": datetime.datetime.now().isoformat(timespec="seconds"), "tool": tool, "args": args, "ok": ok_,
-               "seconds": round(seconds, 1), "summary": summary[:300]}
+               "seconds": round(seconds, 1), "summary": summary[:300], **({"why": why[:200]} if why else {})}
         with open(self.session_dir() / "log.jsonl", "a", encoding="utf-8") as f:
             f.write(self.mask(json.dumps(row, ensure_ascii=False)) + "\n")
 
@@ -4627,6 +4647,7 @@ def cmd_mcp(args):
         try:
             if method == "initialize":
                 want = params.get("protocolVersion")
+                session.client = (params.get("clientInfo") or {}).get("name")
                 result = {"protocolVersion": want if want in MCP_PROTOCOLS else MCP_PROTOCOLS[0],
                           "capabilities": {"tools": {}},
                           "serverInfo": {"name": "qakit", "version": kit_version()},
@@ -4636,14 +4657,18 @@ def cmd_mcp(args):
             elif method == "tools/list":
                 result = {"tools": tools}
             elif method == "tools/call":
-                name, a = params.get("name"), params.get("arguments") or {}
+                name, a = params.get("name"), dict(params.get("arguments") or {})
+                why = a.pop("why", None)
                 started = time.time()
+                session.now(name, a)
                 try:
                     content, is_error = session.call(name, a)
                 except KeyError as e:
                     content, is_error = [{"type": "text", "text": f"인자가 빠짐: {e}"}], True
+                finally:
+                    session.now()
                 summary = next((c["text"] for c in content if c["type"] == "text"), "(사진)")
-                session.log(name, a, not is_error, time.time() - started, summary)
+                session.log(name, a, not is_error, time.time() - started, summary, why)
                 result = {"content": content, "isError": is_error}
             else:
                 send({"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"없는 메서드: {method}"}})
@@ -5178,6 +5203,42 @@ def cmd_ui(args):
                         except ValueError:
                             pass
                     return self.send(200, {"offset": since + end, "taps": taps[-20:]})
+                if path == "/api/ai":   # 가장 최근 AI 세션 (qakit mcp) — 활동 기록·지금 하는 일·보고한 문제
+                    root = ws.results_dir / "ai"
+                    sessions = sorted([d for d in root.iterdir() if d.is_dir()], reverse=True) if root.is_dir() else []
+                    if not sessions:
+                        return self.send(200, {"session": None})
+                    d = sessions[0]
+                    rows = []
+                    for line in (d / "log.jsonl").read_text(encoding="utf-8").splitlines() if (d / "log.jsonl").exists() else []:
+                        with contextlib.suppress(ValueError):
+                            rows.append(json.loads(line))
+                    now_ = meta = None
+                    with contextlib.suppress(OSError, ValueError):
+                        now_ = json.loads((d / "now.json").read_text(encoding="utf-8"))
+                    with contextlib.suppress(OSError, ValueError):
+                        meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+                    alive = True
+                    pid = (now_ or meta or {}).get("pid")
+                    if pid:
+                        try:
+                            os.kill(int(pid), 0)
+                        except (OSError, ValueError):
+                            alive = False   # MCP 서버가 끝남 (AI 세션 종료)
+                    if now_ and not alive:
+                        now_ = None
+                    last = rows[-1]["at"] if rows else (meta or {}).get("started")
+                    recent = bool(last) and (datetime.datetime.now() - datetime.datetime.fromisoformat(last)).total_seconds() < 120
+                    issues = []
+                    with contextlib.suppress(OSError):
+                        for line in (d / "issues.jsonl").read_text(encoding="utf-8").splitlines():
+                            with contextlib.suppress(ValueError):
+                                r = json.loads(line)
+                                issues.append({k: r.get(k) for k in ("n", "title", "severity", "screenshot")})
+                    since = int(q.get("since", 0) or 0)
+                    return self.send(200, {"session": d.name, "dir": results_rel(ws, d), "client": (meta or {}).get("client"),
+                                           "active": bool(now_) or (alive and recent), "now": now_, "total": len(rows),
+                                           "rows": rows[since:][-100:], "issues": issues})
                 if path == "/api/record":
                     with rec["lock"]:
                         on = bool(rec["proc"] and rec["proc"].poll() is None)
