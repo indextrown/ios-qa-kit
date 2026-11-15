@@ -7,6 +7,7 @@ import { RunDetail } from "./pages/RunDetail";
 import { Scenarios } from "./pages/Scenarios";
 import { Live } from "./pages/Live";
 import { AiQa } from "./pages/AiQa";
+import { AiSession } from "./pages/AiSession";
 import { Editor } from "./pages/Editor";
 import { post } from "./lib/api";
 
@@ -39,7 +40,7 @@ export function App() {
   const active = hash.startsWith("#/run/") ? "runs" : hash.slice(2).split("/")[0] || "live";   // 처음 열면 라이브 세션
   let page;
   if (hash.startsWith("#/run/")) page = <RunDetail dir={decodeURIComponent(hash.slice(6))} />;
-  else if (active === "ai") page = <AiQa />;
+  else if (active === "ai") page = hash.startsWith("#/ai/") ? <AiSession name={decodeURIComponent(hash.slice(5))} job={job} refreshJob={refreshJob} /> : <AiQa />;
   else if (active === "scenarios") page = <Scenarios job={job} refreshJob={refreshJob} />;
   else if (active === "live" || !hash.slice(2)) page = <Live job={job} refreshJob={refreshJob} />;
   else if (active === "edit") page = <Editor route={hash} runScenario={async (name) => {

@@ -10,7 +10,8 @@ interface Draft { name: string; text: string; merged: number; steps: number; fro
 const field = "h-8 w-full rounded-md bg-muted px-2.5 text-[13px] outline-none placeholder:text-sub";
 
 /** U4: 기록된 단계 → 초안 → 다시 재생(통과해야) → scenarios/에 저장 */
-export function SaveScenario({ job, refreshJob, stepsCount }: { job: Job | null; refreshJob: () => void; stepsCount: number }) {
+export function SaveScenario({ job, refreshJob, stepsCount, aiSession, hint }:
+  { job: Job | null; refreshJob: () => void; stepsCount: number; aiSession?: string; hint?: string }) {
   const [name, setName] = useState("");
   const [title, setTitle] = useState("");
   const [desc, setDesc] = useState("");
@@ -34,7 +35,7 @@ export function SaveScenario({ job, refreshJob, stepsCount }: { job: Job | null;
     setBusy(null);
   };
   const makeDraft = () => act("draft", async () => {
-    const d = await post<Draft>("/api/draft", { name: name.trim(), title, description: desc, start: start || null,
+    const d = await post<Draft>("/api/draft", { name: name.trim(), title, description: desc, start: start || null, aiSession,
       tags: tags.split(",").map((t) => t.trim()).filter(Boolean) });
     setDraft(d); setOverwrite(false);
   });
@@ -53,7 +54,7 @@ export function SaveScenario({ job, refreshJob, stepsCount }: { job: Job | null;
 
   return (
     <Card title={<span className="flex items-center gap-1.5"><Save className="h-3.5 w-3.5" />시나리오로 저장</span>}
-      actions={<span className="text-[11px] text-sub">재생해서 통과해야 저장</span>}>
+      actions={<span className="text-[11px] text-sub">{hint ?? "재생해서 통과해야 저장"}</span>}>
       <div className="space-y-2.5 p-4">
         <div className="grid grid-cols-2 gap-2">
           <input className={cx(field, "font-mono")} placeholder="이름 (home-12-banner)" value={name} onChange={(e) => setName(e.target.value)} />
