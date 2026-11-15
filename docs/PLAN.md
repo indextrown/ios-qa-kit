@@ -647,7 +647,7 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 
 ## AI QA 직접 터치 설계 — tapflow 방식 (다음 단계)
 
-> 상태: 시험 ✅ (2026-11-16) — 원인과 방식 확인, AutoID 확인. 다음 H1 계속 떠 있는 터치 도우미.
+> 상태: 시험 ✅ · AutoID ✅ · H1 ✅ 계속 떠 있는 터치 도우미 (2026-11-16). 다음 H3 — H2(붙기만)는 아래 정정 때문에 필요 없을 수 있음.
 
 ### 왜
 
@@ -662,7 +662,7 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 | 상주 실행기를 멈추면 | ✅ |
 | 상주 실행기가 **앱을 켜지 않고 붙기만**(`--no-launch`, `XCUIApplication(bundleIdentifier:)`로 화면 구조만 읽음) | ✅ 읽기 → 검색 탭 → 읽기(검색 화면) → 뒤로 → 읽기(홈), 읽기 1.0~1.2초 |
 
-- **XCUITest가 켠 앱은 자동화 모드라 바깥 터치 신호를 무시한다.** 붙기만 해서 읽는 건 막지 않는다.
+- ~~XCUITest가 켠 앱은 자동화 모드라 바깥 터치 신호를 무시한다~~ → **정정 (H1에서 다시 잼)**: 실행기가 앱을 새로 켜고 XCUITest로 누른 뒤에도 직접 터치가 매번 먹혔다 (켠 직후 ✅, XCUITest 탭 뒤 ✅ ✅). 처음 막혔을 때는 실행기가 오래 떠 있었고 화면 구조 읽기가 60초 넘게 멈춘 적이 있었다 — **실행기가 무언가를 기다리며 멈춘 상태**에서 바깥 터치가 막힌 것으로 보이지만 재현이 안 돼 확정 못 함. → 설계: "붙기만"이 꼭 필요하진 않고, 대신 **직접 터치가 무시됐는지 알아채기**(터치 뒤 실시간 화면이 바뀌지 않으면 XCUITest 탭으로 다시)가 필요.
 - 터치 경로: `SimDeviceLegacyHIDClient`(SimulatorKit, Xcode 27은 `Contents/SharedFrameworks/`) + IOKit `IOHIDEventCreateDigitizerEvent`/`…FingerEvent` → `IndigoHIDMessageForTrackpadEventFromHIDEventRef` → 메시지 0x6c(와 0x10c)에 경로 표시 `UInt32(0x32)` → `sendWithMessage:freeWhenDone:…`. 좌표는 화면 대비 0~1. 마우스 방식(`IndigoHIDMessageForMouseNSEvent`)은 이 환경에서 막혀 있을 때 시험했고, 풀린 상태에선 디지타이저만 확인.
 - 한 번씩 띄우는 도우미는 0.85초(프레임워크 불러오기 0.5 + 준비 0.2 + 보내기 0.1) → **계속 떠 있는 도우미**여야 탭이 0.1초대.
 
@@ -684,7 +684,7 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 
 | 단계 | 내용 |
 |---|---|
-| **H1. 터치 도우미** | `Tools/simtouch/simtouch.swift` (직접 작성): 계속 떠 있고 stdin 명령(tap·down·move·up·press·swipe)을 받음, 준비되면 알림, 디지타이저 경로. qakit이 처음 쓸 때 `swiftc`로 빌드 (simscreen처럼). 안 되면(비공개 API 바뀜) XCUITest 탭으로 |
+| **H1. 터치 도우미** ✅ | `Tools/simtouch/simtouch.swift` (직접 작성): 계속 떠 있고 stdin 한 줄 명령(tap·press·swipe·down·move·up·ping) → 한 줄 답, 준비되면 `ready`, 디지타이저(없으면 마우스). `TouchHelper`(띄우기·준비 기다리기·죽으면 다시), `qakit touch`(확인용, 실행기가 앱을 켰으면 경고). **탭 왕복 약 90ms(누름 60ms 포함)**, 도우미 준비 0.46초, 쓸기 0.36초 — XCUITest 탭 0.8~2.2초 |
 | **H2. 붙기만 하는 실행기** | `qakit serve --attach`: 앱은 simctl+AutoID로 켜고, 실행기는 화면 구조·조건 확인(wait·expect)만. `/dump`는 켠 앱이 없으면 떠 있는 앱에 붙어 읽음 (이 PR에 먼저 넣음) |
 | **H3. MCP 직접 터치 모드** | AI QA(문제 찾기)에서만: `launch`=simctl+AutoID, `tap`=대상(ID·라벨) → 화면 구조의 자리 → 직접 터치 (기록은 ID 단계), 새 도구 `long_press`·`drag`·`tap_point`(이름 없을 때만, "시나리오로 못 옮김" 표시). 글자 입력은 키 입력 신호 또는 붙여넣기 |
 | **H4. 확인·화면** | 커서는 그 좌표 그대로, 라이브 세션 손 조작에도 선택 (실험) |
