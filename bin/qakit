@@ -148,6 +148,7 @@ class Workspace:
         self.permissions = perms if isinstance(perms, list) else [perms]
         self.secrets_path = expand(self.cfg.get("secrets", "./secrets.txt"), self.root)
         self.autoid = self.cfg.get("autoid", "inject")
+        self.precheck = self.cfg.get("precheck")   # 여러 개 실행 전 사전 확인할 공통 단계 이름 (steps/<이름>.qa.yml)
         self.swiftui = str(self.cfg.get("swiftui", "auto"))  # auto | insert | off — SwiftUI 소스에 ID 삽입(QA 워크트리 빌드 중)
         self.sync_mode = self.cfg.get("sync", "auto")  # auto | warn | off
         wt = self.cfg.get("worktree") or {}
@@ -2596,9 +2597,24 @@ def load_checked_scenario(ws, name, strict=True):
 def cmd_check(args):
     ws = find_workspace(args.workspace)
     names = args.scenarios or [p.name for p in sorted((ws.root / "scenarios").glob("*.qa.yml"))]
+    hints = 0
     for n in names:
         path, scenario = load_checked_scenario(ws, n)
         ok(f"{path.name}: 단계 {count_steps(scenario['steps'])}개, ID 확인 완료")
+        try:
+            raw = scenario_tools.parse_yaml(path.read_text(encoding="utf-8"))
+            hints += mergeable_tap_waits(raw.get("steps")) if isinstance(raw, dict) else 0
+        except Exception:  # noqa: BLE001
+            pass
+    for f in sorted((ws.root / "steps").glob("*.qa.yml")) if not args.scenarios else []:
+        try:
+            raw = scenario_tools.parse_yaml(f.read_text(encoding="utf-8"))
+            hints += mergeable_tap_waits(raw.get("steps")) if isinstance(raw, dict) else 0
+        except Exception:  # noqa: BLE001
+            pass
+    if hints:
+        info(f"💡 탭 바로 다음 기다림(wait) {hints}곳은 탭의 expect:로 합칠 수 있습니다 "
+             "(탭이 무시되면 그 자리에서 실패). 예) - tap: X  →  expect: { visible: Y }")
     update_readme(ws, quiet=False)
 
 
@@ -2663,6 +2679,40 @@ def select_scenarios(ws, args):
     return names
 
 
+def run_precheck(ws, args):
+    """qakit.yml precheck: <공통 단계> — 여러 개 실행 전에 그 단계를 한 번 (앱을 새로 켜고) 돌려 환경을 확인한다.
+    로그아웃·서버 점검처럼 모든 시나리오가 실패할 상황을 시나리오마다 기다리기 전에 잡는다. 실패하면 종료 코드 2."""
+    name = ws.precheck
+    f = ws.root / "steps" / f"{name}.qa.yml"
+    if not f.exists():
+        fail(f"qakit.yml의 precheck: {name} 공통 단계가 없습니다: {f}")
+    data = scenario_tools.parse_yaml(f.read_text(encoding="utf-8")) or {}
+    steps = scenario_tools._expand([{"use": name}], ws.root, ["precheck"])
+    udid = ws.device["udid"] if ws.device else ensure_booted(ws)
+    info(f"사전 확인: steps/{name}.qa.yml")
+    started = time.time()
+    st = serve_ensure(ws, udid)
+    try:
+        res = serve_request(st, "/run", {"name": f"사전 확인 ({name})", "steps": steps}, timeout=args.timeout)
+    except ServeTimeout:
+        serve_stop(udid, quiet=True, force=True)
+        res = {"ok": False, "message": f"{args.timeout}초 안에 끝나지 않음"}
+    except ConnectionError as e:
+        res = {"ok": False, "message": f"상주 실행기 연결 실패: {e}"}
+    if res.get("ok"):
+        ok(f"사전 확인 통과 ({time.time() - started:.1f}초)")
+        return
+    if res.get("dump"):
+        out = ws.results_dir / "precheck-fail-dump.txt"
+        ws.results_dir.mkdir(exist_ok=True)
+        out.write_text(masker(ws.secrets())(res["dump"]), encoding="utf-8")
+    why = data.get("message") if isinstance(data, dict) else None
+    fail(f"사전 확인 실패 → 시나리오를 돌리지 않습니다" + (f": {why}" if why else ""),
+         f"원인: {res.get('message', '')}"
+         + (f"\n   화면 구조: {ws.results_dir / 'precheck-fail-dump.txt'}" if res.get("dump") else "")
+         + "\n   환경을 고친 뒤 다시 실행하세요. 건너뛰려면 --no-precheck", code=2)
+
+
 def cmd_run(args):
     global FAIL_CODE
     FAIL_CODE = 2   # 아래에서 앱 판정 실패만 1로 끝낸다
@@ -2672,6 +2722,8 @@ def cmd_run(args):
         fail("--bench는 시나리오 하나만 측정합니다.", f"예) qakit run {names[0]} --bench 1m")
     try:
         with sim_lock(ws, "qakit run " + " ".join(names)[:80]):
+            if ws.precheck and not args.no_precheck and not args.bench and (len(names) > 1 or args.precheck):
+                run_precheck(ws, args)
             if len(names) == 1 and not args.junit:
                 _cmd_run(ws, args, names[0])
             else:
@@ -3737,6 +3789,58 @@ def do_log_write(ws, row, reset=False):
         out.write(json.dumps(dict(row, at=datetime.datetime.now().isoformat(timespec="seconds")), ensure_ascii=False) + "\n")
 
 
+def merge_tap_wait(steps):
+    """[tap, wait] 이어진 두 단계를 탭의 expect 하나로 합친다 (탭이 무시되면 그 자리에서 실패).
+    합칠 수 있는 것: tap(+timeout)만 있는 단계 바로 다음, wait 하나만 있는 단계. (합친 목록, 합친 수)"""
+    out, merged, i = [], 0, 0
+    while i < len(steps):
+        a = steps[i]
+        b = steps[i + 1] if i + 1 < len(steps) else None
+        if (isinstance(a, dict) and "tap" in a and set(a) <= {"tap", "timeout"}
+                and isinstance(b, dict) and set(b) == {"wait"}):
+            w = b["wait"]
+            target, timeout = (w.get("for"), w.get("timeout")) if isinstance(w, dict) and "for" in w else (w, None)
+            m = dict(a, expect={"visible": target})
+            if timeout is not None:
+                m["expect-timeout"] = timeout
+            out.append(m)
+            merged += 1
+            i += 2
+            continue
+        out.append(a)
+        i += 1
+    return out, merged
+
+
+def mergeable_tap_waits(node):
+    """시나리오(펼치기 전)의 steps·then·else·repeat 안에서 [tap, wait]로 합칠 수 있는 곳 수 (qakit check 안내용)."""
+    n = 0
+    if isinstance(node, list):
+        n += merge_tap_wait(node)[1]
+        for x in node:
+            n += mergeable_tap_waits(x)
+    elif isinstance(node, dict):
+        for k in ("steps", "then", "else"):
+            if isinstance(node.get(k), list):
+                n += mergeable_tap_waits(node[k])
+        if isinstance(node.get("repeat"), dict):
+            n += mergeable_tap_waits(node["repeat"].get("steps"))
+    return n
+
+
+def flow_text(value):
+    """단계 값을 YAML 한 줄({ … } 형식)로."""
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{k}: {flow_text(v)}" for k, v in value.items()) + " }"
+    if isinstance(value, list):
+        return "[ " + ", ".join(flow_text(v) for v in value) + " ]"
+    text = str(value).lower() if isinstance(value, bool) else str(value)
+    if (text == "" or text != text.strip() or text[0] in "{[\"'&*!|>%@`#-"
+            or any(c in text for c in ",{}[]#") or ": " in text):
+        return '"' + text.replace('"', '\\"') + '"'
+    return text
+
+
 def do_steps(ws):
     """qakit do steps: 기록된 단계 보기."""
     steps, from_launch = do_log_read(ws)
@@ -3759,22 +3863,78 @@ def do_save(ws, name, force=False):
     target = ws.root / "scenarios" / f"{name}.qa.yml"
     if target.exists() and not force:
         fail(f"이미 있습니다: {target}", "덮어쓰려면 --force")
-    body = []
+    parsed = []
     for st in steps:
-        first, *rest = st.splitlines()
+        try:
+            v = scenario_tools.parse_yaml(st)
+            parsed.append(v[0] if isinstance(v, list) and len(v) == 1 else v)
+        except Exception:  # noqa: BLE001 — 기록된 글자를 그대로 쓴다
+            parsed.append(st)
+    # 탭 바로 다음 기다림은 탭의 expect로 합친다. 합치지 않는 단계는 기록된 글자를 그대로 쓴다
+    body, merged, i = [], 0, 0
+    while i < len(steps):
+        pair = merge_tap_wait(parsed[i:i + 2])
+        if len(parsed) > i + 1 and pair[1] == 1:
+            m = pair[0][0]
+            tap_text = steps[i].strip()
+            body.append(f"  - {tap_text}" if not tap_text.startswith("{") else f"  - tap: {flow_text(m['tap'])}")
+            if tap_text.startswith("{") and "timeout" in m:
+                body.append(f"    timeout: {m['timeout']}")
+            body.append(f"    expect: {flow_text(m['expect'])}")
+            if "expect-timeout" in m:
+                body.append(f"    expect-timeout: {m['expect-timeout']}")
+            merged += 1
+            i += 2
+            continue
+        first, *rest = steps[i].splitlines()
         body.append(f"  - {first}")
         body += [f"    {line}" for line in rest]
+        i += 1
     stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     text = "\n".join([f"name: {name}",
                       f"# (qakit do 기록에서 만든 초안, {stamp}) 무엇을 확인하는지 1~2줄로 바꿔 쓰고, 판정(expect)을 더한다.",
                       "steps:"] + body) + "\n"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8")
-    ok(f"시나리오 초안: {target} (단계 {len(steps)}개)")
+    ok(f"시나리오 초안: {target} (단계 {len(steps) - merged}개"
+       + (f", 탭 다음 기다림 {merged}곳을 탭의 expect로 합침" if merged else "") + ")")
     if not from_launch:
         warn("qakit do launch 뒤의 기록이 아닙니다. 시나리오는 앱을 새로 켜고 시작하므로 앞부분(진입 단계)이 빠졌을 수 있습니다")
     load_checked_scenario(ws, str(target), strict=False)
     ok("형식·ID 검사 통과 → 다듬은 뒤 qakit run " + name)
+
+
+def simulator_viewer_app():
+    """시뮬레이터 화면 앱: Xcode 27+는 Device Hub, 이전은 Simulator. 없으면 None."""
+    dev = Path(run(["xcode-select", "-p"], check=False).stdout.strip() or "/Applications/Xcode.app/Contents/Developer")
+    for cand in (dev.parent / "Applications" / "DeviceHub.app", dev / "Applications" / "Simulator.app"):
+        if cand.exists():
+            return cand
+    return None
+
+
+def cmd_show(args):
+    """시뮬레이터 화면을 띄우고 대상 앱을 실행한다 (로그인 등 사람이 직접 만질 때)."""
+    ws = find_workspace(args.workspace)
+    if ws.device:
+        fail("qakit show는 시뮬레이터용입니다. 실기기는 기기 화면을 직접 보세요.")
+    udid = ensure_booted(ws)
+    viewer = simulator_viewer_app()
+    if viewer:
+        run(["open", str(viewer), "--args", "-CurrentDeviceUDID", udid], check=False)
+        ok(f"{viewer.stem} 열림 → {ws.simulator}")
+    else:
+        warn("시뮬레이터 화면 앱(Device Hub / Simulator)을 찾지 못했습니다. Xcode 설치를 확인하세요")
+    if args.no_launch:
+        return
+    if not app_installed(udid, ws.bundle_id):
+        fail(f"시뮬레이터에 {ws.bundle_id}가 설치되어 있지 않습니다.", "qakit build-app")
+    r = run(["xcrun", "simctl", "launch", udid, ws.bundle_id], check=False)
+    if r.returncode == 0:
+        ok(f"{ws.bundle_id} 실행")
+    else:
+        warn(f"앱을 실행하지 못했습니다: {(r.stdout or '').strip()[-200:]}")
+    info("상주 실행기나 테스트가 도는 동안에는 화면을 만지지 마세요 (입력이 섞임)")
 
 
 def cmd_do(args):
@@ -4017,6 +4177,10 @@ def main():
     p.add_argument("--settle", type=float, default=0.5, help="dump 전에 기다릴 시간(초)")
     p.set_defaults(func=cmd_do)
 
+    p = sub.add_parser("show", help="시뮬레이터 화면(Device Hub / Simulator)을 띄우고 앱 실행 — 로그인 등 직접 만질 때")
+    p.add_argument("--no-launch", action="store_true", help="앱은 실행하지 않음")
+    p.set_defaults(func=cmd_show)
+
     p = sub.add_parser("update", help="도구를 최신 버전으로 받기 (설치 폴더 git fast-forward)")
     p.add_argument("--check", action="store_true", help="새 버전이 있는지만 확인")
     p.set_defaults(func=cmd_update)
@@ -4066,6 +4230,9 @@ def main():
     p.add_argument("--tag", action="append", metavar="태그", help="이 태그가 있는 시나리오만 (여러 번 가능, 하나라도 있으면)")
     p.add_argument("--exclude-tag", action="append", metavar="태그", help="이 태그가 있는 시나리오는 뺌 (--tag보다 우선)")
     p.add_argument("--junit", metavar="파일", help="JUnit XML 보고서를 이 경로에 씀 (CI용)")
+    pre = p.add_mutually_exclusive_group()
+    pre.add_argument("--precheck", action="store_true", help="하나만 돌릴 때도 qakit.yml의 precheck: 단계로 먼저 확인")
+    pre.add_argument("--no-precheck", action="store_true", help="여러 개 실행 전 사전 확인(precheck:)을 건너뜀")
     p.add_argument("--reset", action="store_true", help="실행 전 앱 재설치 + 키체인 초기화")
     stop = p.add_mutually_exclusive_group()
     stop.add_argument("--fail-fast", action="store_true", help="여러 개 실행: 첫 실패에서 멈춤")

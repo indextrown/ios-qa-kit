@@ -8,6 +8,9 @@
 | "누르기 전에 이미 기대 효과가 맞음" | 탭의 `expect:` 조건이 탭 전부터 참 (앞 화면 요소가 남아 있거나 조건이 너무 넓음) | 탭으로 **새로** 생기거나 사라지는 요소로 조건을 바꾼다 |
 | "탭 뒤 기대 효과가 나타나지 않음" | 탭이 무시됨(화면 전환 중·덮개가 가로챔) 또는 앱이 실제로 반응하지 않음 | 실패 시점 화면 구조를 본다. 앞 단계에 화면이 다 바뀔 때까지의 `wait`/`expect`를 넣는다. 반복되면 앱 버그로 보고 |
 | `qakit run` 종료 코드 2 | 앱 판정 전 실행 환경·설정 문제 (실행기·연결·시간 초과·앱 미설치·시나리오 없음·ID 검사) | 출력의 원인대로 환경을 고친다. 앱 회귀는 종료 코드 1 |
+| 시뮬레이터 화면이 안 보임 (Xcode 27에 Simulator 앱이 없음) | Xcode 27부터 화면 앱이 Device Hub(`Xcode.app/Contents/Applications/DeviceHub.app`) | `qakit show` (Device Hub를 열고 앱 실행) |
+| 로그아웃·서버 점검인데 시나리오를 다 돌려 버림 | 모든 시나리오가 같은 이유로 기다리다 실패 | `qakit.yml`에 `precheck: <공통 단계>` (예: 홈이 뜨는지) — 여러 개 실행 전에 먼저 확인하고 멈춘다 |
+| Xcode가 켜져 있을 때 `qakit run`(xcodebuild 경로)이 출력 없이 멈춤 | Xcode가 같은 시뮬레이터를 같이 씀 | Xcode를 닫거나 상주 실행기(`--serve`)로. 화면은 Device Hub(`qakit show`)로 본다 |
 | 덤프에 ID가 하나도 없음 | 앱이 qakit 밖에서 실행됨 (`--attach`) | `qakit dump-ui` (새로 실행) 또는 테스트를 먼저 돌린 뒤 `--attach` |
 | 같은 ID가 여러 개 | 셀·반복 컴포넌트 | `page.cell(QAID.X.id, labelID: QAID.X.titleLabel, label: "…")` 또는 `.element(boundBy: i)` |
 | 닫았는데 계속 `exists == true` | 시트·드로어가 화면 밖에 남음 | `page.waitUntilGone()` / `isVisibleOnScreen` |

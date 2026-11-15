@@ -27,6 +27,7 @@ description: iOS 앱의 QA 시나리오를 XCUITest로 만들고, 돌리고, 고
 ```bash
 cd <작업공간>          # qakit.yml 위치. 모르면: find ~ -maxdepth 4 -name qakit.yml
 qakit doctor           # ❌가 있으면 → 안내대로 해결
+qakit show             # 시뮬레이터 화면이 필요하면 (사용자 로그인 등). Xcode 27은 Device Hub
 ```
 
 작업공간이 없으면 `qakit init <앱 프로젝트 경로>` → 결과 안내를 따른다 (qakit.yml 확인, secrets.txt는 사용자가 작성).

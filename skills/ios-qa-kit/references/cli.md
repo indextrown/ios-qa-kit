@@ -15,11 +15,13 @@
 | `qakit dump-ui [--attach] [--wait-id ID] [--settle 초] [--print]` | 화면 구조 → `results/ui-dump.txt` |
 | `qakit serve [--stop\|--status] [--idle 초] [--no-launch] [--device 이름]` | 상주 실행기. 실기기는 `--device`. 포트는 qakit이 정해 넘긴다. USB면 Mac이 usbmuxd로 기기 안 `127.0.0.1:<포트>`에 붙고, Wi-Fi면 실행기를 CoreDevice 터널의 기기 쪽 주소(`devicectl`의 `tunnelIPAddress`, 예: `fdxx::1`)에만 열어 그 주소로 붙는다 (같은 Wi-Fi의 다른 기기에서는 안 보임). 실행기(XCUITest)를 백그라운드로 띄워 두고 명령만 주고받는다. 상태 파일 `~/.qakit/serve/<udid>.json`. `--status`: 떠 있는지, `--stop`: 멈춤, `--idle`: 명령이 없으면 스스로 끝내는 시간(기본 1800초), `--no-launch`: 시작할 때 앱을 띄우지 않음. 떠 있으면 `qakit run`이 자동으로 이쪽으로 돈다. `test`·`dump-ui`는 시작 전에 상주 실행기를 멈춘다 |
 | `qakit do '<단계>' [--timeout 초]` | 시나리오 단계 하나를 바로 실행 (1~2초, 없으면 상주 실행기를 띄움 1분 안팎. 그때는 "실행기 시작 포함 전체 N초"도 출력). 단계 문법은 `.qa.yml`과 같다 (`use:`는 펼쳐 실행). 한 번에 단계 하나. 앱 상태·변수는 다음 `qakit do`로 이어진다. 실패하면 ❌ 원인 + `results/do-fail-dump.txt`, 종료 코드 1, 실행기는 유지. `--timeout`(기본 120초)을 넘기면 실행기를 멈춘다(다음 명령 때 다시 띄움) |
-| `qakit do steps` / `qakit do save <이름> [--force]` | **`qakit do`로 통과한 단계는 기록된다** (`.qakit/do-steps.jsonl`, 실패한 단계는 빠짐, `qakit do launch`부터 새로 시작). `steps`: 기록 보기. `save`: 그 단계로 `scenarios/<이름>.qa.yml` 초안을 쓰고 형식·ID를 바로 검사 (있으면 `--force` 없이 덮어쓰지 않음) |
+| `qakit do steps` / `qakit do save <이름> [--force]` | **`qakit do`로 통과한 단계는 기록된다** (`.qakit/do-steps.jsonl`, 실패한 단계는 빠짐, `qakit do launch`부터 새로 시작). `steps`: 기록 보기. `save`: 그 단계로 `scenarios/<이름>.qa.yml` 초안을 쓰고 형식·ID를 바로 검사 (있으면 `--force` 없이 덮어쓰지 않음). **탭 바로 다음 `wait`는 탭의 `expect`로 합쳐 저장**한다 |
+| `qakit show [--no-launch]` | 시뮬레이터 화면을 띄우고(Xcode 27+ Device Hub, 이전 Simulator) 대상 앱 실행. 로그인처럼 사람이 직접 만질 때. 테스트가 도는 동안에는 만지지 않는다 |
 | `qakit do dump [--settle 초]` / `launch` / `reset` / `ping` | `dump`: 지금 화면 구조 출력 + `results/ui-dump.txt`. `launch`: 앱 다시 실행 + 변수 비움. `reset`: 변수만 비움(앱 그대로). `ping`: 응답 시간·앱 상태 |
 | `qakit test [필터...] [--reset]` | 테스트 실행. 필터 예: `LoginFlowTests`, `LoginFlowTests/test_x`. `--reset`: 앱 재설치+키체인 초기화 |
-| `qakit check [시나리오...]` | 시나리오 형식·ID 정적 검사 (실행 없이) |
+| `qakit check [시나리오...]` | 시나리오 형식·ID 정적 검사 (실행 없이). 탭 다음 `wait`처럼 탭의 `expect`로 합칠 수 있는 곳이 있으면 💡로 알려 줌 |
 | `qakit run <시나리오> <시나리오> …` / `qakit run 'home-*'` | 여러 개를 차례로. 패턴은 `scenarios/`의 이름에 맞춰 펼친다 (zsh에서는 따옴표 필수). 준비(워크트리 최신화·앱 변경 확인·ID 검사)와 README 갱신은 한 번만, 판정·결과 폴더는 시나리오마다. 하나가 실패해도 나머지를 돌리고 끝에 요약(실패하면 종료 코드 1, 다시 돌릴 명령 안내). **연속한 두 시나리오가 같은 원인·같은 단계에서 실패하면 환경 문제(로그아웃·서버 점검 등)로 보고 멈춘다** (`--keep-going`: 끝까지, `--fail-fast`: 첫 실패에서 멈춤). `--reuse-app`과 같이 쓰면 앱도 이어서 쓴다. `--bench`는 하나만 |
+| `qakit run … [--precheck \| --no-precheck]` | `qakit.yml`에 `precheck: <공통 단계>`가 있으면 **여러 개를 돌리기 전에** 그 단계를 한 번(앱을 새로 켜고) 돌려 환경을 확인한다. 실패하면 시나리오를 하나도 돌리지 않고 종료 코드 2, 단계 파일의 `message:`를 보여 줌 (예: "로그인 상태가 아님"). 하나만 돌릴 때는 `--precheck`로 |
 | `qakit run --tag <태그> [--exclude-tag <태그>]` | 시나리오 맨 위 `tags:`로 고른다 (이름·패턴과 함께 쓰면 그 안에서 고름) |
 | `qakit run … --junit <파일>` | JUnit XML 보고서 (CI용). 앱 판정 실패는 `failure`, 환경·설정 실패는 `error`, 돌리지 않은 것은 `skipped` |
 | `qakit run <시나리오> --reuse-app` | 앱이 이미 시작 화면(시나리오의 `start:` 조건)이면 다시 켜지 않는다 (= `launch: reuse`). `start:`가 없거나 화면이 다르면 다시 켠다. `--reset`이면 무시. 자세히는 scenario-language.md "앱 재실행 생략" |
@@ -55,6 +57,7 @@ language: ko
 locale: ko_KR
 permissions: [location-always]   # simctl privacy 이름
 secrets: ./secrets.txt
+# precheck: precheck            # 여러 개 실행 전 steps/precheck.qa.yml로 환경 확인 (로그인 상태 등)
 autoid: inject                   # inject(시뮬레이터 주입) | embedded
 sync: auto                       # auto | warn | off
   # release:                      # --build release 때 (생략 시 configuration: Release, bundleId 자동)
