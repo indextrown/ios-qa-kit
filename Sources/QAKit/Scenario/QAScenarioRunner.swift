@@ -253,8 +253,10 @@ public final class QAScenarioRunner {
         } else if let target = step["tap"] {
             let element = resolve(target)
             try waitFor(element, timeout: number(step["timeout"]) ?? 10, what: target)
-            // 기대 효과(expect:): 누르기 전에 이미 맞으면 탭이 무엇을 했는지 알 수 없으므로 실패로 본다
-            let effect = step["expect"]
+            // 기대 효과(expect:): 누르기 전에 이미 맞으면 탭이 무엇을 했는지 알 수 없으므로 실패로 본다.
+            // visible은 "보이고 누를 수 있음(hittable)"으로 본다 — 위 화면에 덮인 아래 화면 요소(검색·알림 화면 밑의 홈)는
+            // 접근성 구조와 화면 영역에 남아 visible이 참이지만, 누를 수는 없다. 탭 뒤에는 그 화면이 맨 앞에 와야 한다.
+            let effect = step["expect"].map(frontmost)
             if let effect, try check(effect) {
                 throw fail("누르기 전에 이미 기대 효과가 맞음 → 탭의 효과를 확인할 수 없음: \(compact(effect))")
             }
@@ -678,6 +680,16 @@ public final class QAScenarioRunner {
             if element.exists { return }
         } while Date() < deadline
         throw fail("\(Int(timeout))초 안에 나타나지 않음: \(compact(what))")
+    }
+
+    /// 탭의 expect 조건: visible → hittable (all/any 안쪽까지). 다른 조건은 그대로.
+    private func frontmost(_ raw: Any) -> Any {
+        guard let c = raw as? [String: Any], let (key, value) = c.first, c.count == 1 else { return raw }
+        switch key {
+        case "visible": return ["hittable": value]
+        case "all", "any": return [key: (value as? [Any] ?? []).map(frontmost)]
+        default: return raw
+        }
     }
 
     /// 누르기 직전: 요소 위치가 두 번 연달아 같을 때까지 기다린다 (최대 2초). 화면 전환·스크롤·애니메이션 중에

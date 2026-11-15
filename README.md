@@ -284,6 +284,7 @@ cp secrets.example.txt secrets.txt
 | CI에서 태그로 골라 보고서까지 | `qakit run --tag smoke --junit report.xml` (종료 코드 1 앱 실패 · 2 환경 문제) |
 | 값을 바꿔 실행 (매개변수) | `qakit run <시나리오> --var ship="선박명"` |
 | 마지막 실패 다시 보기 | `qakit summarize` |
+| 시뮬레이터 화면 띄우기 (로그인 등) | `qakit show` (Xcode 27은 Device Hub) |
 | 성능 측정 (시나리오 후 30분) | `qakit run <시나리오> --bench 30m` |
 | Release 빌드로 | `qakit run <시나리오> --build release` |
 | 도구 최신화 | `qakit update` |

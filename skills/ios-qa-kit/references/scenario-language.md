@@ -151,7 +151,7 @@ steps:
   expect-timeout: 15
 ```
 
-- 조건 문법은 `expect` 단계와 같다 (`visible`, `missing`, `hidden`, `selected`, `all` …).
+- 조건 문법은 `expect` 단계와 같다 (`visible`, `missing`, `hidden`, `selected`, `all` …). 단 **탭의 `expect` 안의 `visible`은 "보이고 누를 수 있음(hittable)"으로 본다** — 검색·알림 화면처럼 위에 덮인 화면 밑의 요소(홈 등)는 화면 구조에 남아 `visible`이 참이지만 누를 수는 없다. 그래서 "뒤로 → 홈이 보임"도 홈이 맨 앞에 와야 통과한다.
 - 누르기 전에 이미 맞는 조건은 실패로 본다 — 탭이 무엇을 했는지 알 수 없기 때문이다 (앞 시나리오가 남긴 상태로 통과하는 것을 막음).
 - `qakit do`에서도 쓴다: `qakit do '{ tap: X, expect: { visible: Y } }'`.
 
