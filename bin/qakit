@@ -897,6 +897,8 @@ def test_env(ws, extra=None):
     put("QA_BUNDLE_ID", ws.bundle_id)
     put("QA_AUTOID_DYLIB", (DEVICE_AUTOID_PATH if ws.device else ws.autoid_dylib) if ws.autoid == "inject" else None)
     put("QA_DEVICE", "1" if ws.device else None)
+    if not ws.device:   # 누르는 자리 기록 (qakit ui 라이브 화면의 커서). 기기 안 실행기는 Mac 파일에 못 쓴다
+        put("QA_TAPS_FILE", taps_path(ws, trim=True))
     put("QA_LANGUAGE", ws.language)
     put("QA_LOCALE", ws.locale)
     put("QA_RESULTS_DIR", ws.results_dir)
@@ -3773,6 +3775,16 @@ def cmd_serve(args):
 SERVE_COMMANDS = {"dump": "/dump", "launch": "/launch", "ping": "/ping", "reset": "/reset"}
 
 
+def taps_path(ws, trim=False):
+    """실행기가 누르는 자리를 한 줄씩 남기는 파일. 커지면(256KB) 비운다 — UI는 읽은 위치가 줄면 처음부터 읽는다."""
+    p = ws.root / ".qakit" / "taps.jsonl"
+    if trim:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        if p.exists() and p.stat().st_size > 256 * 1024:
+            p.write_text("", encoding="utf-8")
+    return p
+
+
 def do_log_path(ws):
     return ws.root / ".qakit" / "do-steps.jsonl"
 
@@ -4432,6 +4444,25 @@ def cmd_ui(args):
                 if path == "/api/do-steps":
                     steps, from_launch = do_log_read(ws)
                     return self.send(200, {"steps": steps, "fromLaunch": from_launch})
+                if path == "/api/taps":   # since=-1: 지금 끝 위치만 (지난 기록은 안 보냄)
+                    p = taps_path(ws)
+                    size = p.stat().st_size if p.exists() else 0
+                    since = int(q.get("since", "-1") or -1)
+                    if since < 0 or since == size:
+                        return self.send(200, {"offset": size, "taps": []})
+                    if since > size:
+                        since = 0
+                    with p.open("rb") as f:
+                        f.seek(since)
+                        chunk = f.read(size - since)
+                    end = chunk.rfind(b"\n") + 1   # 쓰는 중인 마지막 줄은 다음에
+                    taps = []
+                    for line in chunk[:end].decode("utf-8", "replace").splitlines():
+                        try:
+                            taps.append(json.loads(line))
+                        except ValueError:
+                            pass
+                    return self.send(200, {"offset": since + end, "taps": taps[-20:]})
                 if path == "/api/screen":
                     if not udid:
                         return self.send(404, {"error": "라이브 화면은 시뮬레이터만 (실기기는 아직)"})

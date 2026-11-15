@@ -10,6 +10,7 @@ import { Badge, Button, Card, Empty, Mono, PageHeader } from "../components/ui";
 const TYPE: Record<string, string> = { Button: "button", StaticText: "text", Text: "text", Image: "image", Cell: "cell", TextField: "textfield",
   SecureTextField: "securetextfield", Switch: "switch", Other: "other", CollectionView: "collectionview", ScrollView: "scrollview", Table: "table" };
 const PREFER = new Set(["Button", "Cell", "TextField", "SecureTextField", "Switch", "Link", "SegmentedControl"]);
+interface Touch { t: number; kind: string; x: number; y: number; w: number; h: number; sw: number; sh: number }
 const hasId = (e: El) => !!e.id && !e.id.startsWith("_Tt");
 const yq = (v: string) => (/^[^\s"'{}[\],:#&*!|>%@`-][^{}[\],:#"]*$/.test(v) && !/\s$/.test(v) && !/: /.test(v) ? v : JSON.stringify(v));
 
@@ -90,23 +91,51 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     wasBusy.current = busy;
   }, [busy, loadEls, loadSteps]);
 
-  /** 탭 단계면 누를 자리(요소 가운데)를 표시. 직접 입력한 단계는 ID·라벨이 맞는 요소를 찾아본다 */
-  const markTap = (step: string, target?: El | null) => {
-    const scr = els?.screen;
-    if (!cursor || !scr || !/^tap\s*:/.test(step)) return;
-    let e = target ?? null;
-    if (!e && els) {
-      const v = step.replace(/^tap\s*:\s*/, "").trim().replace(/^["']|["']$/g, "");
-      e = els.elements.find((x) => x.id === v) ?? els.elements.find((x) => x.labelRaw === v || x.label === v) ?? null;
-    }
-    if (!e) return;
-    const p = { x: ((e.x + e.w / 2) / scr.w) * 100, y: ((e.y + e.h / 2) / scr.h) * 100, k: Date.now() };
-    setTaps((t) => [...t, p]); setLastTap(p);
-    setTimeout(() => setTaps((t) => t.filter((q) => q.k !== p.k)), 800);
-  };
-  const doStep = async (step: string, target?: El | null) => {
+  // 실행기가 누른 자리(.qakit/taps.jsonl) — 라이브 세션 조작·qakit do·시나리오 실행 모두. 차례로 커서를 옮겨 누른다
+  const queue = useRef<Touch[]>([]);
+  const [robot, setRobot] = useState<{ x: number; y: number; kind: string; k: number } | null>(null);
+  useEffect(() => {
+    if (!cursor) return;
+    let alive = true, offset = -1, t: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      try {
+        const r = await get<{ offset: number; taps: Touch[] }>(`/api/taps?since=${offset}`);
+        if (offset >= 0) queue.current.push(...r.taps.slice(-6));
+        offset = r.offset;
+      } catch { /* 다음에 */ }
+      if (alive) t = setTimeout(poll, 300);
+    };
+    poll();
+    return () => { alive = false; clearTimeout(t); };
+  }, [cursor]);
+  useEffect(() => {   // 큐에서 하나씩: 커서 이동(0.35초) → 누름 표시
+    if (!cursor) return;
+    let alive = true, t: ReturnType<typeof setTimeout>;
+    const step = () => {
+      const n = queue.current.shift();
+      if (n) {
+        const p = { x: ((n.x + n.w / 2) / n.sw) * 100, y: ((n.y + n.h / 2) / n.sh) * 100, kind: n.kind, k: Date.now() };
+        setRobot(p);
+        if (n.kind === "tap") {
+          setTimeout(() => {
+            if (!alive) return;
+            setTaps((q) => [...q, p]); setLastTap(p);
+            setTimeout(() => setTaps((q) => q.filter((x) => x.k !== p.k)), 800);
+          }, 350);
+        }
+      }
+      if (alive) t = setTimeout(step, n ? 650 : 100);
+    };
+    step();
+    return () => { alive = false; clearTimeout(t); };
+  }, [cursor]);
+  useEffect(() => {   // 한동안 안 누르면 커서를 숨긴다
+    if (!robot) return;
+    const t = setTimeout(() => setRobot(null), 5000);
+    return () => clearTimeout(t);
+  }, [robot]);
+  const doStep = async (step: string) => {
     if (!step) return;
-    markTap(step, target);
     setResult({ step, running: true });
     try { setResult({ step, res: await post<DoResult>("/api/do", { step }) }); }
     catch (e) { setResult({ step, error: (e as Error).message }); }
@@ -150,8 +179,8 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
             <Button size="sm" variant="ghost" onClick={() => doStep("launch")} disabled={working}><RotateCcw className="h-3.5 w-3.5" />앱 다시 켜기</Button>
             <Button size="sm" variant="ghost" onClick={loadEls} loading={dumping}><ScanLine className="h-3.5 w-3.5" />화면 구조</Button>
             <Button size="sm" variant="ghost" onClick={() => setBoxes(!boxes)}>{boxes ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}요소</Button>
-            <Button size="sm" variant="ghost" onClick={() => setCursor(!cursor)} title="손가락 커서와 탭한 자리 표시"
-              className={cx(!cursor && "text-sub")}><MousePointer2 className="h-3.5 w-3.5" />커서 {cursor ? "켬" : "끔"}</Button>
+            <Button size="sm" variant="ghost" onClick={() => setCursor(!cursor)} title="누르는 자리 보기: 실행기(라이브 조작·qakit do·시나리오 실행)가 누르는 곳으로 커서가 움직이고, 마우스는 손가락 원으로"
+              className={cx(cursor ? "bg-muted font-medium" : "text-sub")}><MousePointer2 className="h-3.5 w-3.5" />커서 {cursor ? "켬" : "끔"}</Button>
             <Button size="sm" variant="ghost" onClick={() => setClickTap(!clickTap)} title="켜면 화면을 누르는 즉시 그 요소를 탭합니다 (끄면 고르기만)"
               className={cx(clickTap ? "bg-muted font-medium" : "text-sub")}><MousePointerClick className="h-3.5 w-3.5" />누르면 탭 {clickTap ? "켬" : "끔"}</Button>
           </div>
@@ -167,7 +196,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                     const h = hit(e);
                     if (!h) return;
                     setSel(h);
-                    if (clickTap && !working && els) doStep(`tap: ${selectorFor(h, els.elements)}`, h);
+                    if (clickTap && !working && els) doStep(`tap: ${selectorFor(h, els.elements)}`);
                   }}>
                   {(els?.elements ?? []).filter((e) => boxes || e === sel || e === hover).map((e, i) => (
                     <div key={i} className={cx("pointer-events-none absolute rounded-[3px] border",
@@ -181,6 +210,12 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                   {cursor && taps.map((t) => (
                     <div key={t.k} className="qakit-ripple pointer-events-none absolute h-10 w-10 rounded-full border-2 border-rose-500 bg-rose-500/25"
                       style={{ left: `${t.x}%`, top: `${t.y}%` }} />))}
+                  {cursor && robot && (   // 실행기 커서: 누르는 자리로 움직인다
+                    <div className="pointer-events-none absolute z-10 transition-[left,top] duration-300 ease-out" style={{ left: `${robot.x}%`, top: `${robot.y}%` }}>
+                      <MousePointer2 className="h-7 w-7 -translate-x-[3px] -translate-y-[3px] fill-neutral-900 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]" strokeWidth={1.5} />
+                      {robot.kind.startsWith("swipe") && <span className="absolute left-6 top-5 whitespace-nowrap rounded bg-neutral-900/80 px-1.5 py-0.5 text-[10px] text-white">
+                        쓸기 {({ "swipe-up": "↑", "swipe-down": "↓", "swipe-left": "←", "swipe-right": "→" } as Record<string, string>)[robot.kind] ?? ""}</span>}
+                    </div>)}
                   {cursor && pt && (   // 손가락 커서
                     <div className={cx("pointer-events-none absolute h-9 w-9 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white/90 bg-neutral-900/30 shadow-[0_0_0_1px_rgba(0,0,0,0.35)] transition-transform duration-75",
                       down && "scale-75 bg-neutral-900/50")} style={{ left: `${pt.x}%`, top: `${pt.y}%` }} />)}
@@ -206,7 +241,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                 <div className="rounded-md bg-muted px-2.5 py-2"><div className="mb-0.5 text-[11px] text-sub">단계 대상</div><Mono className="break-all">{selector}</Mono></div>
                 <div className="grid grid-cols-2 gap-1.5">
                   {actions.map(([label, step, Icon], i) => (
-                    <Button key={label} variant={i === 0 ? "primary" : "secondary"} size="sm" disabled={working} onClick={() => doStep(step, i === 0 ? sel : null)}
+                    <Button key={label} variant={i === 0 ? "primary" : "secondary"} size="sm" disabled={working} onClick={() => doStep(step)}
                       className={i === 0 ? "col-span-2" : ""}><Icon className="h-3.5 w-3.5" />{label}</Button>
                   ))}
                 </div>
