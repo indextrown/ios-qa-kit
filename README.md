@@ -280,6 +280,8 @@ cp secrets.example.txt secrets.txt
 | 여러 시나리오를 한 번에 | `qakit run 'home-*' --reuse-app` (끝에 통과·실패 요약) |
 | 시나리오를 빠르게 반복 실행 | `qakit run <시나리오> --serve` ([상주 실행기](#빠르게-돌리고-눌러-보기-qakit-serve--qakit-do)) |
 | 화면을 한 단계씩 눌러 보기 | `qakit do 'tap: <ID>'` · `qakit do dump` |
+| 눌러 본 단계를 시나리오로 | `qakit do save <이름>` (`qakit do launch`부터 통과한 단계로 초안) |
+| CI에서 태그로 골라 보고서까지 | `qakit run --tag smoke --junit report.xml` (종료 코드 1 앱 실패 · 2 환경 문제) |
 | 값을 바꿔 실행 (매개변수) | `qakit run <시나리오> --var ship="선박명"` |
 | 마지막 실패 다시 보기 | `qakit summarize` |
 | 성능 측정 (시나리오 후 30분) | `qakit run <시나리오> --bench 30m` |

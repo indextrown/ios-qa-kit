@@ -6,7 +6,7 @@
 //  앱마다 Swift 테스트를 작성·컴파일하지 않고 파일만으로 QA를 돌린다.
 //
 //  단계(step) — 맵 하나에 동작 키 하나:
-//    tap: <대상>                         기다렸다가 탭
+//    tap: <대상> [expect: <조건>]        기다렸다가, 위치가 멈추면 탭. expect: 누른 뒤 맞아야 할 조건 (누르기 전에 이미 맞으면 실패)
 //    input: { tap?: <대상>, alert: 글자, confirm: 버튼 }   시스템 입력 알림에 입력
 //    type: { into: <대상>, text: 글자 }
 //    wait: <대상> | { for: <대상>, timeout: 초 }
@@ -253,7 +253,18 @@ public final class QAScenarioRunner {
         } else if let target = step["tap"] {
             let element = resolve(target)
             try waitFor(element, timeout: number(step["timeout"]) ?? 10, what: target)
+            // 기대 효과(expect:): 누르기 전에 이미 맞으면 탭이 무엇을 했는지 알 수 없으므로 실패로 본다
+            let effect = step["expect"]
+            if let effect, try check(effect) {
+                throw fail("누르기 전에 이미 기대 효과가 맞음 → 탭의 효과를 확인할 수 없음: \(compact(effect))")
+            }
+            waitUntilSettled(element)
             element.tap()
+            if let effect {
+                guard try evaluate(effect, timeout: number(step["expect-timeout"]) ?? 10) else {
+                    throw fail("탭 뒤 기대 효과가 나타나지 않음 (탭이 무시됐거나 다른 곳에 닿았을 수 있음): \(compact(effect))")
+                }
+            }
 
         } else if let spec = step["input"] as? [String: Any] {
             if let tapTarget = spec["tap"] {
@@ -667,6 +678,19 @@ public final class QAScenarioRunner {
             if element.exists { return }
         } while Date() < deadline
         throw fail("\(Int(timeout))초 안에 나타나지 않음: \(compact(what))")
+    }
+
+    /// 누르기 직전: 요소 위치가 두 번 연달아 같을 때까지 기다린다 (최대 2초). 화면 전환·스크롤·애니메이션 중에
+    /// 누르면 앱이 탭을 무시하거나 다른 곳에 닿는다. 이미 멈춰 있으면 0.1초 한 번만 본다.
+    private func waitUntilSettled(_ element: XCUIElement, maxWait: TimeInterval = 2) {
+        let deadline = Date().addingTimeInterval(maxWait)
+        var last = element.frame
+        while Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            let now = element.frame
+            if now == last { return }
+            last = now
+        }
     }
 
     private func swipe(_ element: XCUIElement, _ dir: String) {

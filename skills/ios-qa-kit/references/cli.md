@@ -15,10 +15,13 @@
 | `qakit dump-ui [--attach] [--wait-id ID] [--settle 초] [--print]` | 화면 구조 → `results/ui-dump.txt` |
 | `qakit serve [--stop\|--status] [--idle 초] [--no-launch] [--device 이름]` | 상주 실행기. 실기기는 `--device`. 포트는 qakit이 정해 넘긴다. USB면 Mac이 usbmuxd로 기기 안 `127.0.0.1:<포트>`에 붙고, Wi-Fi면 실행기를 CoreDevice 터널의 기기 쪽 주소(`devicectl`의 `tunnelIPAddress`, 예: `fdxx::1`)에만 열어 그 주소로 붙는다 (같은 Wi-Fi의 다른 기기에서는 안 보임). 실행기(XCUITest)를 백그라운드로 띄워 두고 명령만 주고받는다. 상태 파일 `~/.qakit/serve/<udid>.json`. `--status`: 떠 있는지, `--stop`: 멈춤, `--idle`: 명령이 없으면 스스로 끝내는 시간(기본 1800초), `--no-launch`: 시작할 때 앱을 띄우지 않음. 떠 있으면 `qakit run`이 자동으로 이쪽으로 돈다. `test`·`dump-ui`는 시작 전에 상주 실행기를 멈춘다 |
 | `qakit do '<단계>' [--timeout 초]` | 시나리오 단계 하나를 바로 실행 (1~2초, 없으면 상주 실행기를 띄움 1분 안팎. 그때는 "실행기 시작 포함 전체 N초"도 출력). 단계 문법은 `.qa.yml`과 같다 (`use:`는 펼쳐 실행). 한 번에 단계 하나. 앱 상태·변수는 다음 `qakit do`로 이어진다. 실패하면 ❌ 원인 + `results/do-fail-dump.txt`, 종료 코드 1, 실행기는 유지. `--timeout`(기본 120초)을 넘기면 실행기를 멈춘다(다음 명령 때 다시 띄움) |
+| `qakit do steps` / `qakit do save <이름> [--force]` | **`qakit do`로 통과한 단계는 기록된다** (`.qakit/do-steps.jsonl`, 실패한 단계는 빠짐, `qakit do launch`부터 새로 시작). `steps`: 기록 보기. `save`: 그 단계로 `scenarios/<이름>.qa.yml` 초안을 쓰고 형식·ID를 바로 검사 (있으면 `--force` 없이 덮어쓰지 않음) |
 | `qakit do dump [--settle 초]` / `launch` / `reset` / `ping` | `dump`: 지금 화면 구조 출력 + `results/ui-dump.txt`. `launch`: 앱 다시 실행 + 변수 비움. `reset`: 변수만 비움(앱 그대로). `ping`: 응답 시간·앱 상태 |
 | `qakit test [필터...] [--reset]` | 테스트 실행. 필터 예: `LoginFlowTests`, `LoginFlowTests/test_x`. `--reset`: 앱 재설치+키체인 초기화 |
 | `qakit check [시나리오...]` | 시나리오 형식·ID 정적 검사 (실행 없이) |
 | `qakit run <시나리오> <시나리오> …` / `qakit run 'home-*'` | 여러 개를 차례로. 패턴은 `scenarios/`의 이름에 맞춰 펼친다 (zsh에서는 따옴표 필수). 준비(워크트리 최신화·앱 변경 확인·ID 검사)와 README 갱신은 한 번만, 판정·결과 폴더는 시나리오마다. 하나가 실패해도 나머지를 돌리고 끝에 요약(실패하면 종료 코드 1, 다시 돌릴 명령 안내). **연속한 두 시나리오가 같은 원인·같은 단계에서 실패하면 환경 문제(로그아웃·서버 점검 등)로 보고 멈춘다** (`--keep-going`: 끝까지, `--fail-fast`: 첫 실패에서 멈춤). `--reuse-app`과 같이 쓰면 앱도 이어서 쓴다. `--bench`는 하나만 |
+| `qakit run --tag <태그> [--exclude-tag <태그>]` | 시나리오 맨 위 `tags:`로 고른다 (이름·패턴과 함께 쓰면 그 안에서 고름) |
+| `qakit run … --junit <파일>` | JUnit XML 보고서 (CI용). 앱 판정 실패는 `failure`, 환경·설정 실패는 `error`, 돌리지 않은 것은 `skipped` |
 | `qakit run <시나리오> --reuse-app` | 앱이 이미 시작 화면(시나리오의 `start:` 조건)이면 다시 켜지 않는다 (= `launch: reuse`). `start:`가 없거나 화면이 다르면 다시 켠다. `--reset`이면 무시. 자세히는 scenario-language.md "앱 재실행 생략" |
 | `qakit run <시나리오> [--serve\|--no-serve] [--timeout 초]` | 이 작업공간용 상주 실행기가 떠 있으면 자동으로 그쪽으로 돈다 (xcodebuild 준비 생략, 시나리오당 약 8초 빠름). `--serve`: 없으면 띄워서. `--no-serve`: 떠 있어도 xcodebuild로 (상주 실행기는 멈춤). `--timeout`: 상주 실행기로 돌 때 제한 시간(기본 600초). `--reset`이면 실행기를 새로 띄운다. `--bench`는 늘 xcodebuild. 실기기도 상주 실행기로 (시나리오의 `dump:` 단계 파일은 응답으로 받아 같은 곳에 쓴다). 결과 폴더·`latest`·실행 기록(`"via": "serve"`)·실패 요약은 같고, xcresult 대신 `failure.png`·`failure-dump.txt`를 남긴다 |
 | `qakit run <시나리오> [--reset] [--var 키=값 ...] [--bench 시간 [--no-profile]] [--no-check]` | 시나리오 파일 실행. `--var`: `vars` 기본값을 이번 실행 값으로 덮어씀 (예: `--var ship="ULTRA FOREST"`). `--bench <시간>`: 시나리오가 끝난 화면 그대로 그 시간 동안 (단위 필수: `30s`·`5m`·`1h`·`1h30m`, `30초`·`5분`·`1시간`도 됨. 단위가 없으면 오류, 최소 5초) CPU·메모리(1초 단위, `ps`) + 함수별 CPU(macOS `sample`, 10ms 간격. 1분 이하는 전체, 더 길면 3분마다 20초씩. 권한 불필요) → 실행 폴더의 `bench-*`. 요약에 직접 CPU를 쓴 함수·앱 코드 기준 상위 10개. `--no-profile`: CPU·메모리만 |
@@ -26,6 +29,8 @@
 | `qakit save -m "…"` | 결과물 목록·해시(`qa.lock.json`) + 보관소 `~/.qakit/archive/<이름>/` 복사. git 커밋은 하지 않음 |
 | `qakit restore [--from 이름 --to QA]` | 보관소에서 AI 없이 복구 |
 | `qakit summarize [xcresult \| 실행 폴더]` | 실패 요약 (기본: 마지막 실행). 상주 실행기로 돈 `run`은 그 실행 폴더의 `summary.txt` |
+
+**`qakit run` 종료 코드**: `0` 모두 통과 · `1` 앱 판정 실패가 하나라도 있음 (환경 실패와 섞여도 1) · `2` 실행 환경·설정 문제만 (실행기가 안 뜸·연결 끊김·시간 초과, 앱 미설치, 시나리오·태그 없음, ID 검사 실패, 옵션 오류). CI에서 1은 앱 회귀, 2는 인프라로 나눠 다룬다.
 
 환경 변수 `QAKIT_TIMING=1`: 명령이 끝날 때 qakit 단계별 걸린 시간과, 상주 실행기로 돈 `run`이면 실행기 안 시간(앱 실행·단계·끼어드는 화면 확인)과 오래 걸린 단계 5개를 출력한다 (느릴 때 어디인지 보기). 실행기 안 단계별 시간은 늘 결과 폴더 `output.log`의 `timing:` 아래에 남는다.
 
