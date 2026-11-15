@@ -315,6 +315,13 @@ def cmd_ui(args):
             return None, "시나리오 이름은 영문 소문자·숫자·- 만 (예: login-03-empty-password)"
         sc_tags = [t.strip() for t in body.get("tags") or [] if re.fullmatch(r"[A-Za-z0-9가-힣_-]+", str(t).strip())]
         sc_start = str(body.get("start") or "").strip() or None
+        context = None
+        if body.get("fromSession"):   # AI QA 결과 → 시나리오
+            src_dir = ui_safe_dir(ws, str(body["fromSession"]))
+            if not src_dir or src_dir.parent != (ws.results_dir / "ai").resolve():
+                return None, "바탕이 될 AI 세션을 찾지 못함"
+            context = ai_session_context(ws, src_dir)
+            mode = "scenario"
         if sc_start and not (ws.root / "steps" / f"{sc_start}.qa.yml").exists():
             return None, f"공통 단계가 없습니다: steps/{sc_start}.qa.yml"
         if not udid:
@@ -331,11 +338,14 @@ def cmd_ui(args):
         d.mkdir(parents=True, exist_ok=True)
         (d / "meta.json").write_text(json.dumps({"client": eng["name"], "goal": goal, "via": "qakit ui", "minutes": minutes,
                                                  "mode": mode, **({"name": sc_name} if sc_name else {}),
+                                                 **({"fromSession": str(body["fromSession"])} if body.get("fromSession") else {}),
                                                  "turns": turns, "started": datetime.datetime.now().isoformat(timespec="seconds")},
                                                 ensure_ascii=False), encoding="utf-8")
-        prompt = ai_scenario_prompt(goal, minutes, sc_name, sc_tags, sc_start) if mode == "scenario" \
+        read_src = mode == "scenario" and body.get("readSource", True) is not False and bool(ws.app_dir)
+        prompt = ai_scenario_prompt(goal, minutes, sc_name, sc_tags, sc_start, source=str(ws.app_dir) if read_src else None,
+                                    context=context) if mode == "scenario" \
             else ai_prompt(goal, minutes, bool(body.get("save")))
-        cmd = ai_command(engine, ws, d, prompt, turns)
+        cmd = ai_command(engine, ws, d, prompt, turns, read_source=read_src)
         try:
             proc = subprocess.Popen(cmd, cwd=str(ws.root), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                     stderr=open(d / "agent.err", "w"), text=True, start_new_session=True)

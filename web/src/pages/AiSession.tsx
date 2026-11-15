@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Bug, CheckCircle2, XCircle, Wrench, MessageSquare, Info, ListChecks, FileText } from "lucide-react";
-import { fileUrl, get, type AiSession as Summary, type Job } from "../lib/api";
+import { ArrowLeft, Bot, Bug, CheckCircle2, XCircle, Wrench, MessageSquare, Info, ListChecks, FileText } from "lucide-react";
+import { fileUrl, get, scenarioFromSession, type AiSession as Summary, type Job } from "../lib/api";
 import { cx } from "../lib/util";
 import { SaveScenario } from "../components/SaveScenario";
-import { Badge, Card, Empty, Mono, Spinner } from "../components/ui";
+import { Badge, Button, Card, Empty, Mono, Spinner } from "../components/ui";
 import type { AiRow } from "../components/AiActivity";
 
 interface Issue { n: number; title: string; severity: string; steps: string[]; expected: string; actual: string; screenshot: string | null; video?: string | null }
@@ -34,6 +34,10 @@ export function AiSession({ name, job, refreshJob }: { name: string; job: Job | 
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-semibold">{d.goal ?? "AI QA (터미널에서 연결)"}</h1>
             {d.issues > 0 ? <Badge tone="bad">문제 {d.issues}</Badge> : d.report ? <Badge>문제 없음</Badge> : null}
+            {(d.report || d.stepList.length > 0) && (
+              <Button variant="primary" className="ml-auto" title="이 결과를 바탕으로 AI가 화면·앱 소스를 보며 시나리오를 만든다"
+                onClick={() => scenarioFromSession(d.dir, d.goal).catch((e) => setError(String(e.message)))}><Bot className="h-3.5 w-3.5" />이 결과로 시나리오 만들기</Button>
+            )}
           </div>
           <div className="mb-6 flex flex-wrap gap-x-5 gap-y-1 text-[12px] text-sub">
             <span className="font-mono">{aiWhen(d.started)}</span>
