@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>qakit</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">qakit <span id="ws-name" class="muted"></span></div>
+  <div id="ws-meta" class="meta"></div>
+</header>
+<div class="layout">
+  <nav class="side">
+    <a href="#/runs" data-nav="runs">실행 기록</a>
+    <a href="#/scenarios" data-nav="scenarios">시나리오</a>
+  </nav>
+  <main id="main"><p class="muted">불러오는 중…</p></main>
+  <aside class="live">
+    <div class="live-head">
+      <strong>라이브 화면</strong>
+      <span id="live-device" class="muted"></span>
+    </div>
+    <div class="live-controls">
+      <button id="live-toggle" type="button">켜기</button>
+      <label>간격
+        <select id="live-interval">
+          <option value="500">0.5초</option>
+          <option value="1000" selected>1초</option>
+          <option value="2000">2초</option>
+          <option value="5000">5초</option>
+        </select>
+      </label>
+    </div>
+    <div class="phone"><img id="live-img" alt="시뮬레이터 화면"><p id="live-empty" class="muted">켜기를 누르면 시뮬레이터 화면이 보입니다 (보기 전용)</p></div>
+    <p id="live-status" class="muted small"></p>
+  </aside>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -982,6 +982,14 @@ def execute_xctest(ws, cmd, extra_env, label, ts, xcresult, quiet, history_name=
     return proc.returncode == 0, xcresult, "".join(lines)
 
 
+def results_rel(ws, path):
+    """결과 폴더의 results/ 기준 상대 경로 (UI가 실행 기록과 결과 폴더를 잇는다)."""
+    try:
+        return str(Path(path).resolve().relative_to(ws.results_dir.resolve()))
+    except ValueError:
+        return None
+
+
 def record_history(ws, xcresult, kind, scenario=None):
     """실행 기록 한 줄씩 (history.jsonl): 언제, 어느 앱 상태에서, 무엇이 통과/실패했는지."""
     try:
@@ -1007,6 +1015,7 @@ def record_history(ws, xcresult, kind, scenario=None):
                 "test": scenario or c.get("nodeIdentifier", c.get("name")),
                 "result": c.get("result"),
                 "seconds": round(c.get("durationInSeconds", 0), 1),
+                "dir": results_rel(ws, Path(xcresult).parent),
                 "app": {k: state.get(k) for k in ("branch", "commit", "dirtyFiles") if k in state},
                 "kit": kit_version(),
             }, ensure_ascii=False) + "\n")
@@ -2438,7 +2447,7 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
     with open(ws.root / "history.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps({
             "at": datetime.datetime.now().isoformat(timespec="seconds"), "kind": "run", "test": name,
-            "result": "Passed" if success else "Failed", "seconds": seconds, "via": "serve",
+            "result": "Passed" if success else "Failed", "seconds": seconds, "via": "serve", "dir": results_rel(ws, rd),
             "app": {k: state.get(k) for k in ("branch", "commit", "dirtyFiles") if k in state},
             "kit": kit_version(),
         }, ensure_ascii=False) + "\n")
@@ -3908,6 +3917,241 @@ def do_save(ws, name, force=False):
     ok("형식·ID 검사 통과 → 다듬은 뒤 qakit run " + name)
 
 
+# ─────────────────────────────── 명령: ui (docs/PLAN.md "UI 설계") ───────────────────────────────
+
+UI_DIR = KIT_DIR / "ui"
+RUN_DIR_RE = re.compile(r"^(\d\d)-(\d\d)-(\d\d)_([a-z]+(?:-[0-9a-z]+)?)(?:_(.+))?$")
+
+
+def ui_history(ws, limit=20000):
+    try:
+        lines = (ws.root / "history.jsonl").read_text(encoding="utf-8").splitlines()[-limit:]
+    except OSError:
+        return []
+    rows = []
+    for line in lines:
+        try:
+            rows.append(json.loads(line))
+        except ValueError:
+            pass
+    return rows
+
+
+def ui_runs(ws, limit=300):
+    """결과 폴더(results/<날짜>/<시-분-초>_<종류>_<이름>) + 실행 기록 → 최근 실행 목록."""
+    hist = ui_history(ws)
+    by_dir = {r["dir"]: r for r in hist if r.get("dir")}
+    by_test = {}
+    for r in hist:
+        try:
+            by_test.setdefault(r.get("test"), []).append((datetime.datetime.fromisoformat(r["at"]), r))
+        except (KeyError, ValueError, TypeError):
+            pass
+    dirs = []
+    for day in ws.results_dir.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]"):
+        dirs += [d for d in day.iterdir() if d.is_dir() and RUN_DIR_RE.match(d.name)]
+    dirs.sort(key=lambda d: (d.parent.name, d.name), reverse=True)
+    out = []
+    for d in dirs[:limit]:
+        m = RUN_DIR_RE.match(d.name)
+        kind, rest = m.group(4), m.group(5) or ""
+        name, _, device = rest.partition("_")
+        rel = f"{d.parent.name}/{d.name}"
+        start = datetime.datetime.fromisoformat(f"{d.parent.name}T{m.group(1)}:{m.group(2)}:{m.group(3)}")
+        row = by_dir.get(rel)
+        if row is None:   # 예전 기록(dir 없음): 같은 이름, 시작 뒤 실행 시간 안에 끝난 기록
+            for at, r in by_test.get(name, []):
+                if start <= at <= start + datetime.timedelta(seconds=float(r.get("seconds") or 0) + 600):
+                    row = r
+                    break
+        result = row.get("result") if row else None
+        summary = d / SERVE_SUMMARY
+        if result is None and summary.exists():
+            result = "Passed" if "통과 1 / 실패 0" in summary.read_text(encoding="utf-8")[:200] else "Failed"
+        out.append({"dir": rel, "kind": kind, "name": name or kind, "device": device or None,
+                    "start": start.isoformat(), "result": result or "unknown",
+                    "seconds": row.get("seconds") if row else None,
+                    "via": (row or {}).get("via") or ("serve" if summary.exists() else
+                                                      "xcodebuild" if (d / "result.xcresult").exists() else None),
+                    "app": (row or {}).get("app"), "kit": (row or {}).get("kit"),
+                    "screenshot": (d / "failure.png").exists()})
+    return out
+
+
+def ui_safe_dir(ws, rel):
+    d = (ws.results_dir / (rel or "")).resolve()
+    if ws.results_dir.resolve() not in d.parents or not d.is_dir():
+        return None
+    return d
+
+
+def ui_timings(log_text):
+    """output.log의 timing: 아래 → [{depth, seconds, name, interrupts}]"""
+    rows, on = [], False
+    for line in log_text.splitlines():
+        if line.startswith("timing:"):
+            on = True
+            continue
+        if on:
+            m = re.match(r"^  ((?:  )*)\s*([\d.]+)초  (.*?)(?:  \(끼어드는 화면 ([\d.]+)초\))?$", line)
+            if not m:
+                break
+            rows.append({"depth": len(m.group(1)) // 2, "seconds": float(m.group(2)), "name": m.group(3),
+                         "interrupts": float(m.group(4)) if m.group(4) else 0})
+    return rows
+
+
+def ui_run_detail(ws, rel):
+    d = ui_safe_dir(ws, rel)
+    if d is None:
+        return None
+    mask = masker(ws.secrets())
+    read = lambda f: mask(f.read_text(encoding="utf-8", errors="replace")) if f.exists() else None
+    summary = read(d / SERVE_SUMMARY)
+    if summary is None and (d / "result.xcresult").exists():
+        try:
+            summary = summarize(d / "result.xcresult", mask)
+        except Exception as e:  # noqa: BLE001 — 결과 파일이 깨졌어도 나머지는 보여 준다
+            summary = f"(요약을 만들지 못함: {e})"
+    log = read(d / "output.log") or ""
+    images = [str(f.relative_to(d)) for f in sorted(d.rglob("*.png")) if "result.xcresult" not in f.parts]
+    dumps = [str(f.relative_to(d)) for f in sorted(d.rglob("*.txt")) if f.name != SERVE_SUMMARY
+             and "result.xcresult" not in f.parts]
+    timing_head = next((l[len("timing: "):] for l in log.splitlines() if l.startswith("timing: ")), None)
+    return {"dir": rel, "summary": summary, "log": "\n".join(log.splitlines()[-400:]),
+            "timingHead": timing_head, "timings": ui_timings(log), "images": images, "dumps": dumps,
+            "files": sorted(f.name for f in d.iterdir())}
+
+
+def ui_scenarios(ws):
+    hist = [r for r in ui_history(ws) if r.get("kind") == "run"]
+    by_test = {}
+    for r in hist:
+        by_test.setdefault(r.get("test"), []).append(r)
+    out = []
+    for f in sorted((ws.root / "scenarios").glob("*.qa.yml")):
+        name = f.name[:-len(".qa.yml")]
+        try:
+            text = f.read_text(encoding="utf-8")
+            data = scenario_tools.parse_yaml(text) or {}
+        except Exception:  # noqa: BLE001
+            text, data = "", {}
+        desc = []
+        for line in text.splitlines()[1:4]:
+            if not line.startswith("#"):
+                break
+            desc.append(line.lstrip("# ").strip())
+        tags = data.get("tags") if isinstance(data, dict) else None
+        recent = by_test.get(name, [])[-10:]
+        results = [r.get("result") == "Passed" for r in recent]
+        out.append({"name": name, "title": (data.get("name") if isinstance(data, dict) else None) or name,
+                    "description": " ".join(desc), "tags": tags if isinstance(tags, list) else ([tags] if tags else []),
+                    "recent": results, "last": recent[-1] if recent else None,
+                    "flaky": len(set(results)) > 1})
+    return out
+
+
+def cmd_ui(args):
+    """결과 보기 + 시뮬레이터 라이브 화면 (로컬 웹, 127.0.0.1). docs/PLAN.md "UI 설계" U1."""
+    import http.server
+    import secrets as pysecrets
+    import threading
+    import urllib.parse
+    ws = find_workspace(args.workspace)
+    token = pysecrets.token_urlsafe(18)
+    udid = None if ws.device else simulator_udid(ws.simulator)[0]
+    screen = {"at": 0.0, "data": None, "lock": threading.Lock()}
+    static = {"app.js": "text/javascript; charset=utf-8", "style.css": "text/css; charset=utf-8"}
+
+    def grab_screen():
+        with screen["lock"]:
+            if time.time() - screen["at"] < 0.4 and screen["data"]:
+                return screen["data"]
+            tmp = Path(tempfile.mkstemp(suffix=".jpg")[1])
+            try:
+                r = run(["xcrun", "simctl", "io", udid, "screenshot", "--type=jpeg", str(tmp)], check=False)
+                data = tmp.read_bytes() if r.returncode == 0 else None
+            finally:
+                tmp.unlink(missing_ok=True)
+            screen.update(at=time.time(), data=data)
+            return data
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def send(self, code, body, ctype="application/json; charset=utf-8", extra=None):
+            data = body if isinstance(body, bytes) else (
+                body.encode() if isinstance(body, str) else json.dumps(body, ensure_ascii=False).encode())
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            url = urllib.parse.urlparse(self.path)
+            q = {k: v[0] for k, v in urllib.parse.parse_qs(url.query).items()}
+            if q.get("token") == token:   # 처음 여는 링크의 토큰 → 쿠키로 바꾸고 주소에서 뺀다
+                return self.send(302, b"", "text/plain", {
+                    "Set-Cookie": f"qakit_ui={token}; HttpOnly; SameSite=Strict; Path=/", "Location": url.path or "/"})
+            cookies = dict(c.strip().split("=", 1) for c in (self.headers.get("Cookie") or "").split(";") if "=" in c)
+            if cookies.get("qakit_ui") != token:
+                return self.send(401, "qakit ui: 터미널에 나온 링크(토큰 포함)로 여세요", "text/plain; charset=utf-8")
+            path = url.path
+            try:
+                if path == "/":
+                    return self.send(200, (UI_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
+                if path.startswith("/static/") and path[8:] in static:
+                    return self.send(200, (UI_DIR / path[8:]).read_bytes(), static[path[8:]])
+                if path == "/api/info":
+                    state = app_state(ws)
+                    return self.send(200, {"name": ws.name, "simulator": None if ws.device else ws.simulator,
+                                           "device": ws.device["name"] if ws.device else None,
+                                           "bundleId": ws.bundle_id, "kit": kit_version(), "precheck": ws.precheck,
+                                           "app": {k: state.get(k) for k in ("branch", "commit", "dirtyFiles")}})
+                if path == "/api/runs":
+                    return self.send(200, ui_runs(ws, int(q.get("limit", 300))))
+                if path == "/api/run":
+                    detail = ui_run_detail(ws, q.get("dir"))
+                    return self.send(200, detail) if detail else self.send(404, {"error": "결과 폴더 없음"})
+                if path == "/api/file":
+                    d = ui_safe_dir(ws, q.get("dir"))
+                    f = (d / q.get("name", "")).resolve() if d else None
+                    if not f or d not in f.parents or not f.is_file():
+                        return self.send(404, {"error": "파일 없음"})
+                    if f.suffix == ".png":
+                        return self.send(200, f.read_bytes(), "image/png")
+                    return self.send(200, masker(ws.secrets())(f.read_text(encoding="utf-8", errors="replace")),
+                                     "text/plain; charset=utf-8")
+                if path == "/api/scenarios":
+                    return self.send(200, ui_scenarios(ws))
+                if path == "/api/screen":
+                    if not udid:
+                        return self.send(404, {"error": "라이브 화면은 시뮬레이터만 (실기기는 아직)"})
+                    data = grab_screen()
+                    return self.send(200, data, "image/jpeg") if data else self.send(503, {"error": "스크린샷 실패 (시뮬레이터가 꺼짐?)"})
+                return self.send(404, {"error": "없는 주소"})
+            except BrokenPipeError:
+                pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
+    url = f"http://127.0.0.1:{server.server_address[1]}/?token={token}"
+    ok(f"qakit ui: {url}")
+    info("결과 보기 + 시뮬레이터 라이브 화면 (보기 전용). 끝내려면 Ctrl+C")
+    if not args.no_open:
+        run(["open", url], check=False)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print()
+    finally:
+        server.server_close()
+
+
 def simulator_viewer_app():
     """시뮬레이터 화면 앱: Xcode 27+는 Device Hub, 이전은 Simulator. 없으면 None."""
     dev = Path(run(["xcode-select", "-p"], check=False).stdout.strip() or "/Applications/Xcode.app/Contents/Developer")
@@ -4180,6 +4424,11 @@ def main():
     p.add_argument("--timeout", type=int, default=120, help="이 시간(초) 안에 안 끝나면 실행기를 멈춤 (기본 120)")
     p.add_argument("--settle", type=float, default=0.5, help="dump 전에 기다릴 시간(초)")
     p.set_defaults(func=cmd_do)
+
+    p = sub.add_parser("ui", help="결과 보기 + 시뮬레이터 라이브 화면 (로컬 웹 127.0.0.1, 브라우저로 엶)")
+    p.add_argument("--port", type=int, default=0, help="포트 (기본: 빈 포트)")
+    p.add_argument("--no-open", action="store_true", help="브라우저를 열지 않고 주소만 출력")
+    p.set_defaults(func=cmd_ui)
 
     p = sub.add_parser("show", help="시뮬레이터 화면(Device Hub / Simulator)을 띄우고 앱 실행 — 로그인 등 직접 만질 때")
     p.add_argument("--no-launch", action="store_true", help="앱은 실행하지 않음")
