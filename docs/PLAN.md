@@ -645,6 +645,60 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 | 시뮬레이터 충돌 | `qakit do`·`qakit run`의 시뮬레이터 잠금 그대로 |
 | CLI 옵션 변경 | 엔진별 어댑터, 시작할 때 버전 확인 (A3) |
 
+## AI QA 직접 터치 설계 — tapflow 방식 (다음 단계)
+
+> 상태: 시험 ✅ (2026-11-16) — 원인과 방식 확인, AutoID 확인. 다음 H1 계속 떠 있는 터치 도우미.
+
+### 왜
+
+지금 AI QA의 누르기는 XCUITest `element.tap()`이다. 탭 하나에 0.8~2.2초(요소 찾기·위치 멈춤·앱이 조용해질 때까지 기다림)가 들고, 실제 사용자처럼 빨리 누를 때 생기는 버그를 가리며, 길게 누르기·끌기·시스템 화면은 못 한다. tapflow는 손가락처럼 화면에 **터치 신호를 직접** 넣는다. AI QA(문제 찾기)에는 이쪽이 맞다. 시나리오 실행·시나리오 만들기·저장 전 재생은 지금처럼 XCUITest(ID로, 공개 API, 안정적).
+
+### 시험에서 알게 된 것 (macOS 27.0.1 · Xcode 27.0 27A266a · iOS 27.0 시뮬레이터 · 시범 앱)
+
+| 조건 | 직접 터치 |
+|---|---|
+| qakit 상주 실행기가 **앱을 켜고**(XCUIApplication.launch) 붙어 있을 때 — 지금 qakit | ❌ 무시 (tapflow 자체 도우미 바이너리도 같음) |
+| Device Hub를 닫아도 | ❌ (원인 아님) |
+| 상주 실행기를 멈추면 | ✅ |
+| 상주 실행기가 **앱을 켜지 않고 붙기만**(`--no-launch`, `XCUIApplication(bundleIdentifier:)`로 화면 구조만 읽음) | ✅ 읽기 → 검색 탭 → 읽기(검색 화면) → 뒤로 → 읽기(홈), 읽기 1.0~1.2초 |
+
+- **XCUITest가 켠 앱은 자동화 모드라 바깥 터치 신호를 무시한다.** 붙기만 해서 읽는 건 막지 않는다.
+- 터치 경로: `SimDeviceLegacyHIDClient`(SimulatorKit, Xcode 27은 `Contents/SharedFrameworks/`) + IOKit `IOHIDEventCreateDigitizerEvent`/`…FingerEvent` → `IndigoHIDMessageForTrackpadEventFromHIDEventRef` → 메시지 0x6c(와 0x10c)에 경로 표시 `UInt32(0x32)` → `sendWithMessage:freeWhenDone:…`. 좌표는 화면 대비 0~1. 마우스 방식(`IndigoHIDMessageForMouseNSEvent`)은 이 환경에서 막혀 있을 때 시험했고, 풀린 상태에선 디지타이저만 확인.
+- 한 번씩 띄우는 도우미는 0.85초(프레임워크 불러오기 0.5 + 준비 0.2 + 보내기 0.1) → **계속 떠 있는 도우미**여야 탭이 0.1초대.
+
+### tapflow는 어떻게 하나
+
+1. 앱은 `simctl launch`로 켠다 (XCUITest가 켜지 않음).
+2. 화면 구조는 상주 XCUITest 실행기(`TapflowTreeRunner`)가 `XCUIApplication(bundleIdentifier:).debugDescription`으로 **읽기만** — 켜기·앞으로 가져오기·XCUITest 탭 없음.
+3. 누르기는 계속 떠 있는 Swift `touch-helper`(stdin으로 9바이트 프레임: 종류·x·y)가 디지타이저 터치로. 준비됐다고 말하기 전 입력은 버려지므로 기다림. 탭은 최소 50ms 누름(`UISwitch`가 짧은 탭을 무시). 키보드는 `IndigoHIDMessageForKeyboardArbitrary`(한글 조합 포함).
+4. AI는 요소로 말하고, 실행기가 그 요소에 실제로 닿는 지점(탭 막대 등이 덮는 경우까지)을 계산해 그 좌표를 누른다.
+
+### AutoID (확인 ✅)
+
+`SIMCTL_CHILD_DYLD_INSERT_LIBRARIES=<QAAutoID.dylib> xcrun simctl launch --terminate-running-process <udid> <bundle> -AppleLanguages "(ko)" -AppleLocale ko_KR`
+
+- 앱 프로세스에 `QAAutoID.dylib`가 올라감 (`lsof`: 넣으면 1, 안 넣으면 0), 언어 인자도 들어감.
+- 마이 탭 화면 구조의 ID: XCUITest로 켠 앱 6개 = simctl+AutoID로 켠 앱 6개, 완전히 같음. 홈도 12개 같음 (시범 앱은 SwiftUI라 대부분 빌드 때 넣은 ID).
+
+### 단계
+
+| 단계 | 내용 |
+|---|---|
+| **H1. 터치 도우미** | `Tools/simtouch/simtouch.swift` (직접 작성): 계속 떠 있고 stdin 명령(tap·down·move·up·press·swipe)을 받음, 준비되면 알림, 디지타이저 경로. qakit이 처음 쓸 때 `swiftc`로 빌드 (simscreen처럼). 안 되면(비공개 API 바뀜) XCUITest 탭으로 |
+| **H2. 붙기만 하는 실행기** | `qakit serve --attach`: 앱은 simctl+AutoID로 켜고, 실행기는 화면 구조·조건 확인(wait·expect)만. `/dump`는 켠 앱이 없으면 떠 있는 앱에 붙어 읽음 (이 PR에 먼저 넣음) |
+| **H3. MCP 직접 터치 모드** | AI QA(문제 찾기)에서만: `launch`=simctl+AutoID, `tap`=대상(ID·라벨) → 화면 구조의 자리 → 직접 터치 (기록은 ID 단계), 새 도구 `long_press`·`drag`·`tap_point`(이름 없을 때만, "시나리오로 못 옮김" 표시). 글자 입력은 키 입력 신호 또는 붙여넣기 |
+| **H4. 확인·화면** | 커서는 그 좌표 그대로, 라이브 세션 손 조작에도 선택 (실험) |
+
+그대로인 것: 시나리오 실행·시나리오 만들기·저장 전 재생 = XCUITest. 직접 터치로 확인한 경로도 저장할 땐 XCUITest로 재생해 통과해야 남는다.
+
+### 위험
+
+| 위험 | 대응 |
+|---|---|
+| 비공개 API가 Xcode 업데이트로 바뀜 (tapflow도 Xcode 27에서 위치가 바뀌어 고침) | 실시간 화면처럼 안 되면 XCUITest 탭으로 자동 전환, 이유 표시 |
+| 직접 터치로 된 것이 XCUITest 재생에선 안 됨 (또는 반대) | 저장 전 XCUITest 재생 통과가 거름 |
+| AI QA 중 XCUITest로 켠 앱이 섞이면 터치가 조용히 무시됨 | 모드 시작 때 앱을 simctl로 다시 켜고, 탭 뒤 화면이 안 바뀌면 "터치가 무시됨"으로 알림 |
+
 ## 단계와 결과
 
 | 단계 | 내용 | 결과 |
@@ -661,6 +715,7 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 | 8. 상주 실행기 | 실행기를 한 번 띄워 두고 명령만 주고받기 ([설계](#상주-실행기-설계-다음-단계)) | R1 ✅ R2 ✅ R3 ✅ (`qakit do` 1~2초, `qakit run` 약 8초 단축). R4 ✅ R5 ✅ (실기기 USB·Wi-Fi) |
 | 9. UI | `qakit ui` ([설계](#ui-설계-다음-단계)) | U1~U5 ✅, 실시간 화면·커서·캡처 ✅ |
 | 10. AI QA | AI가 MCP로 앱을 직접 QA ([설계](#ai-qa-설계-다음-단계)) | A1 ✅ (`qakit mcp`, 실제 Claude Code에서 확인) · A2 ✅ (라이브 세션 AI 활동) · A3 ✅ (UI에서 AI QA 시작, 실제 Claude Code로 끝까지) · A4 ✅ (지난 세션·통과 단계 → 시나리오) |
+| 11. AI QA 직접 터치 | tapflow 방식 — 앱은 simctl, 실행기는 읽기만, 누르기는 터치 신호 ([설계](#ai-qa-직접-터치-설계--tapflow-방식-다음-단계)) | 시험 ✅ (원인: XCUITest가 켠 앱은 바깥 터치 무시) · AutoID ✅. 다음 H1 |
 
 ## 주요 결정과 배운 것
 

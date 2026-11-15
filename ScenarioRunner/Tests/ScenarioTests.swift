@@ -109,9 +109,11 @@ final class ScenarioTests: QATestCase {
         case "/dump":
             let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] ?? [:]
             let settle = (body["settle"] as? Double) ?? 0.5
-            if let app {
-                // 저장은 qakit 쪽에서 (실기기는 첨부가 쌓이지 않게)
-                do { json["dump"] = try QADump.run(app: app, settle: settle, save: false) } catch { ok = false; message = "\(error)" }
+            // 실행기가 켠 앱이 없으면(serve --no-launch) 떠 있는 앱에 붙기만 해서 읽는다 — 앞으로 가져오기·켜기 없이.
+            // XCUITest가 켠 앱은 바깥 터치 신호(직접 터치)를 무시하므로, 직접 터치 모드는 앱을 simctl로 켜고 이렇게 읽는다 (PLAN 'AI QA 직접 터치')
+            let target = app ?? XCUIApplication(bundleIdentifier: QAConfig.bundleId)
+            if app != nil || target.state != .notRunning {
+                do { json["dump"] = try QADump.run(app: target, settle: settle, save: false) } catch { ok = false; message = "\(error)" }
             } else {
                 ok = false
                 message = "앱이 실행되지 않음 (/launch 먼저)"
