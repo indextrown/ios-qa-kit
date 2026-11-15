@@ -360,6 +360,7 @@ cp secrets.example.txt secrets.txt
 4. [시나리오 파일로 QA (Swift 없이)](#시나리오-파일로-qa-swift-없이)
    - [빠르게 돌리고 눌러 보기 (`qakit serve` · `qakit do`)](#빠르게-돌리고-눌러-보기-qakit-serve--qakit-do)
    - [브라우저로 쓰기 (`qakit ui`)](#브라우저로-쓰기-qakit-ui)
+   - [AI가 직접 QA하기 (`qakit mcp`)](#ai가-직접-qa하기-qakit-mcp)
    - [실기기에서 실행 (`--device`)](#실기기에서-실행---device)
 5. [저장과 복구 (AI 없이)](#저장과-복구-ai-없이)
 
@@ -771,6 +772,38 @@ qakit ui --device i       # 시나리오 실행을 실기기에서 (라이브 �
 - 라이브 화면과 조작은 지금 시뮬레이터에서만 됩니다.
 - 실시간 화면은 Xcode의 비공개 부품(CoreSimulator)으로 시뮬레이터 화면 메모리를 읽습니다 (tapflow·idb와 같은 방식). Xcode가 바뀌어 안 되면 스크린샷으로 돌아가고 화면 아래에 이유가 나옵니다. 원리: [docs/live-screen.md](docs/live-screen.md) 보는 브라우저가 없으면 30초 뒤 멈춥니다.
 - 누르는 자리 표시는 시뮬레이터만 됩니다 (실행기가 `.qakit/taps.jsonl`에 남긴 자리를 읽음).
+
+<sub>[↑ 목차](#목차)</sub>
+
+---
+
+### AI가 직접 QA하기 (`qakit mcp`)
+
+시나리오를 쓰기 전에 "이 화면 QA해 줘"처럼 **AI(Claude Code·Codex)가 앱을 직접 눌러 보며** 확인하게 합니다. qakit이 MCP 서버로 도구를 주고, AI는 사용자가 이미 로그인한 Claude Code·Codex 그대로 씁니다 (qakit은 토큰을 다루지 않음).
+
+```bash
+cd ~/path/to/MyApp-qa/QA
+qakit mcp install --claude      # 이 폴더의 .mcp.json에 등록 → 여기서 claude를 열면 qakit 도구 사용 여부를 물음
+qakit mcp install --codex       # codex mcp add (codex가 없으면 ~/.codex/config.toml에 넣을 내용 출력)
+```
+
+```text
+qakit 도구로 검색 화면 QA해 줘. 빈 검색어, 아주 긴 검색어, 뒤로 가기까지 확인하고 문제는 보고해 줘.
+```
+
+| 도구 | 하는 일 |
+|---|---|
+| `get_testing_guide` | 확인할 항목, 여기서 못 하는 것, 거짓 버그 피하기, 보고 형식 (AI가 먼저 읽음) |
+| `launch` · `screen` · `screenshot` | 앱 새로 켜기, 화면 구조(텍스트), 작은 사진 (색·배치 볼 때만) |
+| `tap` · `type_text` · `swipe` · `wait_for` · `expect` · `step` | 시나리오 단계 그대로 (ID·라벨, 좌표 없음). `tap`에 `expect`를 주면 누른 효과까지 확인 |
+| `recorded_steps` · `save_scenario` | 통과한 단계 → `scenarios/`에 저장, **앱을 새로 켜고 재생해서 통과해야** 남음 (실패하면 `.qakit/drafts/`) |
+| `list_scenarios` · `run_scenario` | 있는 시나리오 보기·실행 (실패하면 "대신 이 대상?" 제안까지) |
+| `report_issue` | 재현한 문제만 (`reproduced: true`), 사진과 함께 `results/ai/<시각>/issues.md` |
+
+- AI가 누르는 것은 모두 ID·라벨 단계라, 확인한 경로가 그대로 시나리오가 되고 이후엔 AI 없이 돕니다.
+- 도구 호출은 `results/ai/<시각>/log.jsonl`에 남습니다. `qakit ui` 라이브 세션을 열어 두면 AI가 누르는 자리로 커서가 움직이는 것을 볼 수 있습니다.
+- 비밀번호는 `{secret:키}`로만 칩니다. 도구 결과의 비밀값은 가립니다.
+- `.mcp.json`에는 이 Mac의 경로가 들어 있으니 git에 올리지 않는 편이 좋습니다.
 
 <sub>[↑ 목차](#목차)</sub>
 

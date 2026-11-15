@@ -547,6 +547,63 @@ tapflow 대시보드처럼 보이게: 왼쪽 사이드바(실행 기록·시나�
 - 시뮬레이터 충돌: UI 조작(U3~)과 테스트 실행이 같은 기기를 쓰면 입력이 섞인다 → 지금의 시뮬레이터 잠금을 그대로.
 - tapflow와의 관계: "팀이 브라우저로 시뮬레이터를 손으로 만지기"가 주된 필요면 tapflow를 함께 쓰는 편이 낫다. 우리 UI는 ID 기반 시나리오·결과·실패 분석에 집중.
 
+## AI QA 설계 (다음 단계)
+
+> 상태: A1 ✅ (2026-11-15). 다음 A2 지켜보기.
+
+### 왜
+
+지금 AI는 **시나리오를 만들 때만** 쓴다 (스킬 → `qakit do`로 탐색 → `.qa.yml`). 시나리오를 쓰기 전 단계 — "이 화면 한번 QA해 줘", "회원가입부터 끝까지 이상한 데 없는지" — 를 AI가 직접 앱을 조작하며 하게 하고, 그 결과를 **ID 기반 시나리오**로 남겨 다음부터는 토큰 없이 돌린다. ("AI는 만들 때만" 원칙은 그대로: AI QA는 고를 수 있는 탐색 방식이고, 남는 것은 시나리오)
+
+tapflow에서 MCP를 가져오지 않았던 결정(위 "tapflow에서 참고한 것")을 바꾼다: 스킬 + 셸(`qakit do`)은 Claude Code에서만 되고 셸 권한이 넓다. MCP면 Codex 등 다른 AI에서도, 셸 없이 qakit 도구만 허용해 쓸 수 있다.
+
+### tapflow는 어떻게 하나
+
+tapflow는 AI를 직접 연결하지 않는다. **MCP 서버**(`@tapflowio/mcp-server`)를 주고, 사용자가 쓰는 Claude Code·Codex가 도구로 쓴다 (`query_ui_tree`·`tap`·`type_text`·`screenshot`·`run_flow`·`get_testing_guide` …). AI는 화면 구조를 먼저 읽고 사진은 시각적인 것만, 테스트 전에 `get_testing_guide`로 확인 목록·보고 형식을 받는다. 사람은 링크로 AI가 조작하는 기기를 커서·활동 기록과 함께 본다.
+
+### 인증
+
+qakit은 OAuth를 직접 하지 않는다. 사용자가 로그인해 둔 공식 CLI(`claude`, `codex`)를 부르거나(A3), 그 CLI가 qakit MCP를 부른다(A1). 토큰을 qakit이 보관하지 않아 유출·약관 문제를 피한다. 구독 로그인·API 키 사용 범위는 각 CLI 정책을 따른다 (CI는 API 키).
+
+### 단계
+
+| 단계 | 내용 | 결과물 |
+|---|---|---|
+| **A1. `qakit mcp`** | MCP 서버 (stdio, Python 표준 라이브러리). 도구: `screen`(화면 구조, 텍스트) · `screenshot`(작은 사진) · `launch` · `tap` · `type_text` · `swipe` · `wait_for` · `expect` · `step`(시나리오 단계 한 줄) — 모두 `qakit do` 단계 · `recorded_steps` · `list_scenarios` · `run_scenario` · `save_scenario`(저장 → 앱을 새로 켜고 재생 → 통과해야 남김) · `report_issue`(재현한 문제만, 사진과 함께 `results/ai/<시각>/`) · `get_testing_guide`. 서버 안내(instructions)로 순서·규칙. `qakit mcp install --claude`(작업공간 `.mcp.json`) · `--codex` | Claude Code·Codex에서 "로그인 화면 QA해 줘" |
+| **A2. 지켜보기** | 라이브 세션에 "AI 조작 중" + 활동 기록(도구 호출 순서, 이유). 커서·실시간 화면은 이미 있음 | 브라우저에서 AI 작업 보기 |
+| **A3. UI에서 시작** | "AI QA" 메뉴: 목표, 엔진(설치·로그인된 `claude`/`codex` 감지), 시간·횟수 한도, 시작/멈춤. 서버가 `claude -p … --mcp-config …` / `codex exec …`를 **qakit 도구만 허용**(셸·파일 수정 막음)으로 돌리고 진행을 보여 줌 | 터미널 없이 AI QA |
+| **A4. 결과** | `results/ai/<시각>/`: 보고서(문제·재현 단계·사진·영상), 쓴 단계, **제안 시나리오 초안** → 사람이 재생해 통과하면 저장. 실행 기록에서 보기 | 탐색 → 재사용 시나리오 |
+
+### A1 결과 (2026-11-15)
+
+`qakit mcp`: MCP stdio 서버 (JSON-RPC, 표준 라이브러리), 프로토콜 2025-06-18 / 2025-03-26 / 2024-11-05. 도구 15개는 `qakit do`·`run`·`do save`를 하위 프로세스로 부른다 (UI와 같은 방식, 시뮬레이터 잠금 그대로). 도구 호출은 `results/ai/<시각>/log.jsonl` (A2에서 보여 줄 활동 기록).
+
+| 확인 (시범 앱) | 결과 |
+|---|---|
+| 흉내 클라이언트: initialize·tools/list·도구 15개 | 통과. 화면 구조 43요소 1초, 탭+expect 2~5초, 사진 18KB 0.2초 |
+| `save_scenario` | `use: home` + 기록 2단계 저장 → 새로 켠 앱에서 재생 통과 22초. 잘못된 이름 거절 |
+| `report_issue` | `reproduced: false` 거절, true면 `issues.md` + 사진 |
+| **실제 Claude Code** (`claude -p`, qakit 도구만 허용) | 지침 읽기 → launch → screen → tap+expect → screen → expect → 뒤로 tap, 55초. 거짓 버그를 보고하지 않음 |
+
+배운 것:
+- `install`은 지금 실행 중인 qakit 경로를 등록해야 한다 (처음엔 PATH의 설치본을 등록해 `mcp`가 없는 옛 버전이 불림 → AI가 셸로 우회).
+- AI는 "누른 뒤 이전 버튼이 사라짐"(`missing`)을 자연스럽게 쓴다. 덮인 아래 화면 요소는 화면 구조에 남으므로, 탭 `expect` 안의 `missing`·`hidden`을 "누를 수 없음"으로 보게 실행기를 고침 (`visible`→hittable과 같은 이유).
+- `qakit do` 실패에도 "대신 이 대상?" 제안을 붙임 (AI가 가장 먼저 쓰는 정보). 같은 요소를 ID·라벨로 두 번 제안하지 않게.
+
+### qakit만의 점
+
+AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌표 탭 없음). 그래서 AI가 한 번 확인한 경로가 그대로 `.qa.yml`이 되고, 이후 AI 없이 돈다.
+
+### 위험
+
+| 위험 | 대응 |
+|---|---|
+| 토큰 비용 | 화면 구조(텍스트) 우선, 사진은 작게(440px)·요청할 때만. 세션 시간·횟수 한도(A3) |
+| AI의 잘못된 버그 보고 | `report_issue`는 재현했다고 밝혀야(`reproduced: true`) 받음. 사진 자동 첨부, A4에서 영상 |
+| 비밀번호 | AI는 `{secret:키}`만 씀. 도구 결과는 지금처럼 비밀값 가림 |
+| 시뮬레이터 충돌 | `qakit do`·`qakit run`의 시뮬레이터 잠금 그대로 |
+| CLI 옵션 변경 | 엔진별 어댑터, 시작할 때 버전 확인 (A3) |
+
 ## 단계와 결과
 
 | 단계 | 내용 | 결과 |
@@ -561,6 +618,8 @@ tapflow 대시보드처럼 보이게: 왼쪽 사이드바(실행 기록·시나�
 | 이후 | QA 워크트리, 시나리오 언어, AI 없는 저장·복구, 시뮬레이터 잠금, 앱 설정값 판정(pref/repeat/watch), QA README 자동 생성 | ✅ v0.2.0 ~ v0.4.0 |
 | 7. SwiftUI | QA 빌드 직전 소스에 ID 삽입 ([설계](#swiftui-지원-설계-다음-단계)) | S1 ✅ S2 ✅ S3 ✅ (시범 앱 로그인 화면 100%, `build-app`이 삽입·복원 자동). 다음 S4 둘째 앱 |
 | 8. 상주 실행기 | 실행기를 한 번 띄워 두고 명령만 주고받기 ([설계](#상주-실행기-설계-다음-단계)) | R1 ✅ R2 ✅ R3 ✅ (`qakit do` 1~2초, `qakit run` 약 8초 단축). R4 ✅ R5 ✅ (실기기 USB·Wi-Fi) |
+| 9. UI | `qakit ui` ([설계](#ui-설계-다음-단계)) | U1~U5 ✅, 실시간 화면·커서·캡처 ✅ |
+| 10. AI QA | AI가 MCP로 앱을 직접 QA ([설계](#ai-qa-설계-다음-단계)) | A1 ✅ (`qakit mcp`, 실제 Claude Code에서 확인). 다음 A2 |
 
 ## 주요 결정과 배운 것
 
