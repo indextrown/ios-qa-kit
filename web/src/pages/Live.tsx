@@ -4,6 +4,7 @@ import { fileUrl, get, post, screenUrl, type DoResult, type El, type Elements, t
 import { SaveScenario } from "../components/SaveScenario";
 import { RunScenario } from "../components/RunScenario";
 import { AiActivity } from "../components/AiActivity";
+import { RobotCursor } from "../components/RobotCursor";
 import { cx, store, stored } from "../lib/util";
 import { Badge, Button, Card, Empty, Mono, PageHeader } from "../components/ui";
 
@@ -11,7 +12,6 @@ import { Badge, Button, Card, Empty, Mono, PageHeader } from "../components/ui";
 const TYPE: Record<string, string> = { Button: "button", StaticText: "text", Text: "text", Image: "image", Cell: "cell", TextField: "textfield",
   SecureTextField: "securetextfield", Switch: "switch", Other: "other", CollectionView: "collectionview", ScrollView: "scrollview", Table: "table" };
 const PREFER = new Set(["Button", "Cell", "TextField", "SecureTextField", "Switch", "Link", "SegmentedControl"]);
-interface Touch { t: number; kind: string; x: number; y: number; w: number; h: number; sw: number; sh: number }
 const hasId = (e: El) => !!e.id && !e.id.startsWith("_Tt");
 const yq = (v: string) => (/^[^\s"'{}[\],:#&*!|>%@`-][^{}[\],:#"]*$/.test(v) && !/\s$/.test(v) && !/: /.test(v) ? v : JSON.stringify(v));
 
@@ -58,18 +58,11 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   const [clickTap, setClickTap] = useState(() => stored("qakit-click-tap", false)); // 화면을 누르면 바로 탭
   const [pt, setPt] = useState<{ x: number; y: number } | null>(null);              // 마우스 위치 (%)
   const [down, setDown] = useState(false);
-  const [taps, setTaps] = useState<{ x: number; y: number; k: number }[]>([]);       // 탭한 자리 (%)
-  const [lastTap, setLastTap] = useState<{ x: number; y: number; k: number } | null>(null);
   const overlay = useRef<HTMLDivElement>(null);
   const urlRef = useRef<string | null>(null);
 
   useEffect(() => { store("qakit-live", streaming); store("qakit-live-ms", interval); store("qakit-boxes", boxes); store("qakit-screen-mode", mode);
     store("qakit-cursor", cursor); store("qakit-click-tap", clickTap); }, [streaming, interval, boxes, cursor, clickTap, mode]);
-  useEffect(() => {   // 마지막 탭 자리는 몇 초 뒤 지운다
-    if (!lastTap) return;
-    const t = setTimeout(() => setLastTap(null), 1500);
-    return () => clearTimeout(t);
-  }, [lastTap]);
 
   const shot = useCallback(async () => {
     try {
@@ -136,49 +129,6 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     wasBusy.current = jobBusy;
   }, [jobBusy, loadEls, loadSteps]);
 
-  // 실행기가 누른 자리(.qakit/taps.jsonl) — 라이브 세션 조작·qakit do·시나리오 실행 모두. 차례로 커서를 옮겨 누른다
-  const queue = useRef<Touch[]>([]);
-  const [robot, setRobot] = useState<{ x: number; y: number; kind: string; k: number } | null>(null);
-  useEffect(() => {
-    if (!cursor) return;
-    let alive = true, offset = -1, t: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const r = await get<{ offset: number; taps: Touch[] }>(`/api/taps?since=${offset}`);
-        if (offset >= 0) queue.current.push(...r.taps.slice(-6));
-        offset = r.offset;
-      } catch { /* 다음에 */ }
-      if (alive) t = setTimeout(poll, 300);
-    };
-    poll();
-    return () => { alive = false; clearTimeout(t); };
-  }, [cursor]);
-  useEffect(() => {   // 큐에서 하나씩: 커서 이동(0.35초) → 누름 표시
-    if (!cursor) return;
-    let alive = true, t: ReturnType<typeof setTimeout>;
-    const step = () => {
-      const n = queue.current.shift();
-      if (n) {
-        const p = { x: ((n.x + n.w / 2) / n.sw) * 100, y: ((n.y + n.h / 2) / n.sh) * 100, kind: n.kind, k: Date.now() };
-        setRobot(p);
-        if (n.kind === "tap") {
-          setTimeout(() => {
-            if (!alive) return;
-            setTaps((q) => [...q, p]); setLastTap(p);
-            setTimeout(() => setTaps((q) => q.filter((x) => x.k !== p.k)), 800);
-          }, 350);
-        }
-      }
-      if (alive) t = setTimeout(step, n ? 650 : 100);
-    };
-    step();
-    return () => { alive = false; clearTimeout(t); };
-  }, [cursor]);
-  useEffect(() => {   // 한동안 안 누르면 커서를 숨긴다
-    if (!robot) return;
-    const t = setTimeout(() => setRobot(null), 1500);
-    return () => clearTimeout(t);
-  }, [robot]);
   const doStep = async (step: string) => {
     if (!step) return;
     setResult({ step, running: true });
@@ -293,18 +243,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                         : hasId(e) ? "border-sky-400/50" : "border-dashed border-amber-400/50")}
                       style={{ left: `${(e.x / scr.w) * 100}%`, top: `${(e.y / scr.h) * 100}%`, width: `${(e.w / scr.w) * 100}%`, height: `${(e.h / scr.h) * 100}%` }} />
                   ))}
-                  {cursor && lastTap && (   // 마지막으로 탭한 자리
-                    <div className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-rose-500 ring-2 ring-white/80"
-                      style={{ left: `${lastTap.x}%`, top: `${lastTap.y}%` }} />)}
-                  {cursor && taps.map((t) => (
-                    <div key={t.k} className="qakit-ripple pointer-events-none absolute h-10 w-10 rounded-full border-2 border-rose-500 bg-rose-500/25"
-                      style={{ left: `${t.x}%`, top: `${t.y}%` }} />))}
-                  {cursor && robot && (   // 실행기 커서: 누르는 자리로 움직인다
-                    <div className="pointer-events-none absolute z-10 transition-[left,top] duration-300 ease-out" style={{ left: `${robot.x}%`, top: `${robot.y}%` }}>
-                      <MousePointer2 className="h-7 w-7 -translate-x-[3px] -translate-y-[3px] fill-neutral-900 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]" strokeWidth={1.5} />
-                      {robot.kind.startsWith("swipe") && <span className="absolute left-6 top-5 whitespace-nowrap rounded bg-neutral-900/80 px-1.5 py-0.5 text-[10px] text-white">
-                        쓸기 {({ "swipe-up": "↑", "swipe-down": "↓", "swipe-left": "←", "swipe-right": "→" } as Record<string, string>)[robot.kind] ?? ""}</span>}
-                    </div>)}
+                  <RobotCursor enabled={cursor} size="h-7 w-7" />   {/* 실행기가 누르는 자리 (라이브 조작·qakit do·시나리오 실행·AI) */}
                   {cursor && pt && (   // 손가락 커서
                     <div className={cx("pointer-events-none absolute h-9 w-9 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white/90 bg-neutral-900/30 shadow-[0_0_0_1px_rgba(0,0,0,0.35)] transition-transform duration-75",
                       down && "scale-75 bg-neutral-900/50")} style={{ left: `${pt.x}%`, top: `${pt.y}%` }} />)}
