@@ -6,7 +6,7 @@ export interface Run { dir: string; kind: string; name: string; device: string |
   seconds: number | null; via: string | null; app: Info["app"] | null; kit: string | null; screenshot: boolean }
 export interface Timing { depth: number; seconds: number; name: string; interrupts: number }
 export interface RunDetail { dir: string; summary: string | null; log: string; timingHead: string | null; timings: Timing[];
-  images: string[]; dumps: string[]; files: string[] }
+  images: string[]; videos?: string[]; dumps: string[]; files: string[] }
 export interface Scenario { name: string; title: string; description: string; tags: string[]; recent: ("pass" | "fail" | "env")[];
   last: { result: Result; at: string; dir?: string } | null; flaky: boolean }
 export interface Job { running: boolean; args: string[] | null; started: number | null; ended: number | null; code: number | null;

@@ -63,6 +63,18 @@ export function RunDetail({ dir }: { dir: string }) {
             <Card title="로그 (끝 400줄)"><div className="p-4"><Pre>{d.log || "(로그 없음)"}</Pre></div></Card>
           </div>
           <div className="space-y-5">
+            {(d.videos?.length ?? 0) > 0 && (
+              <Card title="영상">
+                <div className="grid gap-3 p-4">
+                  {d.videos!.map((n) => (
+                    <div key={n}>
+                      <video src={fileUrl(dir, n)} controls playsInline preload="metadata" className="w-full rounded-xl bg-black shadow-e2" />
+                      <a href={`${fileUrl(dir, n)}&download=1`} className="mt-1 block text-[11px] text-link hover:underline">{n} 내려받기</a>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
             <Card title="스크린샷">
               {d.images.length === 0 ? <Empty>없음</Empty> : (
                 <div className="grid gap-3 p-4">
