@@ -50,7 +50,7 @@ git rev-parse -q --verify "refs/tags/v$NEW" >/dev/null && die "태그 v${NEW}가
 ok "버전 $CUR → $NEW"
 
 say "2. 점검"
-python3 -m py_compile bin/qakit Tools/gen-ids/gen_ids.py Tools/scenario/scenario_tools.py && ok "컴파일"
+python3 -m py_compile bin/qakit lib/qakit/*.py Tools/gen-ids/gen_ids.py Tools/scenario/scenario_tools.py && ok "컴파일"
 if [ -d tests ]; then
   python3 -m unittest discover -s tests >/tmp/qakit-release-tests.log 2>&1 || { tail -30 /tmp/qakit-release-tests.log; die "테스트 실패"; }
   ok "테스트 ($(grep -o 'Ran [0-9]* tests' /tmp/qakit-release-tests.log))"
