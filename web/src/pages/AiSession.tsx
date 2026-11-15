@@ -6,7 +6,7 @@ import { SaveScenario } from "../components/SaveScenario";
 import { Badge, Card, Empty, Mono, Spinner } from "../components/ui";
 import type { AiRow } from "../components/AiActivity";
 
-interface Issue { n: number; title: string; severity: string; steps: string[]; expected: string; actual: string; screenshot: string | null }
+interface Issue { n: number; title: string; severity: string; steps: string[]; expected: string; actual: string; screenshot: string | null; video?: string | null }
 interface Detail extends Omit<Summary, "report"> {
   report: string | null; rows: AiRow[]; issueList: Issue[]; events: { kind: string; text: string; why?: string }[];
   stepList: string[]; fromLaunch: boolean;
@@ -93,8 +93,12 @@ export function AiSession({ name, job, refreshJob }: { name: string; job: Job | 
                         <ol className="list-decimal space-y-0.5 pl-5 text-[12px]">{x.steps.map((s, i) => <li key={i}><Mono className="break-all text-[11.5px]">{s}</Mono></li>)}</ol>
                         <div className="text-[12px]"><span className="text-sub">기대</span> {x.expected}</div>
                         <div className="text-[12px]"><span className="text-sub">실제</span> {x.actual}</div>
-                        {x.screenshot && <a href={fileUrl(d.dir, x.screenshot)} target="_blank" rel="noreferrer" className="block w-40 overflow-hidden rounded-lg bg-black p-1 shadow-e2">
-                          <img src={fileUrl(d.dir, x.screenshot)} alt={x.title} className="w-full rounded-md" /></a>}
+                        <div className="flex gap-2">
+                          {x.screenshot && <a href={fileUrl(d.dir, x.screenshot)} target="_blank" rel="noreferrer" className="block w-36 shrink-0 overflow-hidden rounded-lg bg-black p-1 shadow-e2">
+                            <img src={fileUrl(d.dir, x.screenshot)} alt={x.title} className="w-full rounded-md" /></a>}
+                          {x.video && <div className="w-36 shrink-0"><video src={fileUrl(d.dir, x.video)} controls playsInline preload="metadata" className="w-full rounded-lg bg-black shadow-e2" />
+                            <div className="mt-0.5 text-[10.5px] text-sub">보고 직전 영상</div></div>}
+                        </div>
                       </div>
                     ))}
                   </div>

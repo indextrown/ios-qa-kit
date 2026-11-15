@@ -6,16 +6,84 @@
 //
 // 사용: simscreen <udid> [--fps 20] [--width 600] [--quality 0.7] [--once out.jpg]
 // 출력(stdout): [4바이트 big-endian 길이][JPEG] 반복. 준비되면 stderr에 "ready <w>x<h>".
+//
+// 사용: simscreen --encode out.mp4   (qakit mcp 문제 보고 영상)
+// 입력(stdin): [8바이트 big-endian double 시각(초)][4바이트 길이][JPEG] 반복 → 그 시각대로 H.264 mp4 (화면이 바뀔 때만
+// 온 장면이라 간격이 고르지 않아도 재생 속도가 맞다). 공개 API(AVFoundation)만 쓴다.
 
 import Foundation
 import IOSurface
 import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
+import AVFoundation
+import CoreVideo
 
 func die(_ msg: String, _ code: Int32 = 2) -> Never { FileHandle.standardError.write("simscreen: \(msg)\n".data(using: .utf8)!); exit(code) }
 
 var args = Array(CommandLine.arguments.dropFirst())
+
+// ── --encode: JPEG 장면들 → mp4 ──
+func decodeJPEG(_ d: Data) -> CGImage? {
+    guard let src = CGImageSourceCreateWithData(d as CFData, nil) else { return nil }
+    return CGImageSourceCreateImageAtIndex(src, 0, nil)
+}
+
+func encode(to path: String) -> Never {
+    let data = FileHandle.standardInput.readDataToEndOfFile()
+    var frames: [(Double, Data)] = []
+    var i = data.startIndex
+    while i + 12 <= data.endIndex {
+        let t = Double(bitPattern: data[i..<i + 8].reduce(UInt64(0)) { $0 << 8 | UInt64($1) })
+        let n = Int(data[i + 8..<i + 12].reduce(UInt32(0)) { $0 << 8 | UInt32($1) })
+        guard i + 12 + n <= data.endIndex else { break }
+        frames.append((t, data.subdata(in: i + 12..<i + 12 + n)))
+        i += 12 + n
+    }
+    guard let first = frames.first, let img0 = decodeJPEG(first.1) else { die("장면이 없음") }
+    let w = img0.width & ~1, h = img0.height & ~1   // H.264는 짝수 크기
+    let url = URL(fileURLWithPath: path)
+    try? FileManager.default.removeItem(at: url)
+    guard let writer = try? AVAssetWriter(outputURL: url, fileType: .mp4) else { die("파일을 만들 수 없음: \(path)") }
+    let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
+        AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: w, AVVideoHeightKey: h])
+    let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: input, sourcePixelBufferAttributes: [
+        kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+        kCVPixelBufferWidthKey as String: w, kCVPixelBufferHeightKey as String: h])
+    writer.add(input)
+    guard writer.startWriting() else { die("인코딩 시작 실패: \(writer.error?.localizedDescription ?? "")") }
+    writer.startSession(atSourceTime: .zero)
+    let t0 = first.0
+    var last = -1.0
+    // 마지막 장면을 0.5초 더 보여 주도록 한 번 더 넣는다
+    for (t, jpg) in frames + [(frames[frames.count - 1].0 + 0.5, frames[frames.count - 1].1)] {
+        let pts = max(t - t0, last + 0.001)
+        guard let img = decodeJPEG(jpg), let pool = adaptor.pixelBufferPool else { continue }
+        var pb: CVPixelBuffer?
+        guard CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pb) == kCVReturnSuccess, let buf = pb else { continue }
+        CVPixelBufferLockBaseAddress(buf, [])
+        if let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buf), width: w, height: h, bitsPerComponent: 8,
+                               bytesPerRow: CVPixelBufferGetBytesPerRow(buf), space: CGColorSpaceCreateDeviceRGB(),
+                               bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) {
+            ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+        }
+        CVPixelBufferUnlockBaseAddress(buf, [])
+        while !input.isReadyForMoreMediaData { usleep(2_000) }
+        if adaptor.append(buf, withPresentationTime: CMTime(seconds: pts, preferredTimescale: 600)) { last = pts }
+    }
+    input.markAsFinished()
+    let sem = DispatchSemaphore(value: 0)
+    writer.finishWriting { sem.signal() }
+    sem.wait()
+    guard writer.status == .completed else { die("인코딩 실패: \(writer.error?.localizedDescription ?? "")") }
+    print("\(frames.count) frames \(String(format: "%.1f", last))s")
+    exit(0)
+}
+if args.first == "--encode" {
+    guard args.count >= 2 else { die("사용: simscreen --encode out.mp4 < 장면들", 64) }
+    encode(to: args[1])
+}
+
 guard let udid = args.first, !udid.hasPrefix("-") else { die("사용: simscreen <udid> [--fps N] [--width N] [--quality Q] [--once out.jpg]", 64) }
 args.removeFirst()
 var fps = 20.0, width = 600, quality = 0.7, once: String? = nil
