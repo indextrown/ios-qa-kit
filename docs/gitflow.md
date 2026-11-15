@@ -192,7 +192,7 @@ CI가 없으므로 합치기 전에 직접 돌린다. 바꾼 부분에 해당하
 
 | 바꾼 것 | 확인 명령 | 통과 기준 |
 |---|---|---|
-| 항상 | `python3 -m py_compile bin/qakit Tools/gen-ids/gen_ids.py` · `python3 -m unittest discover -s tests` | 출력 없음 · 모두 OK (PR마다 GitHub Actions CI도 같은 것 + `ui/dist` 확인) |
+| 항상 | `python3 -m py_compile bin/qakit lib/qakit/*.py Tools/gen-ids/gen_ids.py` · `python3 -m unittest discover -s tests` | 출력 없음 · 모두 OK (PR마다 GitHub Actions CI도 같은 것 + `ui/dist` 확인) |
 | 항상 | `grep -rniE "<시범 앱 이름들>" --exclude-dir=.build --exclude-dir=docs .` | 앱 전용 이름 0건 (도구 레포는 범용만) |
 | `AutoID/` | `scripts/build-autoid.sh` | dylib 경로 출력 |
 | `AutoID/`, `Tools/gen-ids/` | 작업공간에서 `qakit dump-ui` → `qakit gen-ids --verify` | `불일치 0` |
