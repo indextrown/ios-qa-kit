@@ -289,6 +289,8 @@ git flow overview                                  # 설정 확인
 
 ### 릴리스 · 핫픽스
 
+> **한 번에**: `scripts/release.sh patch|minor|major|X.Y.Z [--dry-run] [--notes 파일]` — develop·깨끗함·원격과 같음 확인 → 컴파일·테스트·UI 빌드(`ui/dist` 최신·모두 커밋)·금지어 → 지난 태그 이후 병합된 PR 제목으로 노트 → `git flow release` → 태그·push → GitHub 릴리스. 먼저 `--dry-run`으로 점검과 노트를 본다. 금지어(시범 앱 이름 등)는 저장소에 적지 않고 `QAKIT_FORBIDDEN` 환경 변수나 `~/.config/qakit/forbidden-words`에 둔다. 아래는 그 안에서 하는 일.
+
 | 명령 | 하는 일 |
 |---|---|
 | `git flow release start <버전>` | `develop`에서 `release/<버전>`. 버전은 `v` 없이 `0.1.0` |
