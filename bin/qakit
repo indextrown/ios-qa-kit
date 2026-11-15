@@ -26,6 +26,7 @@ Python 3.9 표준 라이브러리만 쓴다.
 import argparse
 import base64
 import contextlib
+import collections
 import fcntl
 import functools
 import datetime
@@ -36,6 +37,7 @@ import plistlib
 import re
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
@@ -4445,6 +4447,60 @@ def mcp_tools():
     ]
 
 
+class FrameRing:
+    """AI 세션 동안 시뮬레이터 화면 장면을 마지막 seconds초만 메모리에 (simscreen, 초당 10장·폭 440).
+    report_issue 때 그 장면들로 mp4 (simscreen --encode). 통째 녹화보다 작고, 문제 직전만 남는다."""
+
+    def __init__(self, udid, seconds=30):
+        self.udid, self.seconds = udid, seconds
+        self.frames = collections.deque()
+        self.lock = threading.Lock()
+        self.proc = None
+
+    def start(self):
+        if self.proc or not self.udid:
+            return
+        tool = ensure_simscreen()
+        if not tool:
+            return
+        try:
+            self.proc = subprocess.Popen([str(tool), self.udid, "--fps", "10", "--width", "440", "--quality", "0.6"],
+                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except OSError:
+            return
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        out = self.proc.stdout
+        while True:
+            head = out.read(4)
+            if len(head) < 4:
+                return
+            data = out.read(int.from_bytes(head, "big"))
+            now = time.time()
+            with self.lock:
+                self.frames.append((now, data))
+                while self.frames and now - self.frames[0][0] > self.seconds:
+                    self.frames.popleft()
+
+    def save(self, path):
+        """→ 영상 길이(초) 또는 None"""
+        with self.lock:
+            frames = list(self.frames)
+        tool = ensure_simscreen()
+        if len(frames) < 2 or not tool:
+            return None
+        buf = b"".join(struct.pack(">dI", t, len(j)) + j for t, j in frames)
+        r = subprocess.run([str(tool), "--encode", str(path)], input=buf, capture_output=True, timeout=120)
+        if r.returncode != 0 or not Path(path).exists():
+            return None
+        return round(frames[-1][0] - frames[0][0], 1)
+
+    def stop(self):
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+
+
 class McpSession:
     """도구 호출을 qakit do / run 하위 프로세스로. 활동 기록·문제 보고는 results/ai/<시각>/"""
 
@@ -4455,6 +4511,7 @@ class McpSession:
         self.client = None
         self.issues = 0
         self._udid = False   # 사진 찍을 때 처음 찾는다 (시뮬레이터가 없는 곳에서도 서버·다른 도구는 뜨게)
+        self.ring = None      # 문제 보고 영상용 장면 보관 (첫 조작 때 시작)
 
     @property
     def udid(self):
@@ -4546,6 +4603,9 @@ class McpSession:
 
     def call(self, name, a):
         """→ (content 목록, 오류인가)"""
+        if self.ring is None and name in MCP_ACTIONS and os.environ.get("QAKIT_AI_VIDEO", "1") != "0":
+            self.ring = FrameRing(self.udid)
+            self.ring.start()
         text = lambda t: [{"type": "text", "text": t}]
         if name == "get_testing_guide":
             return text(MCP_GUIDE), False
@@ -4624,13 +4684,18 @@ class McpSession:
             shot_name = f"issue-{self.issues}.jpg"
             if shot:
                 (d / shot_name).write_bytes(shot)
+            video_name = f"issue-{self.issues}.mp4"
+            video_len = self.ring.save(d / video_name) if self.ring else None   # 보고 직전 최대 30초
             md = [f"## {self.issues}. {a['title']} ({a['severity']})", "", "재현 단계:", *[f"1. `{s}`" for s in a["steps"]], "",
-                  f"- 기대: {a['expected']}", f"- 실제: {a['actual']}"] + ([f"- 사진: ![{shot_name}]({shot_name})"] if shot else []) + [""]
+                  f"- 기대: {a['expected']}", f"- 실제: {a['actual']}"] + ([f"- 사진: ![{shot_name}]({shot_name})"] if shot else []) \
+                + ([f"- 영상 (보고 직전 {video_len}초): [{video_name}]({video_name})"] if video_len else []) + [""]
             with open(d / "issues.md", "a", encoding="utf-8") as f:
                 f.write(self.mask("\n".join(md)) + "\n")
             with open(d / "issues.jsonl", "a", encoding="utf-8") as f:
-                f.write(self.mask(json.dumps(dict(a, n=self.issues, screenshot=shot_name if shot else None), ensure_ascii=False)) + "\n")
-            return text(f"문제 {self.issues} 기록: {results_rel(self.ws, d)}/issues.md" + (f" (사진 {shot_name})" if shot else "")), False
+                f.write(self.mask(json.dumps(dict(a, n=self.issues, screenshot=shot_name if shot else None,
+                                                  video=video_name if video_len else None), ensure_ascii=False)) + "\n")
+            return text(f"문제 {self.issues} 기록: {results_rel(self.ws, d)}/issues.md" + (f" (사진 {shot_name})" if shot else "")
+                        + (f" (영상 {video_len}초)" if video_len else "")), False
         return text(f"모르는 도구: {name}"), True
 
 
@@ -4796,6 +4861,14 @@ def cmd_mcp(args):
         out.write(json.dumps(msg, ensure_ascii=False) + "\n")
         out.flush()
 
+    try:
+        mcp_loop(session, tools, send)
+    finally:
+        if session.ring:
+            session.ring.stop()
+
+
+def mcp_loop(session, tools, send):
     for raw in sys.stdin:
         raw = raw.strip()
         if not raw:

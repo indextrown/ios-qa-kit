@@ -798,7 +798,7 @@ qakit 도구로 검색 화면 QA해 줘. 빈 검색어, 아주 긴 검색어, �
 | `tap` · `type_text` · `swipe` · `wait_for` · `expect` · `step` | 시나리오 단계 그대로 (ID·라벨, 좌표 없음). `tap`에 `expect`를 주면 누른 효과까지 확인 |
 | `recorded_steps` · `save_scenario` | 통과한 단계 → `scenarios/`에 저장, **앱을 새로 켜고 재생해서 통과해야** 남음 (실패하면 `.qakit/drafts/`) |
 | `list_scenarios` · `run_scenario` | 있는 시나리오 보기·실행 (실패하면 "대신 이 대상?" 제안까지) |
-| `report_issue` | 재현한 문제만 (`reproduced: true`), 사진과 함께 `results/ai/<시각>/issues.md` |
+| `report_issue` | 재현한 문제만 (`reproduced: true`), 사진과 **보고 직전 최대 30초 영상**(시뮬레이터)을 함께 `results/ai/<시각>/issues.md` |
 
 - AI가 누르는 것은 모두 ID·라벨 단계라, 확인한 경로가 그대로 시나리오가 되고 이후엔 AI 없이 돕니다.
 - **지켜보기**: `qakit ui` 라이브 세션을 열어 두면 오른쪽 위 **AI 활동**에 AI가 한 일(시각·동작·대상·이유·결과·걸린 시간)과 지금 하는 일, 보고한 문제(사진)가 쌓이고, 화면에서는 커서가 AI가 누르는 자리로 움직입니다. AI가 조작하는 동안 손 조작은 잠기고(입력이 섞이지 않게) 요소 상자는 숨깁니다. 기록은 `results/ai/<시각>/log.jsonl`.
