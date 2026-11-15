@@ -23,3 +23,7 @@ html, body, #root { height: 100%; }
 body { @apply bg-bg text-fg font-sans antialiased; font-size: 14px; }
 h1, h2, h3 { @apply tracking-head; }
 ::selection { background: rgb(var(--fg) / 0.15); }
+
+/* 라이브 세션: 누른 자리 표시 (퍼지는 원) */
+@keyframes qakit-ripple { from { transform: translate(-50%, -50%) scale(0.4); opacity: 0.9; } to { transform: translate(-50%, -50%) scale(2.4); opacity: 0; } }
+.qakit-ripple { animation: qakit-ripple 0.7s ease-out forwards; }

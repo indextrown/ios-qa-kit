@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, EyeOff, Hand, Pause, Play, RotateCcw, ScanLine, TerminalSquare, Timer, CheckCircle2, ArrowUp, ArrowDown, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Hand, MousePointer2, MousePointerClick, Pause, Play, RotateCcw, ScanLine, TerminalSquare, Timer, CheckCircle2, ArrowUp, ArrowDown, Loader2 } from "lucide-react";
 import { get, post, screenUrl, type DoResult, type El, type Elements, type Job } from "../lib/api";
 import { SaveScenario } from "../components/SaveScenario";
 import { cx, store, stored } from "../lib/util";
@@ -39,10 +39,22 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   const [input, setInput] = useState("");
   const [result, setResult] = useState<{ step: string; res?: DoResult; error?: string; running?: boolean } | null>(null);
   const [steps, setSteps] = useState<{ steps: string[]; fromLaunch: boolean } | null>(null);
+  const [cursor, setCursor] = useState(() => stored("qakit-cursor", true));      // 손가락 커서·탭 표시
+  const [clickTap, setClickTap] = useState(() => stored("qakit-click-tap", false)); // 화면을 누르면 바로 탭
+  const [pt, setPt] = useState<{ x: number; y: number } | null>(null);              // 마우스 위치 (%)
+  const [down, setDown] = useState(false);
+  const [taps, setTaps] = useState<{ x: number; y: number; k: number }[]>([]);       // 탭한 자리 (%)
+  const [lastTap, setLastTap] = useState<{ x: number; y: number; k: number } | null>(null);
   const overlay = useRef<HTMLDivElement>(null);
   const urlRef = useRef<string | null>(null);
 
-  useEffect(() => { store("qakit-live", streaming); store("qakit-live-ms", interval); store("qakit-boxes", boxes); }, [streaming, interval, boxes]);
+  useEffect(() => { store("qakit-live", streaming); store("qakit-live-ms", interval); store("qakit-boxes", boxes);
+    store("qakit-cursor", cursor); store("qakit-click-tap", clickTap); }, [streaming, interval, boxes, cursor, clickTap]);
+  useEffect(() => {   // 마지막 탭 자리는 몇 초 뒤 지운다
+    if (!lastTap) return;
+    const t = setTimeout(() => setLastTap(null), 4000);
+    return () => clearTimeout(t);
+  }, [lastTap]);
 
   const shot = useCallback(async () => {
     try {
@@ -77,8 +89,23 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     wasBusy.current = busy;
   }, [busy, loadEls, loadSteps]);
 
-  const doStep = async (step: string) => {
+  /** 탭 단계면 누를 자리(요소 가운데)를 표시. 직접 입력한 단계는 ID·라벨이 맞는 요소를 찾아본다 */
+  const markTap = (step: string, target?: El | null) => {
+    const scr = els?.screen;
+    if (!cursor || !scr || !/^tap\s*:/.test(step)) return;
+    let e = target ?? null;
+    if (!e && els) {
+      const v = step.replace(/^tap\s*:\s*/, "").trim().replace(/^["']|["']$/g, "");
+      e = els.elements.find((x) => x.id === v) ?? els.elements.find((x) => x.labelRaw === v || x.label === v) ?? null;
+    }
+    if (!e) return;
+    const p = { x: ((e.x + e.w / 2) / scr.w) * 100, y: ((e.y + e.h / 2) / scr.h) * 100, k: Date.now() };
+    setTaps((t) => [...t, p]); setLastTap(p);
+    setTimeout(() => setTaps((t) => t.filter((q) => q.k !== p.k)), 800);
+  };
+  const doStep = async (step: string, target?: El | null) => {
     if (!step) return;
+    markTap(step, target);
     setResult({ step, running: true });
     try { setResult({ step, res: await post<DoResult>("/api/do", { step }) }); }
     catch (e) { setResult({ step, error: (e as Error).message }); }
@@ -94,6 +121,10 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     const pick = inside.some((e) => PREFER.has(e.type)) ? inside.filter((e) => PREFER.has(e.type)) : inside;
     return [...pick].sort((a, b) => a.w * a.h - b.w * b.h || b.depth - a.depth)[0] ?? null;
   };
+  const pos = (ev: React.MouseEvent) => {
+    const r = overlay.current!.getBoundingClientRect();
+    return { x: ((ev.clientX - r.left) / r.width) * 100, y: ((ev.clientY - r.top) / r.height) * 100 };
+  };
   const scr = els?.screen;
   const selector = sel && els ? selectorFor(sel, els.elements) : null;
   const working = !!result?.running || busy;
@@ -104,7 +135,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
 
   return (
     <>
-      <PageHeader title="라이브 세션" description="화면을 눌러 요소를 고르고 실행합니다 (qakit do — ID 우선, 없으면 라벨). 통과한 단계는 기록됩니다."
+      <PageHeader title="라이브 세션" description="화면을 눌러 요소를 고르고 실행합니다 ('누르면 탭'을 켜면 바로 탭) (qakit do — ID 우선, 없으면 라벨). 통과한 단계는 기록됩니다."
         actions={busy && <Badge tone="warn">시나리오 실행 중 — 조작 잠김</Badge>} />
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
         <div className="flex flex-col items-center">
@@ -118,20 +149,40 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
             <Button size="sm" variant="ghost" onClick={() => doStep("launch")} disabled={working}><RotateCcw className="h-3.5 w-3.5" />앱 다시 켜기</Button>
             <Button size="sm" variant="ghost" onClick={loadEls} loading={dumping}><ScanLine className="h-3.5 w-3.5" />화면 구조</Button>
             <Button size="sm" variant="ghost" onClick={() => setBoxes(!boxes)}>{boxes ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}요소</Button>
+            <Button size="sm" variant="ghost" onClick={() => setCursor(!cursor)} title="손가락 커서와 탭한 자리 표시"
+              className={cx(!cursor && "text-sub")}><MousePointer2 className="h-3.5 w-3.5" />커서 {cursor ? "켬" : "끔"}</Button>
+            <Button size="sm" variant="ghost" onClick={() => setClickTap(!clickTap)} title="켜면 화면을 누르는 즉시 그 요소를 탭합니다 (끄면 고르기만)"
+              className={cx(clickTap ? "bg-muted font-medium" : "text-sub")}><MousePointerClick className="h-3.5 w-3.5" />누르면 탭 {clickTap ? "켬" : "끔"}</Button>
           </div>
           <div className="relative w-full max-w-[380px] rounded-[44px] bg-neutral-900 p-3 shadow-e3 ring-1 ring-black/40">
             <div className="relative overflow-hidden rounded-[34px] bg-black">
               {img ? <img src={img} alt="시뮬레이터 화면" className="block w-full select-none" draggable={false} />
                 : <div className="flex aspect-[9/19.5] items-center justify-center text-[13px] text-neutral-400">{shotError ?? "화면 불러오는 중…"}</div>}
               {img && scr && (
-                <div ref={overlay} className="absolute inset-0 cursor-crosshair"
-                  onMouseMove={(e) => setHover(hit(e))} onMouseLeave={() => setHover(null)} onClick={(e) => { const h = hit(e); if (h) setSel(h); }}>
+                <div ref={overlay} className={cx("absolute inset-0", cursor ? "cursor-none" : "cursor-crosshair")}
+                  onMouseMove={(e) => { setHover(hit(e)); setPt(pos(e)); }} onMouseLeave={() => { setHover(null); setPt(null); setDown(false); }}
+                  onMouseDown={() => setDown(true)} onMouseUp={() => setDown(false)}
+                  onClick={(e) => {
+                    const h = hit(e);
+                    if (!h) return;
+                    setSel(h);
+                    if (clickTap && !working && els) doStep(`tap: ${selectorFor(h, els.elements)}`, h);
+                  }}>
                   {(els?.elements ?? []).filter((e) => boxes || e === sel || e === hover).map((e, i) => (
                     <div key={i} className={cx("pointer-events-none absolute rounded-[3px] border",
                       e === sel ? "border-2 border-rose-500 bg-rose-500/15" : e === hover ? "border-sky-400 bg-sky-400/15"
                         : hasId(e) ? "border-sky-400/50" : "border-dashed border-amber-400/50")}
                       style={{ left: `${(e.x / scr.w) * 100}%`, top: `${(e.y / scr.h) * 100}%`, width: `${(e.w / scr.w) * 100}%`, height: `${(e.h / scr.h) * 100}%` }} />
                   ))}
+                  {cursor && lastTap && (   // 마지막으로 탭한 자리
+                    <div className="pointer-events-none absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-rose-500 ring-2 ring-white/80"
+                      style={{ left: `${lastTap.x}%`, top: `${lastTap.y}%` }} />)}
+                  {cursor && taps.map((t) => (
+                    <div key={t.k} className="qakit-ripple pointer-events-none absolute h-10 w-10 rounded-full border-2 border-rose-500 bg-rose-500/25"
+                      style={{ left: `${t.x}%`, top: `${t.y}%` }} />))}
+                  {cursor && pt && (   // 손가락 커서
+                    <div className={cx("pointer-events-none absolute h-9 w-9 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white/90 bg-neutral-900/30 shadow-[0_0_0_1px_rgba(0,0,0,0.35)] transition-transform duration-75",
+                      down && "scale-75 bg-neutral-900/50")} style={{ left: `${pt.x}%`, top: `${pt.y}%` }} />)}
                 </div>
               )}
             </div>
@@ -153,7 +204,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                 <div className="rounded-md bg-muted px-2.5 py-2"><div className="mb-0.5 text-[11px] text-sub">단계 대상</div><Mono className="break-all">{selector}</Mono></div>
                 <div className="grid grid-cols-2 gap-1.5">
                   {actions.map(([label, step, Icon], i) => (
-                    <Button key={label} variant={i === 0 ? "primary" : "secondary"} size="sm" disabled={working} onClick={() => doStep(step)}
+                    <Button key={label} variant={i === 0 ? "primary" : "secondary"} size="sm" disabled={working} onClick={() => doStep(step, i === 0 ? sel : null)}
                       className={i === 0 ? "col-span-2" : ""}><Icon className="h-3.5 w-3.5" />{label}</Button>
                   ))}
                 </div>
