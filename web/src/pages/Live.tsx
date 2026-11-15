@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, EyeOff, Hand, Camera, Circle, Square as StopIcon, Keyboard, Radio, Image as ImageIcon, MousePointer2, MousePointerClick, Pause, Play, RotateCcw, ScanLine, TerminalSquare, Timer, CheckCircle2, ArrowUp, ArrowDown, Loader2 } from "lucide-react";
+import { Eye, EyeOff, Hand, Camera, Circle, Square as StopIcon, Keyboard, Radio, Image as ImageIcon, MousePointer2, MousePointerClick, Pause, Play, RotateCcw, ScanLine, TerminalSquare, Timer, CheckCircle2, ArrowUp, ArrowDown, Loader2, Zap } from "lucide-react";
 import { fileUrl, get, post, screenUrl, type DoResult, type El, type Elements, type Job } from "../lib/api";
 import { SaveScenario } from "../components/SaveScenario";
 import { RunScenario } from "../components/RunScenario";
@@ -60,6 +60,9 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   const [clickTap, setClickTap] = useState(() => stored("qakit-click-tap", false)); // 화면을 누르면 바로 탭
   const [pt, setPt] = useState<{ x: number; y: number } | null>(null);              // 마우스 위치 (%)
   const [down, setDown] = useState(false);
+  const [direct, setDirect] = useState(() => stored("qakit-direct-touch", false));   // 손 조작을 직접 터치로 (H4, 실험)
+  useEffect(() => store("qakit-direct-touch", direct), [direct]);
+  const press = useRef<{ x: number; y: number; t: number } | null>(null);              // 직접 터치: 누른 자리·때 (0~1)
   const overlay = useRef<HTMLDivElement>(null);
   const urlRef = useRef<string | null>(null);
 
@@ -86,6 +89,8 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   // 화면 구조 자동 갱신: 실시간 화면이 바뀌었다가 0.8초 멈추면(애니메이션 끝) 다시 읽는다.
   // AI 조작·시나리오 실행·직접 실행 중엔 하지 않음 (실행기를 같이 쓰면 그쪽이 늦어짐)
   const seenChange = useRef(0), serverNow = useRef(0), canAuto = useRef(false), loadElsRef = useRef<() => Promise<void>>(async () => {});
+  // 화면 구조가 지금 화면 것인가 — 직접 터치 뒤·화면이 바뀐 뒤엔 다시 읽기 전까지 아님 (옛 화면 요소로 단계를 기록하지 않게)
+  const elsSeq = useRef(0), elsFresh = useRef(false);
   useEffect(() => {   // 실시간: 상태(초당 장수)를 보고, 도구가 멈췄으면 스크린샷으로 돌아간다
     if (!liveOn) { setFps(0); return; }
     let alive = true, n = 0;
@@ -97,6 +102,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
         if (n++ % 3 === 0) setFps(st.fps);
         if (!st.running && st.error) { setMode("shot"); setStreamNote(`실시간 화면 멈춤 (${st.error}) — 스크린샷으로 봅니다`); return; }
         const c = st.changedAt ?? 0;
+        if (seenChange.current && c > seenChange.current) elsFresh.current = false;
         if (!seenChange.current) seenChange.current = c;   // 열었을 때는 이미 읽음
         else if (c > seenChange.current && st.now - c >= 0.8 && canAuto.current) {
           seenChange.current = c;
@@ -109,9 +115,12 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
 
   const loadEls = useCallback(async () => {
     setDumping(true);
+    const seq = elsSeq.current, from = serverNow.current;
     try {
       const d = await get<Elements>("/api/elements");
       setEls(d);
+      if (from) seenChange.current = Math.max(seenChange.current, from);   // 읽기 시작 전 변화는 반영됨
+      elsFresh.current = seq === elsSeq.current;
       setSel((s) => (s ? d.elements.find((e) => e.id === s.id && e.labelRaw === s.labelRaw && e.type === s.type) ?? null : null));
     } catch (e) { setShotError(`화면 구조: ${(e as Error).message}`); }
     setDumping(false);
@@ -188,6 +197,33 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     const r = overlay.current!.getBoundingClientRect();
     return { x: ((ev.clientX - r.left) / r.width) * 100, y: ((ev.clientY - r.top) / r.height) * 100 };
   };
+  const frac = (ev: React.MouseEvent) => {
+    const r = overlay.current!.getBoundingClientRect();
+    return { x: Math.min(Math.max((ev.clientX - r.left) / r.width, 0), 1), y: Math.min(Math.max((ev.clientY - r.top) / r.height, 0), 1) };
+  };
+  /** 직접 터치 (실험): 마우스를 뗄 때 — 거의 안 움직였으면 탭(0.5초 넘게 누르면 길게 누르기), 움직였으면 그 길로 끌기.
+   *  탭이 요소 위면 그 단계로 기록 (시나리오로 옮길 수 있게, 재생은 XCUITest) */
+  const directRelease = async (ev: React.MouseEvent) => {
+    const p = press.current; press.current = null;
+    if (!p || working || !overlay.current) return;
+    const q = frac(ev), held = (Date.now() - p.t) / 1000;
+    const moved = Math.hypot(q.x - p.x, (q.y - p.y) * ((scr?.h ?? 2) / (scr?.w ?? 1))) > 0.03;
+    const h = hit(ev);
+    const step = !moved && held < 0.5 && h && els && elsFresh.current ? `tap: ${selectorFor(h, els.elements)}` : null;
+    elsSeq.current++; elsFresh.current = false;
+    const body = moved ? { kind: "swipe", x: p.x, y: p.y, x2: q.x, y2: q.y, seconds: Math.min(Math.max(held, 0.15), 2) }
+      : held >= 0.5 ? { kind: "press", x: p.x, y: p.y, seconds: Math.min(held, 5) } : { kind: "tap", x: p.x, y: p.y, step };
+    const label = `직접 터치 · ${moved ? "끌기" : held >= 0.5 ? `길게 누르기 ${held.toFixed(1)}초` : "탭"} @${(p.x * 100).toFixed(0)}%,${(p.y * 100).toFixed(0)}%${step ? ` → ${step}` : ""}`;
+    if (h && !moved) setSel(h);
+    setResult({ step: label, running: true });
+    try {
+      const r = await post<{ ms: number; reply: string; recorded: boolean }>("/api/touch", body);
+      setResult({ step: label, res: { code: 0, output: `✅ ${r.ms}ms${r.recorded ? " · 단계 기록" : moved || held >= 0.5 ? " · 기록 안 함 (시나리오 단계 없음)" : " · 기록 안 함 (요소 위가 아니거나 화면 구조를 다시 읽기 전)"}` } });
+    } catch (e) { setResult({ step: label, error: (e as Error).message }); }
+    if (!liveOn) await shot();
+    loadSteps();
+    setTimeout(() => { if (!elsFresh.current) loadElsRef.current(); }, 1200);   // 화면이 안 바뀌는 터치여도 다시 읽어 둔다
+  };
   const scr = els?.screen;
   const selector = sel && els ? selectorFor(sel, els.elements) : null;
   const working = !!result?.running || busy;
@@ -223,6 +259,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
             <Sep />
             <ToolBtn label={`커서 ${cursor ? "끄기" : "켜기"} — 누르는 자리 보기`} active={cursor} onClick={() => setCursor(!cursor)}><MousePointer2 className="h-4 w-4" /></ToolBtn>
             <ToolBtn label={`누르면 탭 ${clickTap ? "끄기" : "켜기"} — 화면을 누르면 바로 탭`} active={clickTap} onClick={() => setClickTap(!clickTap)}><MousePointerClick className="h-4 w-4" /></ToolBtn>
+            <ToolBtn label={`직접 터치 ${direct ? "끄기" : "켜기"} (실험) — 손가락처럼 바로: 클릭=탭, 꾹=길게, 끌기=끌기`} active={direct} onClick={() => setDirect(!direct)}><Zap className="h-4 w-4" /></ToolBtn>
             <Sep />
             <ToolBtn label="사진 내려받기" onClick={saveShot}><Camera className="h-4 w-4" /></ToolBtn>
             <ToolBtn label={rec ? "녹화 멈추고 내려받기" : "녹화 시작"} onClick={toggleRec} danger={!!rec}>
@@ -239,9 +276,11 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                 : <div className="flex aspect-[9/19.5] items-center justify-center text-[13px] text-neutral-400">{shotError ?? "화면 불러오는 중…"}</div>}
               {(img || liveOn) && scr && (
                 <div ref={overlay} className={cx("absolute inset-0", cursor ? "cursor-none" : "cursor-crosshair")}
-                  onMouseMove={(e) => { setHover(hit(e)); setPt(pos(e)); }} onMouseLeave={() => { setHover(null); setPt(null); setDown(false); }}
-                  onMouseDown={() => setDown(true)} onMouseUp={() => setDown(false)}
+                  onMouseMove={(e) => { setHover(hit(e)); setPt(pos(e)); }} onMouseLeave={() => { setHover(null); setPt(null); setDown(false); press.current = null; }}
+                  onMouseDown={(e) => { setDown(true); if (direct && e.button === 0) press.current = { ...frac(e), t: Date.now() }; }}
+                  onMouseUp={(e) => { setDown(false); if (direct) directRelease(e); }}
                   onClick={(e) => {
+                    if (direct) return;   // 직접 터치는 onMouseUp에서
                     const h = hit(e);
                     if (!h) return;
                     setSel(h); setTab("act");
@@ -276,7 +315,8 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                   </select>)}
               </div>
               <div className="text-sub">{els ? `요소 ${els.elements.length}개` : "화면 구조 없음"}{boxes ? "" : " · 상자 숨김"}</div>
-              {cursor && <div className="text-sub">커서 켬{clickTap ? " · 누르면 탭" : ""}</div>}
+              {cursor && <div className="text-sub">커서 켬{clickTap && !direct ? " · 누르면 탭" : ""}</div>}
+              {direct && <div className="text-warn">직접 터치 (실험) — 클릭=탭 · 꾹=길게 · 끌기</div>}
               {rec && <div className="flex items-center gap-1.5 font-medium text-bad"><span className="h-2 w-2 animate-pulse rounded-full bg-bad" />녹화 {recSecs}s</div>}
             </div>
             {lock && <div className="rounded-xl bg-warn/10 p-3 text-[12px] text-warn ring-1 ring-warn/30">{lock}</div>}

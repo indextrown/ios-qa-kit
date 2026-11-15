@@ -222,6 +222,14 @@ def do_log_read(ws):
     return steps, from_launch
 
 
+def touch_mark(ws, kind, x, y):
+    """직접 터치 커서 기록 (taps.jsonl, 화면 대비 0~1 좌표 그대로 — sw=sh=1, 크기 0)"""
+    row = {"t": round(time.time(), 3), "kind": kind, "x": round(x, 4), "y": round(y, 4), "w": 0, "h": 0, "sw": 1, "sh": 1}
+    with contextlib.suppress(OSError):
+        with open(taps_path(ws), "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+
+
 def do_log_write(ws, row, reset=False):
     f = do_log_path(ws)
     f.parent.mkdir(parents=True, exist_ok=True)

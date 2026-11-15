@@ -483,11 +483,14 @@ class McpSession:
                 dx, dy = {"up": (0, -d), "down": (0, d), "left": (-d, 0), "right": (d, 0)}[a.get("dir") or "up"]
                 q = (min(max(p[0] + dx, 0.02), 0.98), min(max(p[1] + dy, 0.02), 0.98))
             cmd = f"swipe {p[0]:.4f} {p[1]:.4f} {q[0]:.4f} {q[1]:.4f} {float(a.get('seconds') or 0.4):.2f}"
-        kind = {"tap_point": "tap", "long_press": "tap", "drag": "swipe-" + (a.get("dir") or "up")}[name]
-        self.write_touch(kind, rect, scr)
+        kind = {"tap_point": "tap", "long_press": "press", "drag": "drag"}[name]
+        start = (rect["x"] + rect["w"] / 2) / scr["w"], (rect["y"] + rect["h"] / 2) / scr["h"]
+        touch_mark(self.ws, kind, *start)   # 커서는 실제로 누르는 좌표 그대로
         good, line = self.touch_helper().send(cmd)
-        if kind == "tap":
-            self.write_touch("tap-done", rect, scr)
+        if name == "drag":
+            touch_mark(self.ws, "drag-done", *q)
+        else:
+            touch_mark(self.ws, kind + "-done", *start)
         self.last_dump = None
         if not good:
             return [{"type": "text", "text": f"직접 터치 실패: {line}"}], True

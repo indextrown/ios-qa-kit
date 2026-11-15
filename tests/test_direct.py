@@ -58,6 +58,21 @@ class Change(unittest.TestCase):
         self.assertFalse(self.ring([(1, 1000)]).wait_change(time.time(), timeout=0.2))
 
 
+class Mark(unittest.TestCase):
+    def test_touch_mark(self):
+        tmp, root = make_workspace()
+        try:
+            ws = q.Workspace(root)
+            (root / ".qakit").mkdir(exist_ok=True)
+            q.touch_mark(ws, "drag", 0.5, 0.8)
+            q.touch_mark(ws, "drag-done", 0.5, 0.35)
+            rows = [json.loads(x) for x in q.taps_path(ws).read_text(encoding="utf-8").splitlines()]
+            self.assertEqual([r["kind"] for r in rows], ["drag", "drag-done"])
+            self.assertEqual((rows[1]["x"], rows[1]["y"], rows[1]["sw"], rows[1]["w"]), (0.5, 0.35, 1, 0))   # 커서 = (x + w/2) / sw
+        finally:
+            tmp.cleanup()
+
+
 class Tools(unittest.TestCase):
     def tools(self, env):
         tmp, root = make_workspace()
