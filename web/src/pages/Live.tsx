@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Eye, EyeOff, Hand, MousePointer2, MousePointerClick, Pause, Play, RotateCcw, ScanLine, TerminalSquare, Timer, CheckCircle2, ArrowUp, ArrowDown, Loader2 } from "lucide-react";
 import { get, post, screenUrl, type DoResult, type El, type Elements, type Job } from "../lib/api";
 import { SaveScenario } from "../components/SaveScenario";
+import { RunScenario } from "../components/RunScenario";
 import { cx, store, stored } from "../lib/util";
 import { Badge, Button, Card, Empty, Mono, PageHeader } from "../components/ui";
 
@@ -193,6 +194,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
         </div>
 
         <div className="space-y-4">
+          <RunScenario job={job} refreshJob={refreshJob} />
           <Card title="고른 요소">
             {!sel ? <Empty>화면을 눌러 요소를 고르세요</Empty> : (
               <div className="space-y-3 p-4">
