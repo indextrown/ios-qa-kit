@@ -95,7 +95,8 @@ export function Scenarios({ job, refreshJob }: { job: Job | null; refreshJob: ()
                   className={cx("cursor-pointer border-b border-line last:border-0", sel.has(s.name) ? "bg-muted/70" : "hover:bg-muted/40")}>
                   <td className={td}><input type="checkbox" readOnly checked={sel.has(s.name)} aria-label={`${s.name} 선택`} /></td>
                   <td className={td}>
-                    <div className="flex items-center gap-2"><span className="font-mono text-[12px] font-medium">{s.name}</span>{s.flaky && <Badge tone="warn">불안정</Badge>}</div>
+                    <div className="flex items-center gap-2"><span className="font-mono text-[12px] font-medium">{s.name}</span>{s.flaky && <Badge tone="warn">불안정</Badge>}
+                      <a href={`#/edit/scenario/${encodeURIComponent(s.name)}`} onClick={(e) => e.stopPropagation()} className="text-[11px] text-link hover:underline">편집</a></div>
                     <div className="text-[13px]">{s.title}</div>
                     {s.description && <div className="mt-0.5 max-w-2xl text-[12px] text-sub">{s.description}</div>}
                   </td>

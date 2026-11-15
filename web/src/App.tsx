@@ -6,6 +6,8 @@ import { Runs } from "./pages/Runs";
 import { RunDetail } from "./pages/RunDetail";
 import { Scenarios } from "./pages/Scenarios";
 import { Live } from "./pages/Live";
+import { Editor } from "./pages/Editor";
+import { post } from "./lib/api";
 
 export function App() {
   const hash = useHash();
@@ -38,6 +40,10 @@ export function App() {
   if (hash.startsWith("#/run/")) page = <RunDetail dir={decodeURIComponent(hash.slice(6))} />;
   else if (active === "scenarios") page = <Scenarios job={job} refreshJob={refreshJob} />;
   else if (active === "live") page = <Live job={job} refreshJob={refreshJob} />;
+  else if (active === "edit") page = <Editor route={hash} runScenario={async (name) => {
+    try { await post("/api/run", { scenarios: [name], options: { reuse: false, precheck: false } }); refreshJob(); location.hash = "#/scenarios"; }
+    catch (e) { alert(`실행하지 못함: ${(e as Error).message}`); }
+  }} />;
   else page = <Runs />;
   return <Layout active={active} info={info} running={!!job?.running}>{page}</Layout>;
 }

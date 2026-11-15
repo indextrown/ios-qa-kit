@@ -4221,6 +4221,53 @@ def cmd_ui(args):
                 "unknownIds": unknown, "problem": problem,
                 "exists": (ws.root / "scenarios" / f"{name}.qa.yml").exists()}, None
 
+    def src_path(kind, name):
+        """편집할 파일: scenarios/<이름>.qa.yml 또는 steps/<이름>.qa.yml"""
+        if kind not in ("scenario", "step") or not SCENARIO_NAME_RE.fullmatch(name or ""):
+            return None
+        return ws.root / ("scenarios" if kind == "scenario" else "steps") / f"{name}.qa.yml"
+
+    def check_src(kind, name, text):
+        """저장하지 않고 지금 글로 검사: 형식, use: 펼치기, 앱에 없는 ID. 공통 단계는 그 단계만 펼쳐 본다."""
+        try:
+            data = scenario_tools.parse_yaml(text)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "problem": f"YAML 형식 오류 — 괄호·따옴표·들여쓰기를 확인하세요 ({e})", "unknownIds": [], "steps": 0}
+        if not isinstance(data, dict) or not isinstance(data.get("steps"), list):
+            return {"ok": False, "problem": "맨 위에 steps: 목록이 있어야 합니다", "unknownIds": [], "steps": 0}
+        try:
+            steps = scenario_tools._expand(data["steps"], ws.root, [f"{name}"] if kind == "step" else [f"{name}.qa.yml"])
+            scenario = dict(data, steps=steps)
+            if data.get("interrupts"):
+                scenario["interrupts"] = scenario_tools._expand(data["interrupts"], ws.root, [f"{name}.qa.yml"])
+            unknown = scenario_tools.check_ids(scenario, _known_ids(ws), extra_ok=("Mapbox",))
+        except Exception as e:  # noqa: BLE001 — 없는 공통 단계 등
+            return {"ok": False, "problem": str(e), "unknownIds": [], "steps": 0}
+        return {"ok": not unknown, "problem": None, "unknownIds": unknown, "steps": count_steps(steps),
+                "tags": data.get("tags") if isinstance(data.get("tags"), list) else []}
+
+    def save_src(body):
+        kind, name, text = body.get("kind"), str(body.get("name") or ""), body.get("text")
+        f = src_path(kind, name)
+        if f is None or not isinstance(text, str):
+            return None, "이름은 영문·숫자·한글·-·_ 만"
+        current = f.read_text(encoding="utf-8") if f.exists() else None
+        if current is not None and body.get("create"):
+            return None, f"이미 있습니다: {f.relative_to(ws.root)}"
+        if current is None and not body.get("create"):
+            return None, "파일이 없습니다"
+        base = body.get("baseHash")   # 열 때의 내용 — 그사이 밖에서 바뀌었으면 덮어쓰지 않는다
+        if current is not None and base != hashlib.sha1(current.encode()).hexdigest():
+            return None, "편집하는 동안 파일이 밖에서 바뀌었습니다 — 다시 열어 확인하세요"
+        result = check_src(kind, name, text)
+        if result["problem"] and (result["problem"].startswith("YAML") or result["problem"] == "맨 위에 steps: 목록이 있어야 합니다"):
+            return None, result["problem"]
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
+        update_readme(ws)
+        new = f.read_text(encoding="utf-8")
+        return {"saved": str(f.relative_to(ws.root)), "hash": hashlib.sha1(new.encode()).hexdigest(), "check": result}, None
+
     def publish_draft(body):
         """재생이 통과한 초안만 scenarios/로 옮긴다 (재생 뒤 초안이 바뀌었으면 거절)."""
         name = str(body.get("name") or "")
@@ -4288,6 +4335,13 @@ def cmd_ui(args):
                 return self.send(409 if err else 200, {"error": err} if err else {"started": True, "args": args_})
             if path == "/api/job/stop":
                 return self.send(200, {"stopping": stop_job()})
+            if path == "/api/src/check":
+                if src_path(body.get("kind"), str(body.get("name") or "")) is None:
+                    return self.send(400, {"error": "잘못된 이름"})
+                return self.send(200, check_src(body.get("kind"), str(body.get("name")), str(body.get("text") or "")))
+            if path == "/api/src/save":
+                res, err = save_src(body)
+                return self.send(409 if err else 200, {"error": err} if err else res)
             if path == "/api/draft":
                 res, err = make_draft(body)
                 return self.send(400 if err else 200, {"error": err} if err else res)
@@ -4357,6 +4411,22 @@ def cmd_ui(args):
                     if res["code"] != 0:
                         return self.send(500, {"error": res["output"][-400:]})
                     return self.send(200, ui_parse_dump(res["output"]))
+                if path == "/api/src":
+                    if q.get("list"):
+                        return self.send(200, {
+                            "scenario": sorted(f.name[:-len(".qa.yml")] for f in (ws.root / "scenarios").glob("*.qa.yml")),
+                            "step": sorted(f.name[:-len(".qa.yml")] for f in (ws.root / "steps").glob("*.qa.yml"))})
+                    f = src_path(q.get("kind"), q.get("name", ""))
+                    if f is None or not f.exists():
+                        return self.send(404, {"error": "파일 없음"})
+                    text = f.read_text(encoding="utf-8")
+                    return self.send(200, {"text": text, "hash": hashlib.sha1(text.encode()).hexdigest(),
+                                           "path": str(f.relative_to(ws.root))})
+                if path == "/api/ids":
+                    term = q.get("q", "").lower()
+                    ids = sorted(_known_ids(ws))
+                    hits = [i for i in ids if term in i.lower()] if term else ids
+                    return self.send(200, {"total": len(ids), "ids": hits[:80]})
                 if path == "/api/steps-files":
                     return self.send(200, sorted(f.name[:-len(".qa.yml")] for f in (ws.root / "steps").glob("*.qa.yml")))
                 if path == "/api/do-steps":
