@@ -285,7 +285,7 @@ cp secrets.example.txt secrets.txt
 | 값을 바꿔 실행 (매개변수) | `qakit run <시나리오> --var ship="선박명"` |
 | 마지막 실패 다시 보기 | `qakit summarize` |
 | 시뮬레이터 화면 띄우기 (로그인 등) | `qakit show` (Xcode 27은 Device Hub) |
-| 브라우저로 결과 보기·골라 실행·라이브 화면 | `qakit ui` (실행 기록·실패 상세·시나리오 선택 실행·시뮬레이터 화면) |
+| 브라우저로 결과 보기·골라 실행·화면 조작 | `qakit ui` (실행 기록·실패 상세·시나리오 선택 실행·시뮬레이터 화면을 눌러 조작) |
 | 성능 측정 (시나리오 후 30분) | `qakit run <시나리오> --bench 30m` |
 | Release 빌드로 | `qakit run <시나리오> --build release` |
 | 도구 최신화 | `qakit update` |
@@ -1213,6 +1213,8 @@ worktree:
 ---
 
 ## 레포 구조
+
+> UI(`qakit ui`)를 고칠 때: `cd web && npm install && npm run dev` (개발 서버, `QAKIT_UI=http://127.0.0.1:<qakit ui 포트>`로 API 연결) → `npm run build`로 `ui/dist`를 다시 만들어 함께 커밋. 사용자는 Node 없이 `ui/dist`를 그대로 씁니다.
 
 <details>
 <summary>폴더 구성 보기</summary>

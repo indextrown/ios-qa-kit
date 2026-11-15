@@ -199,6 +199,7 @@ CI가 없으므로 합치기 전에 직접 돌린다. 바꾼 부분에 해당하
 | `Sources/QAKit/`, `templates/` | 작업공간에서 `qakit test` | 기존 테스트 전부 통과 |
 | `bin/qakit` | 작업공간에서 `qakit doctor` + 바꾼 명령 직접 실행 | ✅ |
 | `skills/` | 새 AI 세션에서 스킬만 보고 간단한 시나리오 1개 작성 | 수정 3회 이내 통과 |
+| `web/` (UI) | `cd web && npm run build` (타입 검사 포함) 후 `ui/dist`를 함께 커밋, `qakit ui`로 화면 확인 | 빌드 통과, `ui/dist`가 소스와 같은 커밋 |
 
 작업공간은 이 저장소 밖(`~/work/qa-workspaces/<앱>`)에 있고 **git으로 관리하지 않는다** (자주 바뀌고 쉽게 지우고 다시 만들 수 있다: `qakit init <앱>`). 확인용으로 마음대로 써도 된다.
 

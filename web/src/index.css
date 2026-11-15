@@ -1,0 +1,25 @@
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 흑백 위주: 강조 색 없이 검정·회색. 성공·실패·주의만 색. (색은 모두 여기서) */
+:root {
+  --bg: 250 250 250; --card: 255 255 255; --muted: 245 245 245;
+  --fg: 23 23 23; --sub: 115 115 115; --line: 234 234 234;
+  --primary: 23 23 23; --primary-fg: 255 255 255;
+  --ok: 22 163 74; --bad: 220 38 38; --warn: 202 138 4; --link: 0 118 245;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: 17 17 17; --card: 26 26 26; --muted: 38 38 38;
+    --fg: 245 245 245; --sub: 160 160 160; --line: 46 46 46;
+    --primary: 245 245 245; --primary-fg: 23 23 23;
+    --ok: 74 222 128; --bad: 248 113 113; --warn: 250 204 21; --link: 96 165 250;
+  }
+}
+html, body, #root { height: 100%; }
+body { @apply bg-bg text-fg font-sans antialiased; font-size: 14px; }
+h1, h2, h3 { @apply tracking-head; }
+::selection { background: rgb(var(--fg) / 0.15); }
