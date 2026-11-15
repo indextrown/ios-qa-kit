@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>qakit</title>
+    <script>
+      /* 화면을 그리기 전에 테마를 붙여 깜박임을 막는다 (src/lib/theme.ts와 같은 규칙) */
+      try { var t = localStorage.getItem("qakit-theme");
+        if (t === "dark" || (t !== "light" && matchMedia("(prefers-color-scheme: dark)").matches)) document.documentElement.classList.add("dark");
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

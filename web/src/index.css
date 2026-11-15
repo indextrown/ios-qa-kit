@@ -4,20 +4,21 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 흑백 위주: 강조 색 없이 검정·회색. 성공·실패·주의만 색. (색은 모두 여기서) */
+/* 차분한 회색 위주: 강조 색 없이, 성공·실패·주의만 색. 색은 모두 여기서.
+   테마: html.dark 클래스 (theme.ts가 밝게·어둡게·시스템 중 고른 것을 화면 그리기 전에 붙인다) */
 :root {
-  --bg: 250 250 250; --card: 255 255 255; --muted: 245 245 245;
-  --fg: 23 23 23; --sub: 115 115 115; --line: 234 234 234;
-  --primary: 23 23 23; --primary-fg: 255 255 255;
-  --ok: 22 163 74; --bad: 220 38 38; --warn: 202 138 4; --link: 0 118 245;
+  --bg: 255 255 255; --side: 250 250 250; --card: 255 255 255; --muted: 244 244 245;
+  --fg: 24 24 27; --sub: 113 113 122; --line: 234 234 236;
+  --primary: 24 24 27; --primary-fg: 255 255 255;
+  --ok: 22 163 74; --bad: 220 38 38; --warn: 202 138 4; --link: 37 99 235;
+  color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: 17 17 17; --card: 26 26 26; --muted: 38 38 38;
-    --fg: 245 245 245; --sub: 160 160 160; --line: 46 46 46;
-    --primary: 245 245 245; --primary-fg: 23 23 23;
-    --ok: 74 222 128; --bad: 248 113 113; --warn: 250 204 21; --link: 96 165 250;
-  }
+:root.dark {
+  --bg: 12 12 13; --side: 17 17 19; --card: 20 20 22; --muted: 32 32 35;
+  --fg: 244 244 245; --sub: 161 161 170; --line: 39 39 42;
+  --primary: 244 244 245; --primary-fg: 24 24 27;
+  --ok: 74 222 128; --bad: 248 113 113; --warn: 250 204 21; --link: 96 165 250;
+  color-scheme: dark;
 }
 html, body, #root { height: 100%; }
 body { @apply bg-bg text-fg font-sans antialiased; font-size: 14px; }
@@ -27,3 +28,6 @@ h1, h2, h3 { @apply tracking-head; }
 /* 라이브 세션: 누른 자리 표시 (퍼지는 원) */
 @keyframes qakit-ripple { from { transform: translate(-50%, -50%) scale(0.4); opacity: 0.9; } to { transform: translate(-50%, -50%) scale(2.4); opacity: 0; } }
 .qakit-ripple { animation: qakit-ripple 0.7s ease-out forwards; }
+
+/* 체크박스·라디오 색을 테마에 맞춤 (어두운 테마에서 혼자 밝게 튀지 않게) */
+input[type="checkbox"], input[type="radio"] { accent-color: rgb(var(--fg)); }

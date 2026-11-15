@@ -6,7 +6,7 @@ import type { Result } from "../lib/api";
 type Variant = "primary" | "secondary" | "ghost" | "danger";
 const VARIANT: Record<Variant, string> = {
   primary: "bg-primary text-primary-fg hover:opacity-90",
-  secondary: "bg-card text-fg shadow-e1 hover:bg-muted",
+  secondary: "bg-card text-fg ring-1 ring-line hover:bg-muted",
   ghost: "text-sub hover:text-fg hover:bg-muted",
   danger: "bg-bad text-white hover:opacity-90",
 };
@@ -29,9 +29,9 @@ export function Button({ variant = "secondary", size = "md", loading, className,
 
 export function Card({ className, children, title, actions }: { className?: string; children: ReactNode; title?: ReactNode; actions?: ReactNode }) {
   return (
-    <section className={cx("rounded-lg bg-card shadow-e1", className)}>
+    <section className={cx("rounded-xl bg-card ring-1 ring-line", className)}>
       {(title || actions) && (
-        <div className="flex items-center justify-between gap-2 border-b border-line px-4 py-2.5">
+        <div className="flex min-h-[42px] items-center justify-between gap-2 border-b border-line px-4 py-2">
           <h3 className="text-[13px] font-semibold">{title}</h3>
           <div className="flex items-center gap-1.5">{actions}</div>
         </div>
@@ -44,9 +44,9 @@ export function Card({ className, children, title, actions }: { className?: stri
 export function PageHeader({ title, description, actions }: { title: string; description?: ReactNode; actions?: ReactNode }) {
   return (
     <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <h1 className="text-2xl font-semibold">{title}</h1>
-        {description && <p className="mt-1 text-[13px] text-sub">{description}</p>}
+      <div className="min-w-0">
+        <h1 className="text-[22px] font-semibold leading-tight">{title}</h1>
+        {description && <p className="mt-1.5 max-w-3xl text-[13px] leading-relaxed text-sub">{description}</p>}
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
     </div>
