@@ -42,6 +42,7 @@ qakit ui                            # 서버를 열고 브라우저가 자동으
 |---|---|
 | **라이브 세션** | 시뮬레이터 화면을 보며 눌러 조작 → 시나리오로 저장, 만들어 둔 시나리오를 골라 돌리며 커서로 누르는 자리 보기 |
 | **시나리오** | 골라서(태그로 한꺼번에) 실행, 실시간 로그, 최근 결과·불안정 표시 |
+| **커버리지** | 앱 ID(자동 ID) 중 시나리오가 쓰는 비율을 화면별로. 펼치면 ID마다 쓰는 시나리오 또는 "시나리오 없음". 빈 화면의 **AI QA로**를 누르면 그 요소들을 확인하는 목표가 채워진 채 AI QA로 넘어갑니다 |
 | **편집** | 시나리오·공통 단계 YAML 편집 (고칠 때마다 검사) |
 | **실행 기록** | 지난 실행의 통과·실패, 실패 원인·스크린샷·단계별 시간 |
 
@@ -325,6 +326,7 @@ cp secrets.example.txt secrets.txt
 | CI에서 태그로 골라 보고서까지 | `qakit run --tag smoke --junit report.xml` (종료 코드 1 앱 실패 · 2 환경 문제) · GitHub Actions 예시: [CI에서 돌리기](#ci에서-돌리기-github-actions) |
 | 값을 바꿔 실행 (매개변수) | `qakit run <시나리오> --var ship="선박명"` |
 | 마지막 실패 다시 보기 | `qakit summarize` |
+| 무엇이 아직 테스트되지 않았나 | `qakit coverage [--unused]` (앱 ID 중 시나리오가 쓰는 것, 화면별) · UI **커버리지**에서 빈 화면을 AI QA로 |
 | 시뮬레이터 화면 띄우기 (로그인 등) | `qakit show` (Xcode 27은 Device Hub) |
 | 브라우저로 결과 보기·골라 실행·화면 조작 | `qakit ui` (실행 기록·실패 상세·시나리오 선택 실행·시뮬레이터 화면을 눌러 조작, [사용법](#브라우저로-쓰기-qakit-ui)) |
 | 성능 측정 (시나리오 후 30분) | `qakit run <시나리오> --bench 30m` |
@@ -1396,7 +1398,8 @@ worktree:
 
 ```text
 ios-qa-kit/
-├── bin/qakit                 CLI (Python 3 표준 라이브러리만)
+├── bin/qakit                 CLI 입구 (lib/qakit/*.py를 순서대로 읽음)
+├── lib/qakit/                CLI 본체, 구역별 파일 (Python 3 표준 라이브러리만): 00_base · 10_device · 20_build · 30_setup · 40_results_sync · 50_run_serve · 60_bench · 70_save_do · 80_ui_data · 85_mcp_ai · 86_ui_server · 90_update_main
 ├── AutoID/                   자동 ID 라이브러리 (시뮬레이터 주입용 dylib)
 ├── Sources/QAKit/            테스트용 Swift 라이브러리 (BasePage, QATestCase, QAWait …)
 ├── Tools/gen-ids/            앱 소스 → QAID 상수 생성기
