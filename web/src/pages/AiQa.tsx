@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, Play, Square, Loader2, CheckCircle2, XCircle, AlertTriangle, Wrench, MessageSquare, Info, ExternalLink } from "lucide-react";
+import { Bot, MousePointer2, Play, Square, Loader2, CheckCircle2, XCircle, AlertTriangle, Wrench, MessageSquare, Info, ExternalLink } from "lucide-react";
 import { fileUrl, get, post, type AiSession } from "../lib/api";
 import { aiSecs, aiWhen } from "./AiSession";
 import { cx, store, stored } from "../lib/util";
 import { AiActivity } from "../components/AiActivity";
+import { RobotCursor } from "../components/RobotCursor";
 import { Badge, Button, Card, Empty, PageHeader } from "../components/ui";
 
 interface Engine { id: string; name: string; version?: string; ready: boolean; note: string; tested: boolean }
@@ -30,6 +31,7 @@ export function AiQa() {
   const [minutes, setMinutes] = useState(() => stored("qakit-ai-minutes", 10));
   const [turns, setTurns] = useState(() => stored("qakit-ai-turns", 60));
   const [save, setSave] = useState(() => stored("qakit-ai-save", false));
+  const [cursor, setCursor] = useState(() => stored("qakit-ai-cursor", true));   // 실행기가 누르는 자리 커서
   const [job, setJob] = useState<AiJob | null>(null);
   const [events, setEvents] = useState<Ev[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -45,8 +47,8 @@ export function AiQa() {
   useEffect(loadPast, [loadPast]);
   const wasRunning = useRef(false);
   useEffect(() => { if (wasRunning.current && !job?.running) loadPast(); wasRunning.current = !!job?.running; }, [job?.running, loadPast]);
-  useEffect(() => { store("qakit-ai-goal", goal); store("qakit-ai-engine", engine); store("qakit-ai-minutes", minutes); store("qakit-ai-turns", turns); store("qakit-ai-save", save); },
-    [goal, engine, minutes, turns, save]);
+  useEffect(() => { store("qakit-ai-goal", goal); store("qakit-ai-engine", engine); store("qakit-ai-minutes", minutes); store("qakit-ai-turns", turns); store("qakit-ai-save", save); store("qakit-ai-cursor", cursor); },
+    [goal, engine, minutes, turns, save, cursor]);
 
   const poll = useCallback(async () => {
     const st = await get<AiJob>(`/api/ai/job?since=${since.current}`);
@@ -173,9 +175,14 @@ export function AiQa() {
         </div>
 
         <div className="space-y-4">
+          <div className="flex justify-center">
+            <Button size="sm" variant="ghost" onClick={() => setCursor(!cursor)} title="AI가 누르는 자리로 커서가 움직이고 누른 곳에 표시"
+              className={cx(cursor ? "bg-muted font-medium" : "text-sub")}><MousePointer2 className="h-3.5 w-3.5" />커서 {cursor ? "켬" : "끔"}</Button>
+          </div>
           <div className="mx-auto w-full max-w-[300px] rounded-[38px] bg-neutral-900 p-2.5 shadow-e3 ring-1 ring-black/40">
-            <div className="overflow-hidden rounded-[30px] bg-black">
+            <div className="relative overflow-hidden rounded-[30px] bg-black">
               <img src="/api/stream?k=ai" alt="시뮬레이터 화면 (실시간)" className="block aspect-[9/19.5] w-full object-cover" />
+              <RobotCursor enabled={cursor} />
             </div>
           </div>
           <div className="text-center text-[11px] text-sub">커서·요소까지 보려면 <a href="#/live" className="text-link hover:underline">라이브 세션</a></div>

@@ -1,0 +1,43 @@
+# PR·push마다: 파이썬 컴파일·단위 테스트, UI 빌드 결과(ui/dist)가 소스와 같고 모두 커밋됐는지.
+# 시뮬레이터·Xcode가 필요한 확인(실제 실행)은 여기서 하지 않는다 — 시범 앱에서 손으로.
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [develop, main]
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 컴파일
+        run: python -m py_compile bin/qakit Tools/gen-ids/gen_ids.py Tools/scenario/scenario_tools.py
+      - name: 단위 테스트
+        run: python -m unittest discover -s tests -v
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: UI 빌드
+        working-directory: web
+        run: npm ci && npm run build
+      - name: ui/dist가 소스와 같고 모두 커밋됐는지
+        run: |
+          if [ -n "$(git status --porcelain ui/dist)" ]; then
+            echo "::error::ui/dist가 web/ 소스와 다릅니다 — cd web && npm run build 뒤 ui/dist까지 커밋하세요"
+            git status --porcelain ui/dist
+            exit 1
+          fi
+          for f in $(grep -o 'assets/[^"]*' ui/dist/index.html); do
+            git ls-files --error-unmatch "ui/dist/$f" >/dev/null || { echo "::error::커밋 안 된 빌드 파일: ui/dist/$f"; exit 1; }
+          done
