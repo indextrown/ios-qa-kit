@@ -494,6 +494,58 @@ def follow_worktree(ws):
     update_worktree(ws, check_only=ws.worktree_update == "warn", strict=False)
 
 
+def worktree_info(ws, fetch=False):
+    """UI용: QA 워크트리 상태 + 가져올 커밋·고를 브랜치. QA 워크트리가 아니면 {"worktree": False}."""
+    st = worktree_status(ws, fetch=fetch)
+    if st is None:
+        return {"worktree": False}
+    d, ref = ws.app_dir, st["ref"]
+    fmt = "%h\x1f%s\x1f%an\x1f%cr"
+    incoming = []
+    if ref and st["behind"]:
+        for line in (git(d, "log", f"--format={fmt}", "-n", "15", f"HEAD..{ref}") or "").splitlines():
+            h, subj, author, when = (line.split("\x1f") + ["", "", "", ""])[:4]
+            incoming.append({"hash": h, "subject": subj, "author": author, "when": when})
+    head = (git(d, "log", "-1", f"--format={fmt}") or "").split("\x1f")
+    branches = []
+    for line in (git(d, "for-each-ref", "--sort=-committerdate", "--count=60", "--format=%(refname:short)\x1f%(committerdate:relative)",
+                     "refs/remotes/origin") or "").splitlines():
+        name, when = (line.split("\x1f") + [""])[:2]
+        name = name.removeprefix("origin/")
+        if name and name not in ("HEAD", "origin") and name != st["branch"]:
+            branches.append({"name": name, "when": when})
+    dirty = bool(git(d, "status", "--porcelain", "--untracked-files=no", "--", *app_pathspec(ws)))
+    return dict(st, worktree=True, configured=ws.worktree_base, mode=ws.worktree_update, dirty=dirty, incoming=incoming,
+                head={"hash": head[0], "subject": head[1] if len(head) > 1 else "", "when": head[3] if len(head) > 3 else ""},
+                branches=branches, appDir=str(d))
+
+
+def set_worktree_config(ws, base=None, mode=None):
+    """qakit.yml의 worktree.base·update만 고친다 (나머지 줄·주석 그대로). 없으면 worktree: 블록에 넣는다."""
+    p = ws.config_path
+    lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+    try:
+        start = next(i for i, l in enumerate(lines) if re.match(r"^worktree:\s*(#.*)?$", l))
+    except StopIteration:
+        lines += ["\nworktree:\n"]
+        start = len(lines) - 1
+    end = start + 1
+    while end < len(lines) and (lines[end].startswith((" ", "\t")) or not lines[end].strip()):
+        end += 1
+    for key, val in (("base", base), ("update", mode)):
+        if val is None:
+            continue
+        idx = next((i for i in range(start + 1, end) if re.match(rf"^\s+{key}:", lines[i])), None)
+        new = f"  {key}: {val}\n"
+        if idx is None:
+            lines.insert(start + 1, new)
+            end += 1
+        else:
+            comment = re.search(r"\s+#.*$", lines[idx].rstrip("\n"))
+            lines[idx] = new.rstrip("\n") + (comment.group(0) if comment else "") + "\n"
+    p.write_text("".join(lines), encoding="utf-8")
+
+
 def cmd_worktree_update(args):
     ws = find_workspace(args.workspace)
     update_worktree(ws, base=args.base, check_only=args.check)
