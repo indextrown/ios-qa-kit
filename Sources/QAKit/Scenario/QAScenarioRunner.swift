@@ -263,6 +263,7 @@ public final class QAScenarioRunner {
             waitUntilSettled(element)
             recordTouch(element)
             element.tap()
+            recordTouchDone()
             if let effect {
                 guard try evaluate(effect, timeout: number(step["expect-timeout"]) ?? 10) else {
                     throw fail("탭 뒤 기대 효과가 나타나지 않음 (탭이 무시됐거나 다른 곳에 닿았을 수 있음): \(compact(effect))")
@@ -275,6 +276,7 @@ public final class QAScenarioRunner {
                 try waitFor(element, timeout: 10, what: tapTarget)
                 recordTouch(element)
                 element.tap()
+                recordTouchDone()
             }
             let alert = app.alerts.firstMatch
             guard alert.waitForExistence(timeout: 5) else { throw fail("입력 알림이 뜨지 않음") }
@@ -712,10 +714,26 @@ public final class QAScenarioRunner {
     /// 누르는 자리를 파일에 남긴다 (QA_TAPS_FILE, 시뮬레이터만) — qakit ui 라이브 화면이 커서를 그 자리로 옮겨 보여 준다.
     /// 화면 크기 대비 요소 영역(포인트). 파일이 없거나 못 쓰면 조용히 넘어간다.
     private static let touchFile = ProcessInfo.processInfo.environment["QA_TAPS_FILE"].flatMap { $0.isEmpty ? nil : $0 }
+    /// 기록: 누르기 직전("tap"·"swipe-…")과 누른 직후("tap-done", 같은 자리). UI는 직전에 커서를 옮기고 직후에 누름 표시 →
+    /// 실제 누른 순간과 맞는다. 자리는 요소 중 **화면에 보이는 부분**(화면 밖으로 걸친 셀 등은 그 안쪽)의 사각형.
+    private var lastTouch: CGRect?
     private func recordTouch(_ element: XCUIElement, _ kind: String = "tap") {
-        guard let path = Self.touchFile else { return }
-        let f = element.frame, s = app.frame
+        guard Self.touchFile != nil else { return }
+        let s = app.frame
+        let f = element.frame.intersection(s)
         guard !f.isEmpty, s.width > 0, s.height > 0 else { return }
+        lastTouch = f
+        writeTouch(kind, f, s)
+    }
+
+    private func recordTouchDone() {
+        guard Self.touchFile != nil, let f = lastTouch else { return }
+        lastTouch = nil
+        writeTouch("tap-done", f, app.frame)
+    }
+
+    private func writeTouch(_ kind: String, _ f: CGRect, _ s: CGRect) {
+        guard let path = Self.touchFile else { return }
         let n = { (v: CGFloat) in String(format: "%.1f", Double(v)) }
         let line = "{\"t\":\(String(format: "%.3f", Date().timeIntervalSince1970)),\"kind\":\"\(kind)\","
             + "\"x\":\(n(f.minX - s.minX)),\"y\":\(n(f.minY - s.minY)),\"w\":\(n(f.width)),\"h\":\(n(f.height)),"

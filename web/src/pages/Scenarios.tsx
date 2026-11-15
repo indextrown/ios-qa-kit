@@ -15,6 +15,8 @@ export function Scenarios({ job, refreshJob }: { job: Job | null; refreshJob: ()
   const [reuse, setReuse] = useState(() => stored("qakit-reuse", true));
   const [stop, setStop] = useState<Stop>(() => stored<Stop>("qakit-stop", ""));
   const [precheck, setPrecheck] = useState(() => stored("qakit-precheck", true));
+  const [goLive, setGoLive] = useState(() => stored("qakit-run-golive", true));   // 실행하면 라이브 세션으로 (화면·커서로 진행 보기)
+  useEffect(() => store("qakit-run-golive", goLive), [goLive]);
   const [starting, setStarting] = useState(false);
   const logRef = useRef<HTMLPreElement>(null);
 
@@ -49,11 +51,12 @@ export function Scenarios({ job, refreshJob }: { job: Job | null; refreshJob: ()
     try {
       await post("/api/run", { scenarios: chosen, options: { reuse, stop: stop || null, precheck } });
       refreshJob();
+      if (goLive) location.hash = "#/live";
     } catch (e) { alert(`실행하지 못함: ${(e as Error).message}`); }
     setStarting(false);
   };
   const runOne = async (name: string) => {
-    try { await post("/api/run", { scenarios: [name], options: { reuse, stop: null, precheck: false } }); refreshJob(); }
+    try { await post("/api/run", { scenarios: [name], options: { reuse, stop: null, precheck: false } }); refreshJob(); if (goLive) location.hash = "#/live"; }
     catch (e) { alert(`실행하지 못함: ${(e as Error).message}`); }
   };
   const aiCreate = () => { store("qakit-ai-mode", "scenario"); location.hash = "#/ai"; };
@@ -86,6 +89,8 @@ export function Scenarios({ job, refreshJob }: { job: Job | null; refreshJob: ()
               <option value="">같은 원인 2번이면 멈춤</option><option value="never">끝까지</option><option value="first">첫 실패에서 멈춤</option>
             </select></label>
           <label className="flex items-center gap-2"><input type="checkbox" checked={precheck} onChange={(e) => setPrecheck(e.target.checked)} />사전 확인</label>
+          <label className="flex items-center gap-2" title="실행하면 라이브 세션으로 넘어가 실시간 화면·커서로 진행을 봅니다 (로그는 오른쪽 '시나리오 실행')">
+            <input type="checkbox" checked={goLive} onChange={(e) => setGoLive(e.target.checked)} />실행하면 라이브 세션으로</label>
         </div>
       </Card>
 
