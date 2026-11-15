@@ -6,7 +6,7 @@ interface Touch { t: number; kind: string; x: number; y: number; w: number; h: n
 type Mark = { x: number; y: number; kind: string; k: number };
 
 /** 실행기가 누르는 자리(.qakit/taps.jsonl)로 움직이는 커서 — 화면 위에 absolute로 겹쳐 그린다. 라이브 세션과 같은 표시. */
-export function RobotCursor({ enabled }: { enabled: boolean }) {
+export function RobotCursor({ enabled, size = "h-6 w-6" }: { enabled: boolean; size?: string }) {
   const queue = useRef<Touch[]>([]);
   const [robot, setRobot] = useState<Mark | null>(null);
   const [ripples, setRipples] = useState<Mark[]>([]);
@@ -55,7 +55,7 @@ export function RobotCursor({ enabled }: { enabled: boolean }) {
       {ripples.map((r) => <div key={r.k} className="qakit-ripple absolute h-10 w-10 rounded-full border-2 border-rose-500 bg-rose-500/25" style={{ left: `${r.x}%`, top: `${r.y}%` }} />)}
       {robot && (
         <div className="absolute z-10 transition-[left,top] duration-300 ease-out" style={{ left: `${robot.x}%`, top: `${robot.y}%` }}>
-          <MousePointer2 className="h-6 w-6 -translate-x-[3px] -translate-y-[3px] fill-neutral-900 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]" strokeWidth={1.5} />
+          <MousePointer2 className={`${size} -translate-x-[3px] -translate-y-[3px] fill-neutral-900 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]`} strokeWidth={1.5} />
           {robot.kind.startsWith("swipe") && <span className="absolute left-5 top-4 whitespace-nowrap rounded bg-neutral-900/80 px-1.5 py-0.5 text-[10px] text-white">
             쓸기 {({ "swipe-up": "↑", "swipe-down": "↓", "swipe-left": "←", "swipe-right": "→" } as Record<string, string>)[robot.kind] ?? ""}</span>}
         </div>
