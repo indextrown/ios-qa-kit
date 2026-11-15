@@ -4,10 +4,10 @@ import { cx } from "../lib/util";
 import type { Info } from "../lib/api";
 
 const NAV = [
-  { id: "runs", href: "#/runs", label: "실행 기록", icon: History },
-  { id: "scenarios", href: "#/scenarios", label: "시나리오", icon: ListChecks },
   { id: "live", href: "#/live", label: "라이브 세션", icon: MonitorSmartphone },
+  { id: "scenarios", href: "#/scenarios", label: "시나리오", icon: ListChecks },
   { id: "edit", href: "#/edit", label: "편집", icon: FileCode2 },
+  { id: "runs", href: "#/runs", label: "실행 기록", icon: History },
 ];
 
 export function Layout({ active, info, running, children }: { active: string; info: Info | null; running: boolean; children: ReactNode }) {

@@ -6,9 +6,9 @@ export const secs = (s?: number | null) => (s == null ? "" : `${Number(s).toFixe
 
 /** location.hash 기반 라우팅 (서버는 / 하나만 서빙) */
 export function useHash() {
-  const [hash, setHash] = useState(location.hash || "#/runs");
+  const [hash, setHash] = useState(location.hash || "#/live");
   useEffect(() => {
-    const on = () => setHash(location.hash || "#/runs");
+    const on = () => setHash(location.hash || "#/live");
     window.addEventListener("hashchange", on);
     return () => window.removeEventListener("hashchange", on);
   }, []);

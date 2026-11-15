@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, EyeOff, Hand, Radio, Image as ImageIcon, MousePointer2, MousePointerClick, Pause, Play, RotateCcw, ScanLine, TerminalSquare, Timer, CheckCircle2, ArrowUp, ArrowDown, Loader2 } from "lucide-react";
-import { get, post, screenUrl, type DoResult, type El, type Elements, type Job } from "../lib/api";
+import { Eye, EyeOff, Hand, Camera, Circle, Square as StopIcon, Keyboard, Radio, Image as ImageIcon, MousePointer2, MousePointerClick, Pause, Play, RotateCcw, ScanLine, TerminalSquare, Timer, CheckCircle2, ArrowUp, ArrowDown, Loader2 } from "lucide-react";
+import { fileUrl, get, post, screenUrl, type DoResult, type El, type Elements, type Job } from "../lib/api";
 import { SaveScenario } from "../components/SaveScenario";
 import { RunScenario } from "../components/RunScenario";
 import { cx, store, stored } from "../lib/util";
@@ -44,6 +44,10 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   const [sel, setSel] = useState<El | null>(null);
   const [hover, setHover] = useState<El | null>(null);
   const [input, setInput] = useState("");
+  const [typed, setTyped] = useState("");                                           // 고른 입력칸에 칠 글자
+  const [rec, setRec] = useState<{ started: number } | null>(null);                 // 녹화 중
+  const [now, setNow] = useState(Date.now());
+  const [capMsg, setCapMsg] = useState<string | null>(null);
   const [result, setResult] = useState<{ step: string; res?: DoResult; error?: string; running?: boolean } | null>(null);
   const [steps, setSteps] = useState<{ steps: string[]; fromLaunch: boolean } | null>(null);
   const [cursor, setCursor] = useState(() => stored("qakit-cursor", true));      // 손가락 커서·탭 표시
@@ -163,6 +167,33 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     await loadEls(); loadSteps();
   };
 
+  // 캡처: 사진은 지금 화면(원래 해상도)을 내 컴퓨터로, 녹화는 results/recordings/에 남기고 내려받기
+  const download = (href: string, name?: string) => { const a = document.createElement("a"); a.href = href; if (name) a.download = name; document.body.appendChild(a); a.click(); a.remove(); };
+  const saveShot = async () => {
+    try {
+      const r = await fetch(screenUrl(), { cache: "no-store" });
+      if (!r.ok) throw new Error(String(r.status));
+      const url = URL.createObjectURL(await r.blob());
+      const ts = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+      download(url, `qakit-${ts}.jpg`); setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setCapMsg("사진을 내려받았습니다");
+    } catch (e) { setCapMsg(`사진 저장 실패: ${(e as Error).message}`); }
+  };
+  useEffect(() => { if (!capMsg || rec) return; const t = setTimeout(() => setCapMsg(null), 6000); return () => clearTimeout(t); }, [capMsg, rec]);
+  useEffect(() => { setTyped(""); }, [sel]);
+  useEffect(() => { get<{ recording: boolean; started: number | null }>("/api/record").then((r) => setRec(r.recording && r.started ? { started: r.started } : null)).catch(() => {}); }, []);
+  useEffect(() => { if (!rec) return; const t = setInterval(() => setNow(Date.now()), 500); return () => clearInterval(t); }, [rec]);
+  const toggleRec = async () => {
+    try {
+      if (!rec) { const r = await post<{ started: number }>("/api/record/start"); setRec({ started: r.started }); setCapMsg("녹화 중 — 다시 누르면 멈추고 내려받습니다"); return; }
+      setCapMsg("녹화 마무리 중…");
+      const r = await post<{ dir: string; name: string; bytes: number }>("/api/record/stop");
+      setRec(null);
+      download(`${fileUrl(r.dir, r.name)}&download=1`);
+      setCapMsg(`녹화 저장: results/${r.dir}/${r.name} (${(r.bytes / 1e6).toFixed(1)}MB)`);
+    } catch (e) { setRec(null); setCapMsg(`녹화 실패: ${(e as Error).message}`); }
+  };
+
   const hit = (ev: React.MouseEvent) => {
     const scr = els?.screen;
     if (!scr || !overlay.current) return null;
@@ -179,6 +210,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   const scr = els?.screen;
   const selector = sel && els ? selectorFor(sel, els.elements) : null;
   const working = !!result?.running || busy;
+  const isInput = !!sel && ["TextField", "SecureTextField", "SearchField", "TextView"].includes(sel.type);
   const actions: [string, string, typeof Hand][] = selector ? [
     ["탭", `tap: ${selector}`, Hand], ["나타날 때까지", `wait: { for: ${selector}, timeout: 10 }`, Timer],
     ["보이는지 확인", `expect: { visible: ${selector} }`, CheckCircle2], ["위로 쓸기", `swipe: { on: ${selector}, dir: up }`, ArrowUp],
@@ -204,6 +236,11 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
             <span className="mx-1 h-4 w-px bg-line" />
             <Button size="sm" variant="ghost" onClick={() => doStep("launch")} disabled={working}><RotateCcw className="h-3.5 w-3.5" />앱 다시 켜기</Button>
             <Button size="sm" variant="ghost" onClick={loadEls} loading={dumping}><ScanLine className="h-3.5 w-3.5" />화면 구조</Button>
+            <span className="mx-1 h-4 w-px bg-line" />
+            <Button size="sm" variant="ghost" onClick={saveShot} title="지금 화면을 사진으로 내려받기 (원래 해상도)"><Camera className="h-3.5 w-3.5" />사진</Button>
+            <Button size="sm" variant="ghost" onClick={toggleRec} title="화면 녹화 — 멈추면 results/recordings/에 남기고 내려받기"
+              className={cx(rec && "text-bad")}>{rec ? <StopIcon className="h-3.5 w-3.5 fill-current" /> : <Circle className="h-3.5 w-3.5" />}
+              {rec ? `녹화 ${Math.max(0, Math.floor(now / 1000 - rec.started))}s` : "녹화"}</Button>
             <Button size="sm" variant="ghost" onClick={() => setBoxes(!boxes)}>{boxes ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}요소</Button>
             <Button size="sm" variant="ghost" onClick={() => setCursor(!cursor)} title="누르는 자리 보기: 실행기(라이브 조작·qakit do·시나리오 실행)가 누르는 곳으로 커서가 움직이고, 마우스는 손가락 원으로"
               className={cx(cursor ? "bg-muted font-medium" : "text-sub")}><MousePointer2 className="h-3.5 w-3.5" />커서 {cursor ? "켬" : "끔"}</Button>
@@ -254,7 +291,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
           </div>
           <p className="mt-2 h-4 text-[12px] text-sub">
             {hover ? <span className="font-mono">{hover.type} {hasId(hover) ? `#${hover.id}` : ""} {hover.label ? `"${hover.label}"` : ""}</span>
-              : streamNote ?? (shotError ? shotError : els ? `요소 ${els.elements.length}개` : "")}</p>
+              : capMsg ?? streamNote ?? (shotError ? shotError : els ? `요소 ${els.elements.length}개` : "")}</p>
         </div>
 
         <div className="space-y-4">
@@ -268,6 +305,18 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                 {sel.label && <div className="text-[13px]">"{sel.label}"</div>}
                 <div className="font-mono text-[11px] text-sub">@{sel.x},{sel.y} {sel.w}×{sel.h}</div>
                 <div className="rounded-md bg-muted px-2.5 py-2"><div className="mb-0.5 text-[11px] text-sub">단계 대상</div><Mono className="break-all">{selector}</Mono></div>
+                {isInput && (
+                  <form className="space-y-1.5" onSubmit={(e) => { e.preventDefault(); if (typed) doStep(`type: { into: ${selector}, text: ${JSON.stringify(typed)} }`); }}>
+                    <div className="flex gap-1.5">
+                      <input value={typed} onChange={(e) => setTyped(e.target.value)} type="text"
+                        placeholder={sel.type === "SecureTextField" ? "{secret:PASSWORD} (secrets.txt 키)" : "칠 글자"}
+                        className="h-8 min-w-0 flex-1 rounded-md bg-muted px-2.5 text-[12px] outline-none placeholder:text-sub" />
+                      <Button type="submit" size="sm" variant="primary" disabled={working || !typed}><Keyboard className="h-3.5 w-3.5" />입력</Button>
+                    </div>
+                    {sel.type === "SecureTextField" && typed && !/^\{secret:[A-Za-z0-9_-]+\}$/.test(typed) &&
+                      <div className="text-[11px] text-warn">비밀번호가 기록·시나리오에 그대로 남습니다 — <Mono>{"{secret:키}"}</Mono>로 쓰세요</div>}
+                  </form>
+                )}
                 <div className="grid grid-cols-2 gap-1.5">
                   {actions.map(([label, step, Icon], i) => (
                     <Button key={label} variant={i === 0 ? "primary" : "secondary"} size="sm" disabled={working} onClick={() => doStep(step)}

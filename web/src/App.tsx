@@ -35,11 +35,11 @@ export function App() {
   useEffect(() => { pollJob(); return () => clearTimeout(timer.current); }, [pollJob]);
   const refreshJob = useCallback(() => { from.current = 0; setJob(null); pollJob(); }, [pollJob]);
 
-  const active = hash.startsWith("#/run/") ? "runs" : hash.slice(2).split("/")[0] || "runs";
+  const active = hash.startsWith("#/run/") ? "runs" : hash.slice(2).split("/")[0] || "live";   // 처음 열면 라이브 세션
   let page;
   if (hash.startsWith("#/run/")) page = <RunDetail dir={decodeURIComponent(hash.slice(6))} />;
   else if (active === "scenarios") page = <Scenarios job={job} refreshJob={refreshJob} />;
-  else if (active === "live") page = <Live job={job} refreshJob={refreshJob} />;
+  else if (active === "live" || !hash.slice(2)) page = <Live job={job} refreshJob={refreshJob} />;
   else if (active === "edit") page = <Editor route={hash} runScenario={async (name) => {
     try { await post("/api/run", { scenarios: [name], options: { reuse: false, precheck: false } }); refreshJob(); location.hash = "#/scenarios"; }
     catch (e) { alert(`실행하지 못함: ${(e as Error).message}`); }
