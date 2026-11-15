@@ -2740,6 +2740,58 @@ def _known_ids(ws):
     return set(ids)
 
 
+def coverage(ws):
+    """앱 ID(자동 ID, 화면타입.프로퍼티) 중 시나리오가 쓰는 것. 화면 = ID 맨 앞 타입 이름.
+    시나리오는 use:를 펼쳐 어디에 쓰였든(대상·조건·start) 같은 글이면 쓰임. 앱이 직접 붙인 ID는 전체를 모르므로 따로."""
+    ids = known_ids(ws)
+    users = {}   # ID → 시나리오 이름들
+
+    def walk(node, name):
+        if isinstance(node, dict):
+            for v in node.values():
+                walk(v, name)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v, name)
+        elif isinstance(node, str):
+            users.setdefault(node, set()).add(name)
+    for f in sorted((ws.root / "scenarios").glob("*.qa.yml")):
+        name = f.name[:-len(".qa.yml")]
+        try:
+            walk(scenario_tools.load_scenario(f, ws.root), name)
+        except Exception:  # noqa: BLE001 — 형식이 깨진 시나리오는 건너뛴다 (qakit check가 알려 줌)
+            continue
+    screens = {}
+    for i in sorted(ids):
+        screens.setdefault(i.split(".")[0], []).append({"id": i, "scenarios": sorted(users.get(i, ()))})
+    rows = [{"screen": k, "total": len(v), "used": sum(1 for x in v if x["scenarios"]), "ids": v} for k, v in screens.items()]
+    rows.sort(key=lambda r: (r["used"] / r["total"], -r["total"], r["screen"]))
+    extra = sorted(({"id": k, "scenarios": sorted(v)} for k, v in users.items()
+                    if k not in ids and re.fullmatch(r"[a-z][a-z0-9]*(_[a-z0-9]+)+", k)), key=lambda x: x["id"])
+    used = sum(r["used"] for r in rows)
+    return {"total": len(ids), "used": used, "screens": rows, "extra": extra,
+            "scenarios": len(list((ws.root / "scenarios").glob("*.qa.yml")))}
+
+
+def cmd_coverage(args):
+    ws = find_workspace(args.workspace)
+    c = coverage(ws)
+    if args.json:
+        print(json.dumps(c, ensure_ascii=False, indent=2))
+        return
+    pct = lambda u, t: f"{(u / t * 100 if t else 0):.0f}%"
+    print(f"시나리오 {c['scenarios']}개가 앱 ID {c['total']}개 중 {c['used']}개를 씁니다 ({pct(c['used'], c['total'])})\n")
+    width = max((len(r["screen"]) for r in c["screens"]), default=10)
+    for r in c["screens"]:
+        bar = "█" * round(r["used"] / r["total"] * 10) + "·" * (10 - round(r["used"] / r["total"] * 10))
+        unused = [x["id"].split(".", 1)[-1] for x in r["ids"] if not x["scenarios"]]
+        print(f"  {r['screen']:<{width}}  {bar} {r['used']:>3}/{r['total']:<3}"
+              + (f"  안 씀: {', '.join(unused[:4])}{' …' if len(unused) > 4 else ''}" if unused and args.unused else ""))
+    if c["extra"]:
+        print(f"\n그 밖에 시나리오가 쓰는 앱이 직접 붙인 ID {len(c['extra'])}개 (전체 수는 알 수 없음)")
+    print("\n안 쓴 ID까지: qakit coverage --unused · UI: qakit ui → 커버리지")
+
+
 def load_checked_scenario(ws, name, strict=True):
     path = scenario_tools.find_scenario(ws.root, name)
     if not path:
@@ -5558,6 +5610,8 @@ def cmd_ui(args):
                         except ValueError:
                             pass
                     return self.send(200, {"offset": since + end, "taps": taps[-20:]})
+                if path == "/api/coverage":
+                    return self.send(200, coverage(ws))
                 if path == "/api/ai/sessions":
                     return self.send(200, ai_sessions(ws))
                 if path == "/api/ai/session":
@@ -5952,6 +6006,11 @@ def main():
     p.add_argument("--timeout", type=int, default=120, help="이 시간(초) 안에 안 끝나면 실행기를 멈춤 (기본 120)")
     p.add_argument("--settle", type=float, default=0.5, help="dump 전에 기다릴 시간(초)")
     p.set_defaults(func=cmd_do)
+
+    p = sub.add_parser("coverage", help="앱 ID 중 시나리오가 쓰는 것 (화면별). --unused: 안 쓴 ID까지, --json")
+    p.add_argument("--unused", action="store_true", help="화면마다 안 쓴 ID도 보여 줌")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_coverage)
 
     p = sub.add_parser("mcp", help="AI(Claude Code·Codex)가 앱을 직접 QA하는 MCP 서버 (stdio). install --claude|--codex로 등록")
     p.add_argument("action", nargs="?", choices=["serve", "install"], default="serve")
