@@ -2553,6 +2553,7 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
     st = serve_ensure(ws, udid)
     rd = new_run_dir(ws, "run", name)
     info("상주 실행기로 실행 (xcodebuild 준비 생략)")
+    video = RunVideo(ws, None if ws.device else udid)
     started = time.time()
     try:
         res = serve_request(st, "/run", json.loads(scenario_json.read_text(encoding="utf-8")), timeout=timeout)
@@ -2564,6 +2565,7 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
         res = {"ok": False, "env": True, "message": f"상주 실행기 연결 실패: {e}"}
     seconds = round(time.time() - started, 1)
     success = bool(res.get("ok"))
+    video_path = video.finish(success, rd)
     save_serve_files(ws, res, rd)
 
     log = [f"[qakit-note] 시나리오: {scenario.get('name')}"] + [f"[qakit-note] {n}" for n in res.get("notes") or []]
@@ -2614,6 +2616,8 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
         out += ["     " + l for l in lines]
     if shot_path:
         out.append(f"   스크린샷: {shot_path}")
+    if video_path:
+        out.append(f"   영상 (마지막 {RunVideo.KEEP_SECONDS}초): {video_path}")
     text = mask("\n".join(out))
     (rd / SERVE_SUMMARY).write_text(text + "\n", encoding="utf-8")   # qakit summarize가 다시 보여 준다
     print(text)
@@ -2878,6 +2882,7 @@ def run_precheck(ws, args):
 def cmd_run(args):
     global FAIL_CODE
     FAIL_CODE = 2   # 아래에서 앱 판정 실패만 1로 끝낸다
+    RUN_VIDEO["mode"] = getattr(args, "video", None) or "fail"
     ws = find_workspace(args.workspace)
     names = select_scenarios(ws, args)
     if len(names) > 1 and args.bench:
@@ -2892,6 +2897,62 @@ def cmd_run(args):
                 run_many(ws, args, names)
     finally:
         update_readme(ws)
+
+
+RUN_VIDEO = {"mode": "fail"}   # qakit run --video
+
+
+class RunVideo:
+    """실행 중 시뮬레이터 화면 녹화. 실패하면(또는 --video always) 마지막 30초를 줄여(440x960) 결과 폴더에 남기고,
+    통과하면 버린다 (마무리·변환 비용은 남길 때만, 약 2초). 실기기·성능 측정 중에는 안 한다."""
+    KEEP_SECONDS = 30
+
+    def __init__(self, ws, udid):
+        self.proc = None
+        if RUN_VIDEO["mode"] == "off" or ws.device or not udid:
+            return
+        self.raw = ws.results_dir / f".video-{os.getpid()}-{int(time.time() * 1000)}.mp4"
+        self.raw.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.proc = subprocess.Popen(["xcrun", "simctl", "io", udid, "recordVideo", "--codec=h264", "--force", str(self.raw)],
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError:
+            self.proc = None
+        self.started = time.time()
+
+    def discard(self):
+        """녹화 파일과, 강제로 끝낼 때 simctl이 남기는 저장 중 임시 파일(<이름>.sb-*)까지 지운다."""
+        for f in [self.raw, *self.raw.parent.glob(self.raw.name + ".sb-*")]:
+            f.unlink(missing_ok=True)
+
+    def finish(self, success, rd):
+        """→ 남긴 영상 경로 또는 None"""
+        if not self.proc:
+            return None
+        if success and RUN_VIDEO["mode"] != "always":
+            self.proc.kill()
+            self.proc.wait()
+            self.discard()
+            return None
+        self.proc.send_signal(signal.SIGINT)   # simctl은 SIGINT를 받아야 파일을 마무리한다
+        try:
+            self.proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+        if not self.raw.exists() or self.raw.stat().st_size == 0 or not rd:
+            self.discard()
+            return None
+        out = Path(rd) / ("video.mp4" if success else "failure.mp4")
+        length = time.time() - self.started
+        cmd = ["avconvert", "-s", str(self.raw), "-p", "Preset960x540", "-o", str(out), "--replace"]
+        if length > self.KEEP_SECONDS + 1:
+            cmd += ["--start", f"{length - self.KEEP_SECONDS:.1f}"]
+        r = run(cmd, check=False)
+        if r.returncode == 0 and out.exists():
+            self.raw.unlink(missing_ok=True)
+        else:   # 줄이지 못하면 원본 그대로
+            shutil.move(str(self.raw), str(out))
+        return out
 
 
 LAST_FAILURE = {}   # 마지막 실패의 (원인, 마지막 단계) — 여러 개 실행에서 같은 원인 연속 실패를 알아본다
@@ -3695,6 +3756,8 @@ def _cmd_run(ws, args, name):
                 serve_stop(udid, quiet=True)   # 재설치로 앱 데이터 경로가 바뀌므로 실행기를 새로 띄운다
             run_via_serve(ws, udid, out, path, scenario, args.timeout)
             return
+    video = RunVideo(ws, None if (bench or ws.device) else ensure_booted(ws))
+    success, xcresult = False, None
     try:
         success, xcresult, _ = run_scenario_runner(ws, "test_run", extra, label="run",
                                                    on_line=bench.on_line if isinstance(bench, DeviceBenchSession) else None,
@@ -3702,6 +3765,7 @@ def _cmd_run(ws, args, name):
     finally:
         if bench:
             bench.stop.set()
+        video_path = video.finish(success, Path(xcresult).parent if xcresult else None)
     if bench:
         # 실기기는 실행기가 끝난 뒤에도 Time Profiler 저장·분석이 남아 있을 수 있다
         bench.join(timeout=bench_seconds + 900 if ws.device else 300)
@@ -3721,6 +3785,8 @@ def _cmd_run(ws, args, name):
         ok(f"통과 — 결과: {xcresult}")
         return
     text = summarize(xcresult, masker(ws.secrets()))
+    if video_path:
+        text += f"\n   영상 (마지막 {RunVideo.KEEP_SECONDS}초): {video_path}"
     print(text)
     cause = re.search(r"원인: (.*)", text)
     last = re.search(r"마지막 단계:\s*(?:\n\s*-\s*)?(.*)", text)
@@ -5170,6 +5236,8 @@ def main():
     p.add_argument("--timeout", type=int, default=600, help="상주 실행기로 돌 때 이 시간(초) 안에 안 끝나면 멈춤 (기본 600)")
     p.add_argument("--reuse-app", action="store_true",
                    help="앱이 이미 시작 화면(시나리오의 start: 조건)이면 다시 켜지 않음 (= launch: reuse). --reset이면 무시")
+    p.add_argument("--video", choices=["fail", "always", "off"], default="fail",
+                   help="화면 녹화: fail=실패하면 마지막 30초를 failure.mp4로 (기본), always=통과해도 video.mp4, off=안 함. 시뮬레이터만")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("check", help="시나리오 형식·ID 정적 검사 (실행 없이)")
