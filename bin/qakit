@@ -2686,8 +2686,12 @@ def run_precheck(ws, args):
     f = ws.root / "steps" / f"{name}.qa.yml"
     if not f.exists():
         fail(f"qakit.yml의 precheck: {name} 공통 단계가 없습니다: {f}")
-    data = scenario_tools.parse_yaml(f.read_text(encoding="utf-8")) or {}
-    steps = scenario_tools._expand([{"use": name}], ws.root, ["precheck"])
+    try:
+        data = scenario_tools.parse_yaml(f.read_text(encoding="utf-8")) or {}
+        # 펼치기 시작점 표시는 단계 이름과 겹치지 않게 (steps/precheck.qa.yml이 "자기 자신을 부름"으로 걸리던 문제)
+        steps = scenario_tools._expand([{"use": name}], ws.root, ["(qakit.yml precheck)"])
+    except ValueError as e:
+        fail(f"사전 확인 단계(steps/{name}.qa.yml)를 읽지 못했습니다: {e}")
     udid = ws.device["udid"] if ws.device else ensure_booted(ws)
     info(f"사전 확인: steps/{name}.qa.yml")
     started = time.time()
