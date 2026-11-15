@@ -431,7 +431,7 @@ qakit serve --stop                   → POST /stop   → 테스트가 끝나고
 
 ### 구조
 
-- `qakit ui` → `http://127.0.0.1:<포트>` 로컬 웹 앱. qakit의 Python 기본 HTTP 서버 + `ui/`의 HTML·JS·CSS (npm·빌드 없음, 설치는 지금처럼 파일만).
+- `qakit ui` → `http://127.0.0.1:<포트>` 로컬 웹 앱. 서버는 qakit의 Python 기본 HTTP 서버(API), 화면은 **`web/`의 React + TypeScript + Vite + Tailwind** (tapflow 대시보드와 같은 계열, 흑백 위주 디자인). 빌드 결과 `ui/dist`를 저장소에 커밋해 **사용자는 Node 없이** `qakit ui`만 실행한다 (Node는 UI를 고치는 개발자만). 처음(U1~U3 첫 구현)은 순수 HTML이었고 2026-11-15에 React로 옮겼다.
 - 127.0.0.1에만 열고 실행마다 무작위 토큰. 비밀값은 화면에서도 가린다.
 - UI는 CLI 명령과 파일을 읽고 부르는 얇은 층 — CLI 기능이 늘어도 UI가 따라가야 할 것이 적게.
 - 라이브 화면: 처음엔 `simctl io screenshot`을 1초 안팎마다 (한 장 0.5초). 실기기·H.264 스트리밍은 필요해지면.
@@ -489,6 +489,13 @@ qakit serve --stop                   → POST /stop   → 테스트가 끝나고
 | 탭 검색 → 탭 뒤로 | 각 1.1초 |
 | 없는 버튼 | 실패로 알림, 기록 안 됨 |
 | 기록 | 통과한 3단계만 (`launch`부터) |
+
+### React로 옮김 (2026-11-15)
+
+tapflow 대시보드처럼 보이게: 왼쪽 사이드바(실행 기록·시나리오·라이브 세션, 아래에 기기·브랜치·버전), 흑백 위주 토큰(색은 `web/src/index.css`의 CSS 변수, 다크 모드는 변수만), 카드는 그림자 단계, Inter + JetBrains Mono(ID·시간은 모노). 라이브 세션은 기기 틀 안의 화면 + 위 도구 막대(일시정지·간격·앱 다시 켜기·화면 구조·요소) + 오른쪽 점검 패널. 코드·그림은 tapflow에서 가져오지 않고 직접 썼다.
+
+- 빌드: `cd web && npm install && npm run build` → `ui/dist` (JS 189KB, gzip 59KB, 글꼴 포함 528KB). `qakit ui`는 `ui/dist`를 서빙하고, 없으면 빌드 방법을 안내한다.
+- 확인: 화면 없는 Chrome으로 세 화면(실행 기록·시나리오·라이브 세션)을 찍어 그려지는 것을 확인 (시뮬레이터 화면·요소 테두리·기록된 단계 포함).
 
 ### 위험
 

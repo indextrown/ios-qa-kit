@@ -3920,7 +3920,7 @@ def do_save(ws, name, force=False):
 
 # ─────────────────────────────── 명령: ui (docs/PLAN.md "UI 설계") ───────────────────────────────
 
-UI_DIR = KIT_DIR / "ui"
+UI_DIR = KIT_DIR / "ui" / "dist"   # web/(React) 빌드 결과 — 저장소에 커밋, Node 없이 서빙
 RUN_DIR_RE = re.compile(r"^(\d\d)-(\d\d)-(\d\d)_([a-z]+(?:-[0-9a-z]+)?)(?:_(.+))?$")
 
 
@@ -4085,7 +4085,10 @@ def cmd_ui(args):
     token = pysecrets.token_urlsafe(18)
     udid = None if ws.device else simulator_udid(ws.simulator)[0]
     screen = {"at": 0.0, "data": None, "lock": threading.Lock()}
-    static = {"app.js": "text/javascript; charset=utf-8", "style.css": "text/css; charset=utf-8"}
+    static = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".woff2": "font/woff2",
+              ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
+    if not (UI_DIR / "index.html").exists():
+        fail(f"UI 빌드 결과가 없습니다: {UI_DIR}", f"cd {KIT_DIR / 'web'} && npm install && npm run build")
 
     job = {"proc": None, "lines": [], "args": None, "started": None, "ended": None, "code": None,
            "lock": threading.Lock()}
@@ -4187,7 +4190,8 @@ def cmd_ui(args):
                 body.encode() if isinstance(body, str) else json.dumps(body, ensure_ascii=False).encode())
             self.send_response(code)
             self.send_header("Content-Type", ctype)
-            self.send_header("Cache-Control", "no-store")
+            if "Cache-Control" not in (extra or {}):
+                self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(data)))
             for k, v in (extra or {}).items():
                 self.send_header(k, v)
@@ -4234,8 +4238,11 @@ def cmd_ui(args):
             try:
                 if path == "/":
                     return self.send(200, (UI_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
-                if path.startswith("/static/") and path[8:] in static:
-                    return self.send(200, (UI_DIR / path[8:]).read_bytes(), static[path[8:]])
+                if path.startswith("/assets/"):
+                    f = (UI_DIR / path.lstrip("/")).resolve()
+                    if UI_DIR.resolve() in f.parents and f.is_file() and f.suffix in static:
+                        return self.send(200, f.read_bytes(), static[f.suffix], {"Cache-Control": "public, max-age=31536000, immutable"})
+                    return self.send(404, {"error": "없는 파일"})
                 if path == "/api/info":
                     state = app_state(ws)
                     return self.send(200, {"name": ws.name, "simulator": None if ws.device else ws.simulator,

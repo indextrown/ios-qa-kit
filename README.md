@@ -1214,6 +1214,8 @@ worktree:
 
 ## 레포 구조
 
+> UI(`qakit ui`)를 고칠 때: `cd web && npm install && npm run dev` (개발 서버, `QAKIT_UI=http://127.0.0.1:<qakit ui 포트>`로 API 연결) → `npm run build`로 `ui/dist`를 다시 만들어 함께 커밋. 사용자는 Node 없이 `ui/dist`를 그대로 씁니다.
+
 <details>
 <summary>폴더 구성 보기</summary>
 
