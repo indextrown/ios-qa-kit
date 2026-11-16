@@ -1344,3 +1344,31 @@ def android_shot_jpeg(serial, width=440):
         src.unlink(missing_ok=True)
         dst.unlink(missing_ok=True)
 
+
+def android_h264_cmd(serial):
+    """라이브 화면 H.264 스트림 명령: 기기의 화면 녹화 인코더(MediaCodec)가 화면 버퍼를 바로 인코딩해 Annex-B로 내보낸다.
+    캡처를 반복하지 않고 바뀔 때만 프레임이 나온다 (iOS simscreen이 화면 메모리를 바로 읽는 것과 같은 효과).
+    크기는 긴 변 live_frame_size, 인코더가 받도록 16의 배수."""
+    w, h = android_display_size(serial)
+    scale = min(1.0, live_frame_size("android") / max(w, h))
+    sw, sh = (max(16, int(v * scale) // 16 * 16) for v in (w, h))
+    return [require_tool("adb"), "-s", serial, "exec-out", "screenrecord", "--output-format=h264", "--size", f"{sw}x{sh}",
+            "--bit-rate", "8000000", "--time-limit", "0", "-"]
+
+
+def h264_nals(buf):
+    """Annex-B 바이트 → (끝난 NAL 목록, 남은 바이트). 시작 코드 00 00 01 / 00 00 00 01."""
+    starts = []
+    i = buf.find(b"\x00\x00\x01")
+    while i != -1:
+        starts.append(i + 3)
+        i = buf.find(b"\x00\x00\x01", i + 3)
+    if len(starts) < 2:
+        return [], buf if starts else buf[-3:]
+    nals = []
+    for a, b in zip(starts, starts[1:]):
+        nal = buf[a:b - 3].rstrip(b"\x00")   # 다음 시작 코드 앞의 00 (4바이트 시작 코드)은 버림
+        if nal:
+            nals.append(nal)
+    return nals, buf[starts[-1] - 4 if starts[-1] >= 4 and buf[starts[-1] - 4] == 0 else starts[-1] - 3:]
+

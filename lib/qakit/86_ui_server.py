@@ -327,6 +327,63 @@ def cmd_ui(args):
                         live["failed_at"] = time.time()
                 live["cond"].notify_all()
 
+    # 안드로이드 라이브 화면 H.264 (screenrecord → Annex-B). 새로 붙는 쪽이 바로 풀 수 있게 SPS·PPS와 마지막 IDR부터를 들고 있다
+    h264 = {"proc": None, "cond": threading.Condition(), "sps": None, "pps": None, "gop": [], "seq": 0, "clients": 0,
+            "idle_since": 0.0, "error": None}
+
+    def h264_reader(proc):
+        buf = b""
+        try:
+            while True:
+                chunk = proc.stdout.read1(1 << 16)
+                if not chunk:
+                    break
+                buf += chunk
+                nals, buf = h264_nals(buf)
+                if not nals:
+                    continue
+                with h264["cond"]:
+                    for nal in nals:
+                        t = nal[0] & 31
+                        if t == 7:
+                            h264["sps"] = nal
+                        elif t == 8:
+                            h264["pps"] = nal
+                        elif t in (1, 5):
+                            if t == 5:
+                                h264["gop"] = []
+                            h264["seq"] += 1
+                            h264["gop"].append((h264["seq"], nal))
+                            if len(h264["gop"]) > 1500:   # 키 프레임 없이 너무 길면 버린다 (새로 붙는 쪽은 다음 IDR부터)
+                                h264["gop"] = h264["gop"][-1:]
+                    h264["cond"].notify_all()
+                    idle = h264["clients"] == 0 and time.time() - h264["idle_since"] > 30
+                if idle:
+                    break
+        finally:   # 기기 쪽 screenrecord를 먼저 끝낸다 (그 뒤에 새로 띄운 것을 죽이지 않게)
+            subprocess.run([require_tool("adb"), "-s", udid, "shell", "pkill", "-f", "output-format=h264"], capture_output=True)
+            with contextlib.suppress(OSError):
+                proc.kill()
+            proc.wait()
+            with h264["cond"]:
+                if h264["proc"] is proc:
+                    h264.update(proc=None, sps=None, pps=None, gop=[])
+                h264["cond"].notify_all()
+
+    def h264_start():
+        with h264["cond"]:
+            if h264["proc"] and h264["proc"].poll() is None:
+                return True
+        try:
+            proc = subprocess.Popen(android_h264_cmd(udid), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            h264["error"] = str(e)
+            return False
+        with h264["cond"]:
+            h264.update(proc=proc, sps=None, pps=None, gop=[], idle_since=time.time(), error=None)
+        threading.Thread(target=h264_reader, args=(proc,), daemon=True).start()
+        return True
+
     def live_start():
         """실시간 화면 도구를 띄운다. 안 되면 (False, 이유) — 30초 동안은 다시 시도하지 않는다."""
         with live["cond"]:
@@ -455,14 +512,14 @@ def cmd_ui(args):
             d = conv["dir"]
             if mode == "scenario" and not context:
                 context = conversation_context(conv)
-            read_src = mode == "scenario" and body.get("readSource", True) is not False and bool(ws.app_dir)
+            read_src = body.get("readSource", True) is not False and bool(ws.app_dir)   # 대화 안에서는 맡기기도 소스 읽기 (기본 켬)
             direct = mode == "qa"
             prompt = ai_scenario_prompt(goal, minutes, sc_name, sc_tags, sc_start, source=str(ws.app_dir) if read_src else None,
                                         context=context) if mode == "scenario" else ai_prompt(goal, minutes, bool(body.get("save")), direct=direct)
             cmd = ai_command("claude", ws, d, prompt, turns, read_source=read_src, direct=direct,
                              model=body.get("model"), effort=body.get("effort"))
             label = f"[{'시나리오로 남기기' if mode == 'scenario' else f'맡김 · {minutes}분'}] {goal}"
-            err = ai_spawn(cmd, d, "claude", minutes, user=label, kind=mode, goal=goal,
+            err = ai_spawn(cmd, d, "claude", minutes, user=label, kind=mode, goal=goal, cwd=conv["cwd"],
                            fresh={"goal": goal, "mode": "chat", "chat": conv} if new_conv else None)
             return (None, err) if err else ({"started": True, "dir": results_rel(ws, d)}, None)
         d = ws.results_dir / "ai" / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -478,7 +535,8 @@ def cmd_ui(args):
                                     context=context) if mode == "scenario" \
             else ai_prompt(goal, minutes, bool(body.get("save")), direct=direct)
         cmd = ai_command(engine, ws, d, prompt, turns, read_source=read_src, direct=direct, model=body.get("model"), effort=body.get("effort"))
-        err = ai_spawn(cmd, d, engine, minutes, fresh={"goal": goal, "mode": mode, "chat": None}, kind=mode, goal=goal)
+        err = ai_spawn(cmd, d, engine, minutes, fresh={"goal": goal, "mode": mode, "chat": None}, kind=mode, goal=goal,
+                       cwd=ai_cwd(ws, read_src))
         return (None, err) if err else ({"started": True, "dir": results_rel(ws, d)}, None)
 
     def conversation(client, first, force_new=False):
@@ -489,7 +547,9 @@ def cmd_ui(args):
             return c, False
         d = ws.results_dir / "ai" / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         d.mkdir(parents=True, exist_ok=True)
-        c = {"id": str(uuid.uuid4()), "dir": d, "session": False}
+        # 실행 폴더는 대화 내내 같아야 한다 (Claude Code는 세션을 실행 폴더별로 저장 → 폴더가 바뀌면 --resume이 못 찾음).
+        # 소스 읽기를 켜고 끄는 것은 허용 도구만 바꾼다
+        c = {"id": str(uuid.uuid4()), "dir": d, "session": False, "cwd": ai_cwd(ws, True)}
         (d / "meta.json").write_text(json.dumps({"client": client, "goal": first[:200], "via": "qakit ui 대화", "mode": "chat",
                                                  "touch": "direct", "session": c["id"],
                                                  "started": datetime.datetime.now().isoformat(timespec="seconds")},
@@ -509,10 +569,10 @@ def cmd_ui(args):
             parts.append(f"- 지금 기록된 통과 단계{' (마지막 launch부터)' if from_launch else ''}:\n" + "\n".join(f"  {x}" for x in steps[-60:]))
         return masker(ws.secrets())("\n".join(parts))[:limit] or None
 
-    def ai_spawn(cmd, d, engine, minutes, fresh=None, user=None, kind="chat", goal=None):
+    def ai_spawn(cmd, d, engine, minutes, fresh=None, user=None, kind="chat", goal=None, cwd=None):
         """AI CLI를 띄우고 출력(stream-json)을 사건으로 읽는다. fresh: 새 세션(사건을 비움), 없으면 채팅 이어 쓰기 (user: 보낸 말)"""
         try:
-            proc = subprocess.Popen(cmd, cwd=str(ws.root), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            proc = subprocess.Popen(cmd, cwd=str(cwd or ws.root), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                     stderr=open(d / "agent.err", "a"), text=True, start_new_session=True)
         except OSError as e:
             return f"실행하지 못함: {e}"
@@ -593,9 +653,10 @@ def cmd_ui(args):
         with aij["lock"]:
             pending = aij.pop("pending", None) if not new_conv else None
         prompt = f"{pending}\n\n(사용자)\n{message}" if pending else message
+        read_src = body.get("readSource", True) is not False and bool(ws.app_dir)
         cmd = ai_command("claude", ws, d, prompt, turns, direct=True, chat={"id": conv["id"], "resume": resume},
-                         model=body.get("model"), effort=body.get("effort"))
-        err = ai_spawn(cmd, d, "claude", minutes, user=message,
+                         model=body.get("model"), effort=body.get("effort"), read_source=read_src)
+        err = ai_spawn(cmd, d, "claude", minutes, user=message, cwd=conv["cwd"],
                        fresh={"goal": message[:200], "mode": "chat", "chat": conv} if new_conv else None)
         if not err:
             conv["session"] = True
@@ -956,6 +1017,47 @@ def cmd_ui(args):
                         return self.send(200, {"running": running, "error": None if running else live["error"],
                                                "fps": round(len(live["frames"]) / 2, 1) if running else 0,
                                                "changedAt": live["changed_at"] if running else None, "now": time.time()})
+                if path == "/api/stream.h264":   # 안드로이드: H.264 Annex-B 그대로 (브라우저 WebCodecs가 풀어 그린다)
+                    if not (android and udid):
+                        return self.send(404, {"error": "H.264 화면은 안드로이드만"})
+                    live_start()   # 화면 바뀜 감지·스크린샷은 기존 JPEG 줄기로 (요소 자동 갱신)
+                    if not h264_start():
+                        return self.send(503, {"error": h264["error"] or "screenrecord를 띄우지 못함"})
+                    with h264["cond"]:
+                        h264["cond"].wait_for(lambda: h264["gop"] or h264["proc"] is None, timeout=10)
+                        if not (h264["sps"] and h264["pps"] and h264["gop"]):
+                            return self.send(503, {"error": "H.264 첫 프레임이 오지 않음"})
+                        h264["clients"] += 1
+                    with live["cond"]:
+                        live["clients"] += 1
+                    self.send_response(200)
+                    self.send_header("Content-Type", "video/h264")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    sc = b"\x00\x00\x00\x01"
+                    last = -1
+                    try:
+                        while True:
+                            with h264["cond"]:
+                                h264["cond"].wait_for(lambda: (h264["gop"] and h264["gop"][-1][0] > last) or h264["proc"] is None, timeout=5)
+                                if h264["proc"] is None:
+                                    break
+                                todo = [(q, n) for q, n in h264["gop"] if q > last]
+                                head = sc + h264["sps"] + sc + h264["pps"] if last < 0 else b""
+                            if todo:
+                                self.wfile.write(head + b"".join(sc + n for _, n in todo))
+                                self.wfile.flush()
+                                last = todo[-1][0]
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    finally:
+                        with h264["cond"]:
+                            h264["clients"] -= 1
+                            h264["idle_since"] = time.time()
+                        with live["cond"]:
+                            live["clients"] -= 1
+                            live["idle_since"] = time.time()
+                    return
                 if path == "/api/stream":   # MJPEG (multipart/x-mixed-replace) — <img>가 그대로 보여 준다
                     if not udid:
                         return self.send(404, {"error": "실시간 화면은 시뮬레이터만"})

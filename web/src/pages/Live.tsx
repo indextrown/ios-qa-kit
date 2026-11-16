@@ -3,6 +3,7 @@ import { Eye, EyeOff, Hand, Camera, Circle, Square as StopIcon, Keyboard, Radio,
 import { fileUrl, get, post, screenUrl, type DoResult, type El, type Elements, type Job } from "../lib/api";
 import { SaveScenario } from "../components/SaveScenario";
 import { StepList } from "../components/StepList";
+import { LiveScreen } from "../components/LiveScreen";
 import { RunScenario } from "../components/RunScenario";
 import { AiActivity } from "../components/AiActivity";
 import { RobotCursor } from "../components/RobotCursor";
@@ -321,8 +322,8 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
           <div className={cx("relative w-full bg-neutral-900 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.45)] ring-1 ring-black/50 dark:ring-white/15",
             landscape ? "max-w-[880px] rounded-[30px] p-[9px]" : "max-w-[360px] rounded-[48px] p-[11px]")}>
             <div className={cx("relative overflow-hidden bg-black", landscape ? "rounded-[22px]" : "rounded-[38px]")}>
-              {liveOn ? <img key={streamKey} src={`/api/stream?k=${streamKey}`} alt="시뮬레이터 화면 (실시간)" className="block w-full select-none" draggable={false}
-                  onLoad={onImgLoad}
+              {liveOn ? <LiveScreen streamKey={streamKey} alt="기기 화면 (실시간)" className="block w-full select-none"
+                  onSize={(w, h) => { if (!natural || (natural.w > natural.h) !== (w > h)) setNatural({ w, h }); }}
                   style={{ aspectRatio: scr ? `${scr.w} / ${scr.h}` : natural ? `${natural.w} / ${natural.h}` : "9 / 19.5" }}
                   onError={() => { setMode("shot"); setStreamNote("실시간 화면을 열지 못했습니다 — 스크린샷으로 봅니다"); }} />
                 : img ? <img src={img} alt="시뮬레이터 화면" className="block w-full select-none" draggable={false} onLoad={onImgLoad} />
