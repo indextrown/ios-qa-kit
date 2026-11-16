@@ -51,7 +51,7 @@
 
 `qakit.yml`에 `platform: android`면 `run`·`do`·`serve`·`dump-ui`·`doctor`가 안드로이드로 동작한다. 시나리오 문법은 iOS와 같다 (설계: 도구 레포 `docs/PLAN.md` "안드로이드 지원 설계").
 - 상주 실행기(UiAutomator2)로만 돈다: 첫 실행 때 실행기를 빌드(Gradle, 몇 분)·설치하고 띄운다. `--no-serve`·`--bench`·실패 영상은 아직 없음.
-- 앱은 미리 기기에 설치해 둔다 (`build-app` 아직). `--reset`·`reset: true`는 `pm clear`.
+- `qakit build-app`: `./gradlew :<app.module>:assemble<app.variant>` (기본 `:app:assembleDebug`) → Gradle `output-metadata.json`으로 APK를 찾아 applicationId가 `app.packageName`과 같은지 확인 → `adb install` → `permissions:` 미리 허용. 빌드한 앱 커밋을 기록해 `run`·`test` 전에 앱 소스가 바뀌었으면 다시 빌드한다(`sync: auto`, iOS와 같음). `--build release`는 `app.release.variant`(기본 release)·`app.release.packageName`. 로그 `results/build-app.log`. `--reset`·`reset: true`는 `pm clear`.
 - ID 정적 검사(`check`의 앱에 없는 ID)는 하지 않는다. coverage는 저장된 덤프(`results/ui-dump.txt`, `results/dumps/`)에서 본 ID 기준.
 - 글자 입력은 한글도 된다. 칸을 누르지 않고 바로 넣으므로(접근성 SET_TEXT) 대개 키보드가 뜨지 않는다 → `hide-keyboard`는 꼭 필요할 때만. `hide-keyboard`는 키보드가 실제로 떠 있을 때만 뒤로 가기를 보내는데, 앱에 따라 그 뒤로 가기에 화면·앱이 닫힐 수 있다 (시범 앱 로그인 화면에서 확인).
 - qakit.yml `orientation: landscape|portrait|auto` — 실행기를 띄울 때 화면 방향 고정. `keyboard: hide`(기본)|`show` — 에뮬레이터 화면 키보드 앱(Gboard)을 꺼 두어 버튼을 가리지 않게 한다 (실기기는 그대로, Mac 키보드 입력은 됨). 키보드에 가려진 요소는 hittable이 아니고, 탭·쓸기는 키보드 영역을 피한다.

@@ -205,6 +205,8 @@ def serve_stop(udid, reason=None, quiet=False, force=False):
                 os.killpg(int(pid), 15)   # start_new_session으로 띄웠으므로 프로세스 그룹째
             except OSError:
                 pass
+    if st.get("platform") == "android":
+        android_runner_kill(udid)   # 기기 안 실행기까지 (호스트 adb만 끝나면 기기에 남는다)
     serve_state_file(udid).unlink(missing_ok=True)
     return True
 
@@ -423,6 +425,13 @@ def serve_ensure(ws, udid):
         elif not serve_alive(st):
             why = "응답 없음"
         if why is None:
+            if st.get("platform") == "android":
+                # 비밀값은 실행기가 시작할 때 받는다 → 그 뒤 secrets.txt를 고쳐도 옛 값으로 돌던 문제 (iOS는 매번 파일을 읽음).
+                # 실행마다 지금 값을 다시 보낸다
+                try:
+                    serve_request(st, "/config", {"secrets": ws.secrets()}, timeout=10)
+                except (ServeTimeout, ConnectionError):
+                    pass
             return st
         info(f"상주 실행기를 다시 띄웁니다: {why}")
         serve_stop(udid, quiet=True)

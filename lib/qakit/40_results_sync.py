@@ -279,6 +279,8 @@ def app_state(ws):
 def _app_state(ws):
     d = ws.app_dir
     state = {"appPath": str(ws.project), "scheme": ws.scheme, "configuration": ws.configuration}
+    if ws.platform == "android":
+        state.update(scheme=ws.module, configuration=ws.variant)
     branch = git(d, "rev-parse", "--abbrev-ref", "HEAD")
     if branch is not None:
         state["branch"] = branch
@@ -560,7 +562,7 @@ def auto_sync(ws):
         return
     AUTO_SYNCED.add(str(ws.root))
     follow_worktree(ws)
-    if ws.sync_mode == "off" or ws.platform == "android":   # 안드로이드 자동 재빌드는 A4 (build-app)
+    if ws.sync_mode == "off":
         return
     changed, why, _ = app_changed(ws)
     if not changed:
@@ -591,6 +593,9 @@ def do_sync(ws, compile_check=True, force_build=False, skip_build=False):
         cmd_build_app_ws(ws)
     else:
         ok("1) 설치된 앱이 최신")
+    if ws.platform == "android":   # ID 상수·Swift 테스트 코드가 없다
+        ok("동기화 완료")
+        return
     # 2. ID 재생성
     info("2) ID 상수 재생성")
     generate_ids(ws, quiet=False)

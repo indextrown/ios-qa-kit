@@ -1339,7 +1339,7 @@ worktree:
 | `qakit android screen [--json]` | 지금 화면의 앱·Activity·Fragment |
 | `qakit android dump [--package P] [-o 파일] [--json]` | 지금 화면 구조를 iOS `dump-ui`와 같은 형식으로 (작업공간 없이) |
 
-`qakit.yml`에 `platform: android`를 적은 작업공간에서는 `qakit doctor`·`dump-ui`·`run`·`do`·`serve`가 안드로이드로 동작합니다 (같은 `.qa.yml` 문법, UiAutomator2 상주 실행기). `qakit ui`의 라이브 세션(화면 보기 12fps·직접 터치·녹화)도 됩니다 — 에뮬레이터 GPU 가속이 켜져 있어야 부드럽습니다(`qakit android setup`이 켬). 앱 빌드·설치(`build-app`), 실패 영상, `--bench`, AI QA는 아직입니다 ([설계](docs/PLAN.md#안드로이드-지원-설계-진행-중)).
+`qakit.yml`에 `platform: android`를 적은 작업공간에서는 `qakit doctor`·`dump-ui`·`run`·`do`·`serve`가 안드로이드로 동작합니다 (같은 `.qa.yml` 문법, UiAutomator2 상주 실행기). `qakit ui`의 라이브 세션(화면 보기 12fps·직접 터치·녹화)도 됩니다 — 에뮬레이터 GPU 가속이 켜져 있어야 부드럽습니다(`qakit android setup`이 켬). `build-app`(Gradle 빌드 → 설치 → 권한)과 앱 변경 시 자동 재빌드도 됩니다. 실패 영상, `--bench`, AI QA는 아직입니다 ([설계](docs/PLAN.md#안드로이드-지원-설계-진행-중)).
 
 **실행·결과**
 
@@ -1407,7 +1407,7 @@ worktree:
 | 외부 SDK가 내부에서 만든 뷰 (예: 지도 SDK의 버튼) | 화면 글자 또는 좌표 |
 | 지도·차트·캔버스처럼 그려지는 영역 | 좌표로 조작, 결과는 그 위의 UI로 확인 |
 | SwiftUI 화면 | `qakit init --worktree`로 만든 QA 워크트리에서만 ID가 붙음 (개발 폴더 소스는 안 건드림). 시스템 기본 뒤로가기·동적 라벨 버튼은 라벨·순서 번호로 |
-| 안드로이드 | 시나리오 실행(`run`·`do`)까지 됨. 앱은 직접 설치해 두어야 함(`build-app` 아직), Compose 화면은 앱에 testTag가 있어야 ID로 찾음(없으면 글자로). 실패 영상·`--bench`·AI QA는 아직 ([설계](docs/PLAN.md#안드로이드-지원-설계-진행-중)) |
+| 안드로이드 | 시나리오 실행(`run`·`do`)·`build-app`까지 됨. Compose 화면은 앱에 testTag가 있어야 ID로 찾음(없으면 글자로). 실패 영상·`--bench`·AI QA는 아직 ([설계](docs/PLAN.md#안드로이드-지원-설계-진행-중)) |
 | 실기기 | `--device`로 시나리오·`--bench`는 된다 ([실기기에서 실행](#실기기에서-실행---device)). 상주 실행기(`qakit serve`·`qakit do`)도 USB·Wi-Fi 모두. Swift 테스트(`qakit test`)와 권한 미리 허용은 아직 시뮬레이터만 |
 
 문제가 생기면: [troubleshooting.md](skills/qa-kit/references/troubleshooting.md)

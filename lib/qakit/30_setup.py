@@ -325,6 +325,8 @@ def cmd_build_app(args):
 
 
 def cmd_build_app_ws(ws):
+    if ws.platform == "android":
+        return android_build_app(ws)
     ws.results_dir.mkdir(exist_ok=True)
     ensure_autoid(ws)
     udid = ws.device["udid"] if ws.device else ensure_booted(ws)

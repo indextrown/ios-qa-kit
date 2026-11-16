@@ -20,6 +20,8 @@ def cmd_ui(args):
     if not (UI_DIR / "index.html").exists():
         fail(f"UI 빌드 결과가 없습니다: {UI_DIR}", f"cd {KIT_DIR / 'web'} && npm install && npm run build")
 
+    # UI에서 띄우는 qakit run·do도 UI와 같은 빌드 종류로 (qakit ui --build release면 release 앱·운영 서버)
+    build_args = ["--build", ws.build] if ws.build != "debug" else []
     job = {"proc": None, "lines": [], "args": None, "started": None, "ended": None, "code": None,
            "lock": threading.Lock()}
 
@@ -44,6 +46,7 @@ def cmd_ui(args):
             cmd += ["--reuse-app"] if o.get("reuse") else []
             cmd += ["--fail-fast"] if o.get("stop") == "first" else ["--keep-going"] if o.get("stop") == "never" else []
             cmd += ["--no-precheck"] if o.get("precheck") is False else ["--precheck"] if o.get("precheck") else []
+            cmd += build_args   # qakit ui --build release로 열었으면 실행도 release 앱으로
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
                                     env=dict(os.environ, PYTHONUNBUFFERED="1"), start_new_session=True)
             job.update(proc=proc, lines=[], args=["qakit run", *([f"(초안) {draft}"] if draft else cmd[5:5 + len(names)]), *cmd[5 + len(names):]],
@@ -91,7 +94,7 @@ def cmd_ui(args):
         if not do_lock.acquire(blocking=False):
             return None, "앞선 조작이 끝나지 않았습니다"
         try:
-            r = subprocess.run([sys.executable, str(KIT_DIR / "bin" / "qakit"), "-w", str(ws.root), "do", *args_],
+            r = subprocess.run([sys.executable, str(KIT_DIR / "bin" / "qakit"), "-w", str(ws.root), "do", *args_, *build_args],
                                capture_output=True, text=True, timeout=timeout,
                                env=dict(os.environ, PYTHONUNBUFFERED="1"))
             return {"code": r.returncode, "output": masker(ws.secrets())((r.stdout or "") + (r.stderr or ""))}, None
@@ -297,6 +300,10 @@ def cmd_ui(args):
         if android:
             try:
                 st = android_live_runner(ws, udid)
+            except RuntimeError as e:   # 다른 실행이 기기를 쓰는 중 → 잠깐 뒤 다시 (실패 기록은 5초만)
+                with live["cond"]:
+                    live.update(error=str(e), failed_at=time.time() - 25)
+                return False, live["error"]
             except SystemExit:
                 with live["cond"]:
                     live.update(error="상주 실행기를 띄우지 못함 (터미널 출력 확인)", failed_at=time.time())
@@ -701,7 +708,7 @@ def cmd_ui(args):
                         return self.send(409, {"error": err})
                     if res["code"] != 0:
                         return self.send(500, {"error": res["output"][-400:]})
-                    return self.send(200, ui_parse_dump(res["output"]))
+                    return self.send(200, dict(ui_parse_dump(res["output"]), platform=ws.platform))
                 if path == "/api/src":
                     if q.get("list"):
                         return self.send(200, {
@@ -715,7 +722,7 @@ def cmd_ui(args):
                                            "path": str(f.relative_to(ws.root))})
                 if path == "/api/ids":
                     term = q.get("q", "").lower()
-                    ids = sorted(_known_ids(ws))
+                    ids = sorted(known_ids(ws))   # 안드로이드는 저장된 덤프에서 본 ID
                     hits = [i for i in ids if term in i.lower()] if term else ids
                     return self.send(200, {"total": len(ids), "ids": hits[:80]})
                 if path == "/api/steps-files":
