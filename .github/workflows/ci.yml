@@ -8,19 +8,25 @@ on:
 
 jobs:
   python:
-    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        python: ["3.9", "3.12"]   # 3.9 = 맥 기본 /usr/bin/python3 (맥 앱이 이걸로 돈다 — 3.10 이상 문법 금지)
+        include:
+          - { os: ubuntu-latest, python: "3.12" }
+          - { os: macos-latest, python: system }   # 맥 기본 /usr/bin/python3 (3.9) — 맥 앱이 이걸로 돈다, 3.10 이상 문법 금지
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
+        if: matrix.python != 'system'
         with:
           python-version: ${{ matrix.python }}
+      - name: 파이썬 고르기
+        run: echo "PY=$([ '${{ matrix.python }}' = system ] && echo /usr/bin/python3 || echo python)" >> "$GITHUB_ENV"
       - name: 컴파일
-        run: python -m py_compile bin/qakit lib/qakit/*.py Tools/gen-ids/gen_ids.py Tools/scenario/scenario_tools.py
+        run: $PY --version && $PY -m py_compile bin/qakit lib/qakit/*.py Tools/gen-ids/gen_ids.py Tools/scenario/scenario_tools.py
       - name: 단위 테스트
-        run: python -m unittest discover -s tests -v
+        run: $PY -m unittest discover -s tests -v
 
   web:
     runs-on: ubuntu-latest
