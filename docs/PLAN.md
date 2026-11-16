@@ -728,3 +728,58 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 - **정적 분석의 한계**: 지역 변수 뷰, 외부 SDK 뷰, 부모 타입으로 선언하고 하위 클래스를 넣은 프로퍼티는 소스만으로 이름을 알 수 없다 → 화면 글자·덤프.
 - **SwiftUI는 소스 삽입으로**: 런타임 방식은 비공개 API라 OS마다 깨지고 결국 라벨 기반. 공개 API만 쓰는 소스 삽입을 QA 워크트리에서 빌드하는 동안만 적용한다. 삽입 코드와 ID 상수 생성이 같은 코드를 쓰게 해 규칙 불일치를 막는다. 기성 도구는 없었다 (2026-11 조사).
 - **공개 정리 (v0.4.1)**: 저장소를 공개하면서 특정 앱 정보를 담은 예전 기록을 이력에서 제거하고 이 문서를 일반화했다.
+
+## 안드로이드 지원 설계 (진행 중)
+
+> 상태: A0(설치)·A1(화면 파악) 완료(2026-11-16, Pixel 7 AVD, Android 15 설정 앱으로 확인). 다음은 A2(Compose ID).
+> 대상 앱은 XML 뷰와 Compose가 섞인 앱을 전제로 한다. 레포는 이 저장소에 통합하고(`ios-qa-kit` → `qa-kit`), 시나리오·UI·coverage·MCP는 공유, 실행기만 플랫폼별로 둔다.
+
+### iOS와 대응
+
+| iOS | 안드로이드 | 비고 |
+|---|---|---|
+| Xcode 시뮬레이터 | cmdline-tools + emulator + AVD | Android Studio 불필요. `qakit android setup`이 JDK 17(brew openjdk@17)부터 AVD까지 만든다 |
+| AutoID (Mirror로 프로퍼티 이름) | XML 뷰: `resource-id`가 이미 있음 (`com.app:id/loginButton` → `loginButton`) | 런타임 주입이 필요 없다 |
+| SwiftUI 소스 삽입 (방식 ②) | Compose: QA 워크트리 빌드 직전 `Modifier.testTag("화면.요소")` + 루트에 `testTagsAsResourceId = true` 삽입, 빌드 뒤 복원 | A2. 삽입 전에는 글자·contentDescription으로 찾는다 |
+| 상주 XCUITest 실행기 + QAServer | UiAutomator2 instrumentation APK + HTTP 서버 (같은 명령 프로토콜) | A3. 시나리오 해석은 Kotlin으로 옮긴다 |
+| simscreen·simtouch | `screencap`/`screenrecord`(또는 scrcpy) + `input` | A6 |
+| `xcodebuild` | `gradlew :<module>:assemble<Variant>` + `adb install -r` | A4 |
+
+### 화면 덤프 (A1)
+
+- `uiautomator dump --compressed` XML을 iOS `dump-ui`와 **같은 줄 형식**으로 바꾼다: `타입 #ID "라벨" value="…" (disabled) @x,y wxh`. 좌표는 dp 정수. 그래서 `ui_parse_dump`·`dump_elements`·실패 시 대상 추천이 그대로 동작한다.
+- 이름 없는 레이아웃(FrameLayout·LinearLayout·Compose 중간 노드)은 접고 깊이를 늘리지 않는다.
+- 타입: 클래스 이름 끝으로 정함(EditText → TextField, password → SecureTextField, RecyclerView → CollectionView …). Compose는 클래스가 대부분 `View`라서, 클릭 가능하고 글자가 2개 이상이면 `Cell`(목록 행), 아니면 `Button`. 라벨 없는 버튼은 안쪽 아이콘 설명을 라벨로 쓴다(`Button "Navigate up"`).
+- ID: 앱·라이브러리 id는 이름만, 프레임워크 id는 `android.<이름>`, Compose testTag(testTagsAsResourceId)는 그대로.
+- 머리말: package, Activity(전체 이름), Fragment(`dumpsys activity top`, Glide 등 내부 프래그먼트 제외), ID 비율, ID 없는 요소(목록 행은 첫 글자로 이름).
+- 앱 위에 뜬 다른 앱 창(권한 대화상자 등)은 `# (다른 앱 창: <패키지>)`로 표시.
+- 비용: dump 1회 ≈ 1~3초(`uiautomator dump`가 화면 정지를 기다림). A3 상주 실행기에서는 instrumentation 안에서 바로 읽어 줄인다.
+
+### qakit.yml (platform: android)
+
+```yaml
+platform: android
+app:
+  project: ../            # Gradle 루트 (settings.gradle(.kts)가 있는 폴더)
+  module: app             # 기본 app
+  variant: debug          # 기본 debug
+  packageName: com.example.app
+emulator: qakit           # AVD 이름 (기본 qakit)
+```
+
+### 단계
+
+| 단계 | 내용 | 상태 |
+|---|---|---|
+| A0 환경 | `qakit android setup/doctor/boot` — JDK·SDK·이미지·AVD 설치, 부팅 대기 | 완료 |
+| A1 화면 파악 | `qakit android screen/dump`(작업공간 없이), 작업공간 `dump-ui`·`doctor` 안드로이드 분기 | 완료 |
+| A2 Compose ID | 소스 삽입 도구 (Kotlin 소스 파싱, `@Composable` 함수의 클릭·입력 요소에 testTag), 빌드 직전 삽입·복원 | 다음 |
+| A3 실행기 | UiAutomator2 instrumentation APK + HTTP, `.qa.yml` 단계 해석 (Kotlin) | |
+| A4 CLI 통합 | `init`(Gradle 탐지)·`build-app`·`run`·`do`·`coverage`·MCP 플랫폼 분기 | |
+| A5 로그·네트워크 | 실패 요약에 앱 패키지만 거른 logcat·크래시 스택. OkHttp 로그 우선, 필요하면 mitmproxy | |
+| A6 라이브 세션 | UI에서 화면 보기·직접 터치 | |
+
+### 미결
+
+- Compose ID 규칙: `화면Composable.요소` 형식으로 할지, 변수·파라미터 이름을 어디서 가져올지 (A2에서 시범 앱으로 정함)
+- 실기기(USB): adb는 같지만 권한(`pm grant`)과 설치 서명 차이 확인 필요

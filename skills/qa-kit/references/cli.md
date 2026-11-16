@@ -47,6 +47,22 @@
 | `--secrets <파일>` | 다른 계정 파일 |
 | `--build debug\|release` | 빌드 종류 (기본 debug = `app.configuration`, release = `app.release.configuration` 기본 `Release`, bundle ID는 자동). 명령 뒤에 써도 됨. 앱의 Release가 실서비스 서버를 쓰면 시나리오도 실서비스에 접속한다 |
 
+## 안드로이드 (미리 보기: 설치·화면 파악까지)
+
+시나리오 실행은 아직 iOS만. 안드로이드 앱은 지금 **화면 파악**에 쓴다 (설계: 도구 레포 `docs/PLAN.md` "안드로이드 지원 설계").
+
+| 명령 | 설명 |
+|---|---|
+| `qakit android setup [--avd 이름] [--image 시스템이미지]` | JDK 17(brew openjdk@17)·cmdline-tools·platform-tools·emulator·시스템 이미지·AVD(기본 `qakit`, pixel_7) 설치. Android Studio 불필요. 이미 있으면 건너뜀 |
+| `qakit android doctor` | JDK·SDK·adb·emulator·AVD·연결된 기기 점검 |
+| `qakit android boot [--avd 이름] [--headless]` | 에뮬레이터 실행 후 부팅 완료까지 대기 (이미 떠 있으면 그대로). 로그 `~/.qakit/emulator-<AVD>.log` |
+| `qakit android screen [--json]` | 지금 앞의 앱 패키지·Activity·Fragment(바깥 → 안쪽). 덤프보다 빠름 |
+| `qakit android dump [--package P] [--settle 초] [-o 파일 [--print]] [--json]` | 지금 화면 구조. 형식은 iOS `dump-ui`와 같다 (`타입 #ID "라벨" value="…" (disabled) @x,y wxh`, 좌표 dp). 머리말에 package·activity·fragments·ID 없는 요소 |
+
+- ID: XML 뷰 `com.app:id/loginButton` → `#loginButton`, 프레임워크 `android:id/button1` → `#android.button1`, Compose testTag(testTagsAsResourceId)는 그대로. Compose 화면은 대개 ID가 없어 글자(`"Navigate up"`)로 찾는다.
+- 기기가 여러 대면 `ANDROID_SERIAL=<serial>` 또는 `--avd`.
+- 작업공간 `qakit.yml`에 `platform: android`, `app.project`(Gradle 루트), `app.packageName`, `emulator`(AVD 이름)를 적으면 `qakit doctor`·`qakit dump-ui [--attach] [--wait-id ID] [--settle 초]`가 안드로이드로 동작한다 (`--attach`가 아니면 앱을 종료 후 첫 화면부터 띄움).
+
 ## qakit.yml
 
 ```yaml
