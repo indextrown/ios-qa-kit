@@ -26,8 +26,20 @@ Python 3.9 표준 라이브러리만 쓴다.
 # 코드는 lib/qakit/*.py에 구역별로 나뉘어 있다 (예전엔 이 파일 하나에 약 6,000줄).
 # 이름 순서대로 이 파일의 이름 공간에 읽어 들인다 → 함수·전역 변수는 한 파일이던 때와 같다.
 # 오류 위치는 lib/qakit/<파일>.py:<줄>로 나온다.
+#
+# 시작 캐시: 컴파일 결과를 import와 같은 .pyc(__pycache__)로 남겨 다음 실행에 다시 쓴다
+# (명령마다 1만 줄을 컴파일하던 약 60ms가 없어진다). 원본의 수정 시각·크기가 바뀌면 다시 컴파일한다.
+# 도구 폴더에 쓸 수 없거나 맥 앱 번들 안이면(쓰면 서명이 깨진다) .pyc를 사용자 캐시 폴더에 둔다
+# — Python 표준 PYTHONPYCACHEPREFIX와 같은 방식이라 Tools/의 모듈·표준 라이브러리 것도 거기로 간다.
 import os as _os
+import sys as _sys
+from importlib.machinery import SourceFileLoader as _Loader
 from pathlib import Path as _Path
 
-for _part in sorted((_Path(_os.path.realpath(__file__)).parent.parent / "lib" / "qakit").glob("[0-9]*.py")):
-    exec(compile(_part.read_text(encoding="utf-8"), str(_part), "exec"), globals())
+_kit = _os.path.dirname(_os.path.dirname(_os.path.realpath(__file__)))
+if _sys.pycache_prefix is None and (".app/Contents/" in _kit + "/" or not _os.access(_kit, _os.W_OK)):
+    _sys.pycache_prefix = _os.path.join(
+        _os.path.expanduser("~/Library/Caches") if _sys.platform == "darwin"
+        else _os.environ.get("XDG_CACHE_HOME") or _os.path.expanduser("~/.cache"), "qakit", "pycache")
+for _part in sorted(_Path(_kit, "lib", "qakit").glob("[0-9]*.py")):
+    exec(_Loader("qakit." + _part.stem, str(_part)).get_code("qakit." + _part.stem), globals())

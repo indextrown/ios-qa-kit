@@ -112,14 +112,25 @@ def enable_timing():
     atexit.register(report)
 
 
+class _VersionAction(argparse.Action):
+    """qakit --version. git 브랜치는 이 옵션을 줄 때만 읽는다 (예전엔 명령마다 git을 띄웠다).
+    저장소가 아닌 설치(맥 앱 번들)는 브랜치를 붙이지 않는다 — git 오류 문구가 브랜치 자리에 찍히던 것."""
+
+    def __init__(self, option_strings, dest, **kwargs):
+        super().__init__(option_strings, dest=argparse.SUPPRESS, default=argparse.SUPPRESS, nargs=0, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        version = (KIT_DIR / "VERSION").read_text().strip() if (KIT_DIR / "VERSION").exists() else "dev"
+        branch = git(KIT_DIR, "rev-parse", "--abbrev-ref", "HEAD")
+        print(f"qakit {version}" + (f" ({branch})" if branch and branch != "HEAD" else ""))
+        parser.exit()
+
+
 def main():
     if os.environ.get("QAKIT_TIMING"):
         enable_timing()
     parser = argparse.ArgumentParser(prog="qakit", description="AI용 XCUITest 도구")
-    version = (KIT_DIR / "VERSION").read_text().strip() if (KIT_DIR / "VERSION").exists() else "dev"
-    branch = run(["git", "-C", str(KIT_DIR), "rev-parse", "--abbrev-ref", "HEAD"], check=False).stdout.strip()
-    parser.add_argument("--version", action="version",
-                        version=f"qakit {version}" + (f" ({branch})" if branch and branch != "HEAD" else ""))
+    parser.add_argument("--version", action=_VersionAction, help="버전(과 설치 폴더의 git 브랜치) 표시")
     parser.add_argument("-w", "--workspace", help="작업공간 경로 (기본: 현재 폴더에서 qakit.yml 탐색)")
     parser.add_argument("--app", help="앱 경로 일시 지정 (다른 워크트리/브랜치 폴더 검증용)")
     parser.add_argument("--build", choices=["debug", "release"], default="debug",

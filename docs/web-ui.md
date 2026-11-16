@@ -45,7 +45,7 @@ scripts/build-dmg.sh            # dist/QA-Kit-<버전>.dmg (Developer ID가 있�
 - 포트는 작업공간마다 고정이라 테마·커서 같은 화면 설정이 남습니다.
 - 사진·녹화·결과 파일 내려받기는 `~/Downloads`로, 결과 사진·리포트를 새로 열면 앱 안 작은 창으로, GitHub 같은 바깥 링크는 기본 브라우저로 엽니다.
 - 앱은 사용자 로그인 셸의 `PATH`를 읽어 씁니다 (xcodegen·adb·claude를 터미널에서처럼 찾게).
-- 앱 안 도구 폴더는 고치지 않고, 빌드 결과(실행기·AutoID·화면 도구)는 `~/Library/Application Support/qakit`에 둡니다. 처음 한 번은 이 빌드 때문에 느립니다.
+- 앱 안 도구 폴더는 고치지 않고, 빌드 결과(실행기·AutoID·화면 도구)는 `~/Library/Application Support/qakit`에, Python 컴파일 캐시(`.pyc`)는 `~/Library/Caches/qakit`에 둡니다. 처음 한 번은 이 빌드 때문에 느립니다.
 - **설정(⌘,)**
   - 일반: 화면 크기 50~200% (보기 메뉴 ⌘− · ⌘0 · ⌘+), 메뉴 막대 아이콘, 도는 중일 때 닫기 전에 묻기
   - 명령줄·스킬: 터미널 `qakit`과 Claude Code·Codex 스킬이 이 앱 / 다른 곳(git 설치) 중 어디를 쓰는지 보고 "이 앱으로 연결"

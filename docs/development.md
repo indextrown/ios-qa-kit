@@ -15,7 +15,7 @@
 
 ```text
 qa-kit/
-├── bin/qakit                 CLI 입구 (lib/qakit/*.py를 순서대로 읽음)
+├── bin/qakit                 CLI 입구 (lib/qakit/*.py를 순서대로 읽음, 컴파일 결과는 .pyc로 캐시)
 ├── lib/qakit/                CLI 본체, 구역별 파일 (Python 3 표준 라이브러리만): 00_base · 10_device · 20_build · 30_setup · 40_results_sync · 50_run_serve · 60_bench · 70_save_do · 80_ui_data · 85_mcp_ai · 86_ui_server · 90_update_main
 ├── AutoID/                   자동 ID 라이브러리 (시뮬레이터 주입용 dylib)
 ├── Sources/QAKit/            테스트용 Swift 라이브러리 (BasePage, QATestCase, QAWait …)
