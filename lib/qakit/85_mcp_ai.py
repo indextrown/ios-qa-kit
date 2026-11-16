@@ -157,7 +157,7 @@ def mcp_tools(direct=False):
     if direct:   # AI QA 직접 터치 (tapflow 방식): 누르기는 터치 신호 — 빠르고 실제 손가락처럼, 길게 누르기·끌기도
         for t in tools:
             if t["name"] == "tap":
-                t["description"] += (" 직접 터치 모드: 화면 구조에서 그 요소의 자리를 찾아 손가락처럼 누른다 (약 0.1초). "
+                t["description"] += (" 직접 터치 모드: 화면 구조에서 그 요소의 자리를 찾아 손가락처럼 누른다 (약 0.1~0.4초). "
                                      "화면에 없으면 XCUITest가 기다렸다 누른다. 직접 터치가 안 먹히는 것 같으면 via: xcuitest.")
                 t["inputSchema"]["properties"]["via"] = {"type": "string", "enum": ["direct", "xcuitest"]}
             if t["name"] in ("long_press", "drag"):
@@ -445,7 +445,8 @@ class McpSession:
 
     def touch_helper(self):
         if self.touch is None:
-            self.touch = AndroidTouch(self.udid) if self.ws.platform == "android" else TouchHelper(self.udid)
+            # iOS: 상주 실행기가 있으면 XCTest 이벤트 합성(늘 먹힘), 없으면 simtouch
+            self.touch = AndroidTouch(self.udid) if self.ws.platform == "android" else DirectTouch(self.ws, self.udid)
         return self.touch
 
     def write_touch(self, kind, el, scr):
