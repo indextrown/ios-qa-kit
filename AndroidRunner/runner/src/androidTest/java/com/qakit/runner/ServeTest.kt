@@ -40,7 +40,8 @@ class ServeTest {
         val screen = Screen(pkg)
         val app = AppControl(screen, pkg)
         var runner = Scenario(screen, app)
-        val frames = FrameServer(screen.ua, args.getString("framePort", "7913").toInt()).also { it.start() }
+        val frames = FrameServer(screen.ua, args.getString("framePort", "7913").toInt(),
+            args.getString("frameSize", "1280").toInt(), args.getString("frameQuality", "75").toInt()).also { it.start() }
         if (args.getString("launch", "1") == "1") app.launch()
 
         val server = ServerSocket(port, 8, InetAddress.getByName("127.0.0.1"))

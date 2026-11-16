@@ -26,10 +26,10 @@ export function Coverage() {
   const toAi = (s: Screen, mode: "qa" | "scenario") => {
     const gaps = s.ids.filter((x) => !x.scenarios.length).map((x) => x.id);
     const list = `${gaps.slice(0, 8).join(", ")}${gaps.length > 8 ? " 등" : ""}`;
-    store("qakit-ai-mode", mode);
-    if (mode === "scenario") store("qakit-ai-goal", `${s.screen} 화면까지 가서 아직 시나리오가 없는 요소(${list})가 보이고 눌리는지 확인하는 시나리오`);
+    // AI 화면 대화창에 모드·글을 넘긴다 (보내기는 사람이)
+    if (mode === "scenario") store("qakit-ai-handoff", { mode: "scenario", text: `${s.screen} 화면까지 가서 아직 시나리오가 없는 요소(${list})가 보이고 눌리는지 확인하는 시나리오` });
     else {
-      store("qakit-ai-goal", `${s.screen} 화면 QA — 아직 시나리오가 없는 요소: ${list}. 각 요소를 눌러 보고 화면이 정상으로 열리고 돌아오는지 확인하고, 확인한 경로는 시나리오로 남겨 줘.`);
+      store("qakit-ai-handoff", { mode: "task", text: `${s.screen} 화면 QA — 아직 시나리오가 없는 요소: ${list}. 각 요소를 눌러 보고 화면이 정상으로 열리고 돌아오는지 확인하고, 확인한 경로는 시나리오로 남겨 줘.` });
       store("qakit-ai-save", true);
     }
     location.hash = "#/ai";

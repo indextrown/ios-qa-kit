@@ -28,7 +28,7 @@ export function AiSession({ name, job, refreshJob }: { name: string; job: Job | 
 
   return (
     <>
-      <a href="#/ai" className="mb-4 inline-flex items-center gap-1 text-[13px] text-sub hover:text-fg"><ArrowLeft className="h-3.5 w-3.5" />AI QA</a>
+      <a href="#/ai" className="mb-4 inline-flex items-center gap-1 text-[13px] text-sub hover:text-fg"><ArrowLeft className="h-3.5 w-3.5" />AI</a>
       {error ? <Card><Empty>불러오지 못함: {error}</Empty></Card> : !d ? <Card><Spinner /></Card> : (
         <>
           <div className="mb-2 flex flex-wrap items-center gap-2">

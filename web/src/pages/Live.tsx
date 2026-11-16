@@ -5,7 +5,6 @@ import { SaveScenario } from "../components/SaveScenario";
 import { StepList } from "../components/StepList";
 import { RunScenario } from "../components/RunScenario";
 import { AiActivity } from "../components/AiActivity";
-import { AiChat } from "../components/AiChat";
 import { RobotCursor } from "../components/RobotCursor";
 import { cx, store, stored } from "../lib/util";
 import { Badge, Button, Card, Empty, Mono, PageHeader } from "../components/ui";
@@ -81,7 +80,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   const [streaming, setStreaming] = useState(() => stored("qakit-live", true));
   const [interval, setIntervalMs] = useState(() => stored("qakit-live-ms", 1000));
   const [boxes, setBoxes] = useState(() => stored("qakit-boxes", true));
-  const [tab, setTab] = useState<Tab>(() => stored<Tab>("qakit-live-tab", "act"));   // 오른쪽 패널 탭
+  const [tab, setTab] = useState<Tab>(() => { const t = stored<string>("qakit-live-tab", "act"); return TABS.some(([id]) => id === t) ? t as Tab : "act"; });   // 오른쪽 패널 탭
   useEffect(() => store("qakit-live-tab", tab), [tab]);
   // 화면 방식: 실시간(시뮬레이터 화면을 바로 읽어 영상으로) · 스크린샷(정해진 간격으로 사진). 실시간이 안 되면 스크린샷으로
   const [mode, setMode] = useState<"stream" | "shot">(() => stored("qakit-screen-mode", "stream"));
@@ -182,7 +181,6 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   const prevRun = useRef(jobIsRun), prevAi = useRef(!!ai.active);
   useEffect(() => {   // 시나리오 실행이 시작되면 그 탭으로, AI가 조작을 시작하면 AI 탭으로
     if (jobIsRun && !prevRun.current) setTab("run");
-    if (ai.active && !prevAi.current) setTab("ai");
     prevRun.current = jobIsRun; prevAi.current = !!ai.active;
   }, [jobIsRun, ai.active]);
   useEffect(() => {   // 재생(시나리오 실행)이 끝나면 화면 구조·기록을 다시 읽는다. AI 조작 사이에는 읽지 않음 (실행기를 같이 쓰면 AI 조작이 늦어짐)
@@ -387,13 +385,12 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
 
         {/* 오른쪽 패널: 탭 (모두 그려 두고 숨기기만 — 탭을 바꿔도 입력·로그 그대로) */}
         <div className="min-w-0 space-y-3">
-          <div className="grid grid-cols-4 gap-0.5 rounded-lg bg-muted p-0.5 text-[12.5px]">
+          <div className="grid grid-cols-3 gap-0.5 rounded-lg bg-muted p-0.5 text-[12.5px]">
             {TABS.map(([id, label]) => (
               <button key={id} onClick={() => setTab(id)}
                 className={cx("relative rounded-md py-1.5", tab === id ? "bg-card font-medium text-fg shadow-[0_1px_2px_rgba(0,0,0,0.06)] ring-1 ring-line" : "text-sub hover:text-fg")}>
                 {label}
                 {id === "run" && busy && !ai.busy && <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-ok" />}
-                {id === "ai" && ai.active && <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-warn" />}
                 {id === "save" && (steps?.steps.length ?? 0) > 0 && <span className="ml-1 text-[11px] text-sub">{steps!.steps.length}</span>}
               </button>
             ))}
@@ -464,10 +461,10 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
             </Card>
             <SaveScenario job={job} refreshJob={refreshJob} stepsCount={steps?.steps.length ?? 0} />
           </div>
-          <div className={cx("space-y-3", tab !== "ai" && "hidden")}>
-            <AiChat />
+          {/* AI가 조작하는 동안만 보인다 (늘 붙여 둬야 조작 잠금이 동작) — 말로 시키는 곳은 AI 화면 */}
+          <div className={cx("space-y-1", !ai.active && "hidden")}>
             <AiActivity onBusy={onAiBusy} />
-            <div className="px-1 text-[12px] text-sub">목표 한 줄로 오래 맡기려면 <a href="#/ai" className="text-link hover:underline">AI QA</a></div>
+            <div className="px-1 text-[12px] text-sub">AI가 조작 중입니다 — 대화는 <a href="#/ai" className="text-link hover:underline">AI</a> 화면에서</div>
           </div>
         </div>
       </div>
@@ -475,7 +472,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   );
 }
 
-const TABS = [["act", "조작"], ["run", "시나리오 실행"], ["save", "저장"], ["ai", "AI 채팅"]] as const;
+const TABS = [["act", "조작"], ["run", "시나리오 실행"], ["save", "저장"]] as const;
 type Tab = (typeof TABS)[number][0];
 
 function Sep() { return <span className="mx-1.5 my-0.5 h-px bg-line" />; }
