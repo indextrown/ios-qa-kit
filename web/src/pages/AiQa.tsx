@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, MousePointer2, Play, Square, Loader2, CheckCircle2, XCircle, AlertTriangle, Wrench, MessageSquare, Info, ExternalLink } from "lucide-react";
-import { fileUrl, get, post, scenarioFromSession, type AiSession } from "../lib/api";
+import { AI_MODELS, fileUrl, get, post, scenarioFromSession, type AiSession } from "../lib/api";
 import { aiSecs, aiWhen } from "./AiSession";
 import { cx, store, stored } from "../lib/util";
 import { AiActivity } from "../components/AiActivity";
@@ -36,6 +36,8 @@ export function AiQa() {
   const [engines, setEngines] = useState<Engine[] | null>(null);
   const [goal, setGoal] = useState(() => stored("qakit-ai-goal", ""));
   const [engine, setEngine] = useState(() => stored("qakit-ai-engine", "claude"));
+  const [model, setModel] = useState(() => stored("qakit-ai-model", ""));
+  useEffect(() => store("qakit-ai-model", model), [model]);
   const [minutes, setMinutes] = useState(() => stored("qakit-ai-minutes", 10));
   const [turns, setTurns] = useState(() => stored("qakit-ai-turns", 60));
   const [save, setSave] = useState(() => stored("qakit-ai-save", false));
@@ -91,7 +93,7 @@ export function AiQa() {
   const start = async () => {
     setStarting(true); setError(null);
     try {
-      await post("/api/ai/start", { goal, engine, minutes, turns, save, mode, name: scName.trim() || null, start: scStart || null, readSource, directTouch,
+      await post("/api/ai/start", { goal, engine, model: engine === "claude" ? model || null : null, minutes, turns, save, mode, name: scName.trim() || null, start: scStart || null, readSource, directTouch,
         tags: scTags.split(",").map((t) => t.trim()).filter(Boolean) });
       setSaved([]); await poll();
     }
@@ -149,11 +151,15 @@ export function AiQa() {
                 {EXAMPLES[mode].map((x) => <button key={x} onClick={() => setGoal(x)} disabled={running}
                   className="rounded-md bg-muted px-2 py-1 text-left text-[11.5px] text-sub hover:bg-line hover:text-fg">{x}</button>)}
               </div>
-              <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+              <div className="grid grid-cols-2 gap-2 md:grid-cols-5">
                 <label className="text-[11px] text-sub">AI
                   <select value={engine} onChange={(e) => setEngine(e.target.value)} disabled={running} className={cx(field, "mt-1 h-8 text-fg")}>
                     {(engines ?? []).map((e) => <option key={e.id} value={e.id} disabled={!e.ready}>{e.name}{e.version ? ` ${e.version}` : ""}{e.ready ? "" : " (사용 불가)"}</option>)}
                   </select></label>
+                {engine === "claude" && <label className="text-[11px] text-sub">모델
+                  <select value={model} onChange={(e) => setModel(e.target.value)} disabled={running} className={cx(field, "mt-1 h-8 text-fg")}>
+                    {AI_MODELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                  </select></label>}
                 <label className="text-[11px] text-sub">시간 한도
                   <select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} disabled={running} className={cx(field, "mt-1 h-8 text-fg")}>
                     {[3, 5, 10, 20, 30].map((m) => <option key={m} value={m}>{m}분</option>)}

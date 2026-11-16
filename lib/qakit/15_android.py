@@ -671,7 +671,7 @@ def android_serve_start(ws, serial, idle=1800, launch=True):
     cmd = [require_tool("adb"), "-s", serial, "shell", "am", "instrument", "-w",
            "-e", "port", str(ANDROID_RUNNER_DEVICE_PORT), "-e", "token", token, "-e", "package", ws.package,
            "-e", "idle", str(int(idle)), "-e", "launch", "1" if launch else "0",
-           "-e", "framePort", str(ANDROID_FRAME_DEVICE_PORT),
+           "-e", "framePort", str(ANDROID_FRAME_DEVICE_PORT), "-e", "frameSize", str(live_frame_size("android")),
            "-e", "class", "com.qakit.runner.ServeTest", ANDROID_RUNNER_TEST]
     info("상주 실행기 시작 중 (안드로이드)…")
     started_at = time.time()
@@ -1016,6 +1016,16 @@ def android_build_app(ws):
     state.update(installedOn=serial, apk=str(apk))
     save_state(ws, ws.state_name, state)
 
+
+
+def live_frame_size(platform):
+    """라이브 화면 크기: 안드로이드는 긴 변, iOS(simscreen)는 가로 폭 (px). QAKIT_LIVE_SIZE로 바꿈.
+    레티나 화면에서 기기 그림이 흐리지 않을 만큼 (화면에 그리는 폭 약 660pt × 2)."""
+    with contextlib.suppress(ValueError):
+        v = int(os.environ.get("QAKIT_LIVE_SIZE", "0"))
+        if 320 <= v <= 3000:
+            return v
+    return 1280 if platform == "android" else 900
 
 
 def android_runner_kill(serial):

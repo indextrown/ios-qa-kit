@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bot, Loader2, MessageSquarePlus, Send, Square, Wrench, XCircle } from "lucide-react";
-import { fileUrl, get, post } from "../lib/api";
+import { AI_MODELS, fileUrl, get, post } from "../lib/api";
+import { store, stored } from "../lib/util";
 import { Button, Card } from "./ui";
 
 interface Ev { kind: "user" | "info" | "text" | "tool" | "result" | "error"; text: string; t: number; why?: string }
@@ -20,6 +21,8 @@ export function AiChat() {
   const [fresh, setFresh] = useState(false);   // 다음 말은 새 대화로
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [model, setModel] = useState(() => stored("qakit-ai-model", ""));
+  useEffect(() => store("qakit-ai-model", model), [model]);
   const since = useRef(0), started = useRef<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -51,7 +54,7 @@ export function AiChat() {
     if (!m || busy) return;
     setSending(true); setError(null);
     try {
-      await post("/api/ai/chat", { message: m, new: !isChat });
+      await post("/api/ai/chat", { message: m, new: !isChat, model: model || null });
       setText(""); setFresh(false);
       await poll();
     } catch (e) { setError((e as Error).message); }
@@ -63,6 +66,10 @@ export function AiChat() {
   return (
     <Card title={<span className="flex items-center gap-1.5"><Bot className="h-3.5 w-3.5" />AI 채팅</span>}
       actions={<>
+        <select value={model} onChange={(e) => setModel(e.target.value)} disabled={busy} title="모델 (다음 말부터, 대화 중에도 바꿀 수 있음)"
+          className="h-7 rounded-md bg-muted px-1.5 text-[11.5px] outline-none">
+          {AI_MODELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
         {job?.result?.cost != null && isChat && <span className="text-[11px] text-sub">${job.result.cost.toFixed(2)}</span>}
         {isChat && job?.dir && <a href={fileUrl(job.dir, "chat.md")} target="_blank" rel="noreferrer" className="text-[11px] text-link hover:underline">기록</a>}
         <Button size="sm" variant="ghost" disabled={busy || !isChat} onClick={() => { setFresh(true); setEvents([]); }} title="새 대화 (AI가 앞 대화를 잊음)">

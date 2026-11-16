@@ -46,3 +46,7 @@ export async function scenarioFromSession(dir: string, goal: string | null) {
   location.hash = "#/ai";
   return true;
 }
+
+/** Claude Code 모델 (claude --model 별칭). 빈 값 = 계정 기본. AI 채팅·AI QA가 같은 선택을 쓴다 (qakit-ai-model) */
+export const AI_MODELS: [string, string][] = [["", "계정 기본"], ["opus", "Opus — 가장 꼼꼼함"], ["sonnet", "Sonnet — 빠르고 저렴"], ["haiku", "Haiku — 가장 빠름"]];
+

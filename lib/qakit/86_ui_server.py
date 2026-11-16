@@ -356,7 +356,7 @@ def cmd_ui(args):
             with live["cond"]:
                 live.update(error="실시간 화면 도구 빌드 실패", failed_at=time.time())
             return False, live["error"]
-        proc = subprocess.Popen([str(tool), udid, "--fps", "24", "--width", "600", "--quality", "0.65"],
+        proc = subprocess.Popen([str(tool), udid, "--fps", "24", "--width", str(live_frame_size("ios")), "--quality", "0.7"],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         with live["cond"]:
             live.update(proc=proc, error=None, frame=None, idle_since=time.time())
@@ -460,7 +460,7 @@ def cmd_ui(args):
         prompt = ai_scenario_prompt(goal, minutes, sc_name, sc_tags, sc_start, source=str(ws.app_dir) if read_src else None,
                                     context=context) if mode == "scenario" \
             else ai_prompt(goal, minutes, bool(body.get("save")), direct=direct)
-        cmd = ai_command(engine, ws, d, prompt, turns, read_source=read_src, direct=direct)
+        cmd = ai_command(engine, ws, d, prompt, turns, read_source=read_src, direct=direct, model=body.get("model"))
         err = ai_spawn(cmd, d, engine, minutes, fresh={"goal": goal, "mode": mode, "chat": None})
         return (None, err) if err else ({"started": True, "dir": results_rel(ws, d)}, None)
 
@@ -551,7 +551,7 @@ def cmd_ui(args):
                                                      "touch": "direct", "session": chat["id"],
                                                      "started": datetime.datetime.now().isoformat(timespec="seconds")},
                                                     ensure_ascii=False), encoding="utf-8")
-        cmd = ai_command("claude", ws, d, message, turns, direct=True, chat={"id": chat["id"], "resume": resume})
+        cmd = ai_command("claude", ws, d, message, turns, direct=True, chat={"id": chat["id"], "resume": resume}, model=body.get("model"))
         err = ai_spawn(cmd, d, "claude", minutes, user=message,
                        fresh=None if resume else {"goal": message[:200], "mode": "chat", "chat": chat})
         return (None, err) if err else ({"started": True, "dir": results_rel(ws, d), "resume": resume}, None)

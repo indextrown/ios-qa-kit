@@ -14,9 +14,9 @@ import java.net.SocketTimeoutException
  * [4바이트 길이(빅엔디안)][JPEG] 반복. 명령 서버(ServeTest)와 다른 스레드라 시나리오가 도는 중에도 화면이 나온다.
  * adb screencap -p는 이 에뮬레이터에서 한 장에 4초 넘게 걸려(PNG 압축) 라이브 화면에 쓸 수 없다.
  */
-class FrameServer(private val ua: UiAutomation, private val port: Int) : Thread("qakit-frames") {
+class FrameServer(private val ua: UiAutomation, private val port: Int, private val maxSide: Int = 1280,
+                  private val quality: Int = 75) : Thread("qakit-frames") {
     @Volatile var running = true
-    private val width = 600
     private val fps = 12
 
     init { isDaemon = true }
@@ -38,10 +38,14 @@ class FrameServer(private val ua: UiAutomation, private val port: Int) : Thread(
                             val started = SystemClock.elapsedRealtime()
                             val bmp = ua.takeScreenshot()
                             if (bmp != null) {
-                                val h = (bmp.height.toLong() * width / bmp.width).toInt().coerceAtLeast(1)
-                                val small = Bitmap.createScaledBitmap(bmp, width, h, true)
+                                // 긴 변을 maxSide로 (가로 태블릿 2560x1600 → 1280x800, 세로 폰 1080x2400 → 576x1280). 600 고정은
+                                // 레티나 화면에서 흐렸다 (2026-11-16). 원본보다 키우지는 않는다
+                                val scale = minOf(1.0, maxSide.toDouble() / maxOf(bmp.width, bmp.height))
+                                val w = (bmp.width * scale).toInt().coerceAtLeast(1)
+                                val h = (bmp.height * scale).toInt().coerceAtLeast(1)
+                                val small = if (scale < 1.0) Bitmap.createScaledBitmap(bmp, w, h, true) else bmp
                                 buf.reset()
-                                small.compress(Bitmap.CompressFormat.JPEG, 65, buf)
+                                small.compress(Bitmap.CompressFormat.JPEG, quality, buf)
                                 val n = buf.size()
                                 out.write(byteArrayOf((n ushr 24).toByte(), (n ushr 16).toByte(), (n ushr 8).toByte(), n.toByte()))
                                 buf.writeTo(out)
