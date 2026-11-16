@@ -26,6 +26,7 @@ git clone -b main https://github.com/indextrown/qa-kit.git ~/qa-kit
 ```
 
 - 업데이트: `qakit update` · 버전: `qakit --version` · 제거: `qakit install-skill --uninstall`
+- **맥 앱(미리 보기)**: [릴리스](https://github.com/indextrown/qa-kit/releases/latest)의 `QA-Kit-<버전>.dmg`를 열어 Applications로 끌어 놓으면 터미널 없이 창으로 씁니다 ([처음 열 때 허용](docs/web-ui.md#맥-앱-미리-보기)). Xcode·XcodeGen은 똑같이 필요합니다
 - 설치 위치와 옛 이름(`ios-qa-kit`) 이전: [시작 가이드](docs/getting-started.md#1단계-설치)
 
 ## 5분 시작
@@ -126,7 +127,7 @@ qakit ui            # 브라우저가 열립니다. 끄려면 Ctrl+C
 
 `127.0.0.1`에만 열립니다. 자세히: [docs/web-ui.md](docs/web-ui.md)
 
-맥 앱(미리 보기): `scripts/build-app.sh`로 만든 `dist/QA Kit.app`을 켜면 작업공간을 고르고 같은 웹 UI를 창으로 엽니다 (서버는 앱이 켜고 끔). 자세히: [docs/web-ui.md](docs/web-ui.md#맥-앱-미리-보기)
+맥 앱(미리 보기): 릴리스의 DMG로 설치한 QA Kit을 켜면 작업공간을 고르고 같은 웹 UI를 창으로 엽니다 (서버는 앱이 켜고 끔). 자세히: [docs/web-ui.md](docs/web-ui.md#맥-앱-미리-보기)
 
 ## AI와 함께 쓰기
 

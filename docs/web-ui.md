@@ -20,10 +20,23 @@ qakit ui --device i       # 시나리오 실행을 실기기에서 (라이브 �
 
 ## 맥 앱 (미리 보기)
 
-터미널 없이 창으로 쓰는 앱입니다. 아직 DMG 배포 전이라 저장소에서 직접 만듭니다.
+터미널 없이 창으로 쓰는 앱입니다.
+
+**설치**: [릴리스](https://github.com/indextrown/qa-kit/releases/latest)에서 `QA-Kit-<버전>.dmg`를 받아 열고, **QA Kit**을 **Applications**로 끌어 놓습니다. 시나리오 실행기 등은 처음 쓸 때 이 맥에서 빌드하므로 Xcode·XcodeGen은 git 설치와 똑같이 필요합니다 (설정 → 환경 점검이 알려 줌).
+
+**처음 열 때 허용** (공증 전이라 한 번만):
+
+1. QA Kit을 엽니다 → "확인할 수 없습니다" 창이 뜨면 **완료**를 누릅니다.
+2. **시스템 설정 → 개인정보 보호 및 보안** 아래쪽 "QA Kit이(가) 차단되었습니다" 옆 **그래도 열기** → 암호 입력.
+3. 터미널이 편하면 대신: `xattr -dr com.apple.quarantine "/Applications/QA Kit.app"`
+
+**업데이트**: 새 DMG로 Applications의 QA Kit을 바꿉니다 (앱 안 qakit은 `qakit update`를 쓰지 않음). 빌드 결과·설정은 그대로 남습니다.
+
+**저장소에서 직접 만들기**:
 
 ```bash
-scripts/build-app.sh --open     # dist/QA Kit.app을 만들고 켭니다 (Xcode 명령줄 도구만 있으면 됨)
+scripts/build-app.sh --open     # dist/QA Kit.app을 만들고 켭니다
+scripts/build-dmg.sh            # dist/QA-Kit-<버전>.dmg (Developer ID가 있으면 QAKIT_SIGN_ID·QAKIT_NOTARY_PROFILE로 서명·공증)
 ```
 
 - 처음 화면에서 **폴더 열기…**로 `qakit.yml`이 있는 작업공간을 고릅니다. 최근 작업공간은 목록에 남고(우클릭 → 목록에서 빼기), 파일 메뉴 **최근 작업공간**에도 있습니다. Dock 아이콘에 폴더를 끌어 놓아도 됩니다.
