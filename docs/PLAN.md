@@ -699,6 +699,88 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 | 직접 터치로 된 것이 XCUITest 재생에선 안 됨 (또는 반대) | 저장 전 XCUITest 재생 통과가 거름 |
 | AI QA 중 XCUITest로 켠 앱이 섞이면 터치가 조용히 무시됨 | 모드 시작 때 앱을 simctl로 다시 켜고, 탭 뒤 화면이 안 바뀌면 "터치가 무시됨"으로 알림 |
 
+## 맥 앱(DMG) 설계 — 다음 단계
+
+> 상태: 계획 (2026-11-16). 아직 만들지 않음.
+
+### 왜
+
+지금은 `git clone` → `install-skill` → 터미널에서 `qakit ui`를 켜고 브라우저 탭으로 본다. Codex·Claude 데스크톱 앱처럼 **DMG를 받아 끌어 넣고, 더블클릭하면 창이 뜨는** 앱이면 터미널을 모르는 QA 담당자도 쓸 수 있고, 작업공간(앱마다 QA 폴더)을 창에서 고르고 바꿀 수 있다.
+
+### 방식 비교
+
+| 방식 | 크기 | 장점 | 단점 |
+|---|---|---|---|
+| **Swift 앱 + WKWebView (추천)** | 수 MB | 지금 웹 UI를 그대로 띄움. 맥 기본 기능(메뉴 막대·알림·파일 열기)을 바로 씀. 어차피 Xcode가 필요한 도구라 Swift 빌드가 자연스럽다 | 웹뷰 차이(내려받기·확인 창)를 손봐야 함 |
+| Tauri | 10MB 안팎 | 웹뷰 + Rust, 자동 업데이트 기본 제공 | Rust 도구가 하나 더 늘어남 |
+| Electron | 150MB 이상 | Chrome 그대로라 웹 차이가 없음 | 무겁다, Node 런타임을 통째로 넣음 |
+
+→ **Swift + WKWebView**. 서버(`qakit ui`)·실행기·AI 연결은 지금 Python 코드를 그대로 쓰고, 앱은 **창과 수명 관리만** 한다.
+
+### 구성
+
+```
+QA Kit.app
+└─ Contents/
+   ├─ MacOS/QAKit                  Swift 앱 (창·메뉴 막대·서버 띄우기)
+   └─ Resources/kit/               도구 폴더 통째 (bin·lib·Tools·Sources·ScenarioRunner·AndroidRunner·AutoID·ui/dist·skills·templates·VERSION)
+```
+
+- **창**: 작업공간 하나에 창 하나. 앱이 `kit/bin/qakit -w <작업공간> ui --no-open --port <고정>`을 띄우고, 출력의 주소(토큰 포함)를 WKWebView로 연다. 창을 닫거나 앱을 끄면 서버를 SIGINT로 멈춘다 (서버가 띄운 실행·AI·녹화도 같이 정리 — 지금 `qakit ui` 종료 처리 그대로).
+- **포트는 작업공간마다 고정**: 웹 UI 설정(테마·커서·탭 등)이 localStorage라 주소(포트)가 바뀌면 사라진다 → 작업공간 경로로 정한 포트를 쓰고, 쓰고 있으면 다음 번호.
+- **작업공간 고르기**: 처음 화면에 최근 작업공간 목록 + "폴더 열기"(`qakit.yml`이 있는 폴더). 없으면 `qakit init` 안내 (나중에 창에서 만들기).
+- **메뉴 막대 아이콘**: 열린 작업공간, 실행 중(시나리오·AI) 표시, 창 열기, 끝내기.
+- **처음 점검**: Xcode·xcodegen·python3·(안드로이드면 JDK·SDK)가 있는지 보고 없으면 설치 방법을 보여 준다 (`qakit doctor` 같은 점검 명령을 하나 두고 앱은 그 결과를 그림).
+- **명령줄·스킬**: 메뉴 "명령줄 도구 설치" → `~/.local/bin/qakit`을 앱 안 `kit/bin/qakit`으로 링크, Claude Code·Codex 스킬·MCP 설정도 앱 안 경로로 (`install-skill` 그대로). git으로 설치한 것이 있으면 어느 쪽을 쓸지 묻는다.
+
+### 꼭 바꿔야 하는 것 — 도구 폴더에 쓰지 않기
+
+서명한 앱 번들 안은 고치면 안 된다 (서명이 깨지고, `/Applications`는 쓰기 권한도 없을 수 있음). 지금은 도구 폴더(`KIT_DIR`) 안에 빌드 결과를 쓴다:
+
+- `.build/`(시나리오 실행기·AutoID·실기기 실행기·안드로이드 실행기 APK), `Tools/<도구>/.build/`(simscreen·simtouch), `ScenarioRunner/*.xcodeproj`(xcodegen 결과), `AndroidRunner/runner/build/`(Gradle)
+
+→ **쓰는 곳을 `QAKIT_HOME`(기본 `~/Library/Application Support/qakit`)으로 분리**. 읽기 전용 원본(`KIT_DIR`)과 쓰는 곳(`QAKIT_HOME`)을 나누고, Xcode·Gradle 프로젝트는 쓰는 곳에 복사해 빌드한다. git 설치에서는 지금처럼 `KIT_DIR`을 써도 되게 기본값만 다르게.
+
+### 업데이트
+
+- 1차: 앱이 켜질 때 GitHub 최신 릴리스 버전을 보고 새 버전이 있으면 "업데이트" → DMG 내려받기 페이지. (`qakit update`는 git 설치 전용으로 남김)
+- 2차: Sparkle(맥 앱 자동 업데이트 표준) — 릴리스에 appcast를 같이 올려 앱 안에서 받아 바꾼다.
+
+### 서명·공증
+
+- **Apple Developer ID(연 $99)가 있으면**: Developer ID로 서명 + hardened runtime + `notarytool` 공증 → 받은 사람이 바로 연다.
+- **없으면**: ad-hoc 서명. 처음 열 때 "확인되지 않은 개발자" 경고 → 우클릭 → 열기 (사내 몇 명이면 이걸로 충분).
+- 사용자 맥에서 만드는 도구(simscreen·simtouch·실행기)는 그 맥에서 빌드되므로 공증 대상이 아니다.
+
+### 배포
+
+`scripts/release.sh`에 이어서: 앱 빌드(`xcodebuild`, 도구 폴더를 Resources/kit로 복사) → DMG(`hdiutil create -format UDZO`, Applications 바로가기 포함) → (자격이 있으면) 서명·공증·staple → GitHub 릴리스에 `QA-Kit-<버전>.dmg` 첨부. CI(macOS 러너)에서 만들 수도 있다.
+
+### 단계
+
+| 단계 | 내용 |
+|---|---|
+| **D1. 쓰는 곳 분리** | `QAKIT_HOME` 도입, 빌드 결과·xcodegen·Gradle 출력을 그쪽으로. git 설치는 그대로 동작 (테스트: 도구 폴더를 읽기 전용으로 두고 `build-app`·`run`·`ui`) |
+| **D2. 앱 셸** | Swift 앱: 작업공간 고르기·최근 목록, 서버 띄우기·끄기, WKWebView (내려받기 `WKDownload`, `confirm`·`alert` 처리, 바깥 링크는 브라우저로, MJPEG 실시간 화면 확인) |
+| **D3. 맥 기능** | 메뉴 막대 아이콘·실행 중 표시, 처음 점검(`qakit doctor`), 명령줄·스킬 설치 메뉴 |
+| **D4. 패키징** | release.sh에 앱·DMG·(서명·공증) 추가, 릴리스에 첨부 |
+| **D5. 업데이트** | 최신 릴리스 확인 → 이후 Sparkle |
+
+### 확인할 것 · 위험
+
+| 항목 | 내용 |
+|---|---|
+| Python 버전 | 맥 기본 `/usr/bin/python3`는 3.9.6 (Xcode 명령줄 도구). 지금 qakit은 Homebrew 3.14에서만 써 봄 → 3.9에서 도는지 확인하고, 안 되면 최소 버전을 정해 점검 화면에서 안내 |
+| WKWebView 차이 | 실시간 화면(MJPEG `<img>`), 녹화·사진 내려받기, `window.confirm` — Safari 엔진에서 확인 필요 |
+| git 설치와 둘 다 있을 때 | MCP·스킬이 가리키는 `qakit`이 어느 쪽인지 섞일 수 있음 → 앱이 지금 연결된 쪽을 보여 주고 바꾸게 |
+| 여러 창 | 같은 작업공간을 두 창에서 열면 서버 둘 → 이미 열려 있으면 그 창으로 |
+
+### 정할 것
+
+- Apple Developer ID가 있는가 (없으면 ad-hoc 서명으로 시작)
+- 앱 이름 (예: QA Kit)
+- git 설치를 계속 함께 지원할지 (추천: 개발자는 git, 그 외는 앱)
+
 ## 단계와 결과
 
 | 단계 | 내용 | 결과 |
@@ -716,6 +798,7 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 | 9. UI | `qakit ui` ([설계](#ui-설계-다음-단계)) | U1~U5 ✅, 실시간 화면·커서·캡처 ✅ |
 | 10. AI QA | AI가 MCP로 앱을 직접 QA ([설계](#ai-qa-설계-다음-단계)) | A1 ✅ (`qakit mcp`, 실제 Claude Code에서 확인) · A2 ✅ (라이브 세션 AI 활동) · A3 ✅ (UI에서 AI QA 시작, 실제 Claude Code로 끝까지) · A4 ✅ (지난 세션·통과 단계 → 시나리오) |
 | 11. AI QA 직접 터치 | tapflow 방식 — 앱은 simctl, 실행기는 읽기만, 누르기는 터치 신호 ([설계](#ai-qa-직접-터치-설계--tapflow-방식-다음-단계)) | 시험 ✅ · AutoID ✅ · H1 ✅ · H3 ✅ · H4 ✅ |
+| 12. 맥 앱(DMG) | 더블클릭으로 여는 앱, 웹 UI를 창으로 ([설계](#맥-앱dmg-설계--다음-단계)) | 계획. 다음 D1 |
 
 ## 주요 결정과 배운 것
 
