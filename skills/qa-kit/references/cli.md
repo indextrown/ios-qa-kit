@@ -6,7 +6,7 @@
 |---|---|
 | `qakit init <앱 프로젝트> [--name] [--dir] [--scheme] [--force]` | 작업공간 생성. scheme·configuration·bundleId 자동 탐지 |
 | `qakit update [--check]` | 도구를 최신 버전으로 받기 (설치 폴더를 git fast-forward). `--check`: 새 버전이 있는지만 |
-| `qakit doctor` | 환경·설정·secrets 키 점검 |
+| `qakit doctor` | 환경·설정·secrets 키 점검 (`--system`: 작업공간 없이 이 맥의 도구만, `--json`) |
 | `qakit build-app` | 앱 빌드 → 시뮬레이터 설치 → 권한 허용 |
 | `qakit worktree-update [--check] [--from 브랜치]` | QA 워크트리를 따라갈 브랜치(`worktree.base`, 기본 develop. 원격이 앞서면 origin/…)의 새 커밋으로 merge. push·다른 브랜치로 병합은 하지 않음. 미커밋 변경·충돌이면 가져오지 않고 알림. `test`·`run` 전에 자동(`worktree.update: auto`) |
 | `qakit sync [--rebuild] [--skip-build]` | 앱 변경 반영: 재빌드·설치 + ID 재생성(추가/삭제 보고) + 테스트 코드 컴파일 확인 |

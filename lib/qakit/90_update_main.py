@@ -5,6 +5,9 @@
 def cmd_update(args):
     """설치한 도구 폴더를 원격의 최신으로 받는다 (git fast-forward만). 명령·스킬은 링크라 그대로 바뀐다."""
     repo = KIT_DIR
+    if ".app/Contents/" in str(repo):   # 맥 앱 안 도구 (위에 저장소가 있어도 그건 앱이 아님)
+        fail("맥 앱 안의 qakit은 앱을 새 버전으로 바꿔 업데이트합니다.",
+             "https://github.com/indextrown/qa-kit/releases 에서 새 버전 받기")
     if git(repo, "rev-parse", "--git-dir") is None:
         fail(f"{repo}는 git 저장소가 아닙니다.", "git clone으로 설치한 경우만 qakit update를 쓸 수 있습니다")
     branch = git(repo, "rev-parse", "--abbrev-ref", "HEAD")
@@ -195,6 +198,8 @@ def main():
     p.set_defaults(func=cmd_update)
 
     p = sub.add_parser("doctor", help="환경 점검")
+    p.add_argument("--system", action="store_true", help="작업공간 없이 이 맥의 도구만 (Xcode·xcodegen·AI·안드로이드)")
+    p.add_argument("--json", action="store_true", help="--system 결과를 JSON으로 (맥 앱이 읽음)")
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("build-app", help="대상 앱 빌드 + 설치 + 권한 허용")

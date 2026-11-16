@@ -717,7 +717,8 @@ def cmd_ui(args):
 
         def authed(self):
             cookies = dict(c.strip().split("=", 1) for c in (self.headers.get("Cookie") or "").split(";") if "=" in c)
-            return cookies.get("qakit_ui") == token
+            # 맥 앱의 메뉴 막대 상태 확인은 쿠키 대신 헤더로 토큰을 보낸다
+            return cookies.get("qakit_ui") == token or pysecrets.compare_digest(self.headers.get("X-Qakit-Token") or "", token)
 
         def do_POST(self):
             # 실행 요청은 쿠키 + 전용 헤더 (다른 사이트가 몰래 보내는 요청 막기)
@@ -817,8 +818,7 @@ def cmd_ui(args):
             if q.get("token") == token:   # 처음 여는 링크의 토큰 → 쿠키로 바꾸고 주소에서 뺀다
                 return self.send(302, b"", "text/plain", {
                     "Set-Cookie": f"qakit_ui={token}; HttpOnly; SameSite=Strict; Path=/", "Location": url.path or "/"})
-            cookies = dict(c.strip().split("=", 1) for c in (self.headers.get("Cookie") or "").split(";") if "=" in c)
-            if cookies.get("qakit_ui") != token:
+            if not self.authed():
                 return self.send(401, "qakit ui: 터미널에 나온 링크(토큰 포함)로 여세요", "text/plain; charset=utf-8")
             path = url.path
             try:
@@ -857,6 +857,14 @@ def cmd_ui(args):
                     return self.send(200, ui_scenarios(ws))
                 if path == "/api/job":
                     return self.send(200, job_state(int(q.get("from", 0))))
+                if path == "/api/busy":   # 맥 앱 메뉴 막대: 지금 도는 것 (시나리오 실행·AI·녹화)
+                    with job["lock"]:
+                        run_on = bool(job["proc"]) and job["proc"].poll() is None
+                        run_args = job["args"] if run_on else None
+                    ai_on = bool(aij["proc"]) and aij["proc"].poll() is None
+                    rec_on = bool(rec["proc"] and rec["proc"].poll() is None)
+                    return self.send(200, {"run": run_on, "runArgs": run_args, "ai": ai_on, "aiGoal": aij["goal"] if ai_on else None,
+                                           "record": rec_on})
                 if path == "/api/elements":
                     res, err = run_do(["dump", "--settle", "0.3"])
                     if err:

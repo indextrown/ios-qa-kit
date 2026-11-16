@@ -4,11 +4,25 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var workspaces: [String: WorkspaceWindow] = [:]
     private var launcher: NSWindow?
+    private var settings: NSWindow?
+    private var statusBar: StatusBar?
     let recents = Recents()
+
+    var openWorkspaces: [WorkspaceWindow] { workspaces.values.sorted { $0.path < $1.path } }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.mainMenu = makeMenu()
-        DispatchQueue.global(qos: .userInitiated).async { _ = Kit.environment }   // 로그인 셸 PATH를 미리 읽어 둔다
+        statusBar = StatusBar(app: self)
+        // ⌘+는 Shift가 필요한 자판이 많아 ⌘=도 확대로
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+            let mods = e.modifierFlags.intersection([.command, .shift, .option, .control])
+            if mods == .command, e.charactersIgnoringModifiers == "=" { AppState.shared.zoomIn(); return nil }
+            return e
+        }
+        // 처음 점검: 필수 도구(Xcode·xcodegen 등)가 빠졌으면 설정의 환경 점검을 연다
+        AppState.shared.runChecks { [weak self] in
+            if AppState.shared.problems > 0 { self?.showSettings(tab: .check) }
+        }
         // `open -a "QA Kit" --args -workspace <경로>`나 Finder로 폴더를 끌어 놓은 경우는 application(_:open:)
         if let ws = UserDefaults.standard.string(forKey: "workspace") {
             open(path: ws)
@@ -30,6 +44,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// 끌 때 서버를 모두 SIGINT로 멈추고(실행·AI·녹화 정리) 끝난 뒤에 앱을 닫는다
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        let busy = workspaces.values.filter { $0.busyText != nil }
+        if AppState.shared.confirmWhenBusy, !busy.isEmpty {
+            let a = NSAlert()
+            a.messageText = "도는 중인 작업이 있습니다"
+            a.informativeText = busy.map { "\($0.window.title): \($0.busyText ?? "")" }.joined(separator: "\n") + "\n\n끄면 모두 멈춥니다."
+            a.addButton(withTitle: "끄기")
+            a.addButton(withTitle: "취소")
+            if a.runModal() != .alertFirstButtonReturn { return .terminateCancel }
+        }
         let servers = workspaces.values.map(\.server).filter(\.isRunning)
         if servers.isEmpty { return .terminateNow }
         DispatchQueue.global().async {
@@ -85,12 +108,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: LauncherView(recents: recents,
                                                                  open: { [weak self] in self?.open(path: $0) },
-                                                                 openFolder: { [weak self] in self?.openFolder(nil) }))
+                                                                 openFolder: { [weak self] in self?.openFolder(nil) },
+                                                                 settings: { [weak self] in self?.showSettings(tab: .check) }))
             w.center()
             launcher = w
         }
         launcher?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: 설정
+
+    func showSettings(tab: SettingsTab) {
+        if settings == nil {
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 640, height: 500),
+                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            w.title = "설정"
+            w.isReleasedWhenClosed = false
+            w.center()
+            settings = w
+        }
+        settings?.contentView = NSHostingView(rootView: SettingsView(tab: tab))
+        settings?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc func showSettingsMenu(_ sender: Any?) { showSettings(tab: .general) }
+    @objc func zoomIn(_ sender: Any?) { AppState.shared.zoomIn() }
+    @objc func zoomOut(_ sender: Any?) { AppState.shared.zoomOut() }
+    @objc func zoomReset(_ sender: Any?) { AppState.shared.zoomReset() }
+
+    @objc func focusWorkspace(_ sender: NSMenuItem) {
+        if let p = sender.representedObject as? String { workspaces[p]?.show() }
     }
 
     private var keyWorkspace: WorkspaceWindow? {
@@ -131,6 +180,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         _ = sub("QA Kit", [
             item("QA Kit 정보", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
             .separator(),
+            item("설정…", #selector(showSettingsMenu(_:)), ","),
+            .separator(),
             item("QA Kit 가리기", #selector(NSApplication.hide(_:)), "h"),
             item("기타 가리기", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
             item("모두 보기", #selector(NSApplication.unhideAllApplications(_:))),
@@ -160,6 +211,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ])
         _ = sub("보기", [
             item("새로고침", #selector(reloadPage(_:)), "r"),
+            .separator(),
+            item("실제 크기", #selector(zoomReset(_:)), "0"),
+            item("확대", #selector(zoomIn(_:)), "+"),
+            item("축소", #selector(zoomOut(_:)), "-"),
             .separator(),
             item("전체 화면", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control]),
         ])

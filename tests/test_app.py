@@ -18,5 +18,21 @@ class Bundle(unittest.TestCase):
                             f"{top}이(가) 앱 도구 폴더에 빠짐 (scripts/build-app.sh)")
 
 
+
+class DoctorSystem(unittest.TestCase):
+    def test_json(self):
+        import json
+        import subprocess
+        import sys
+        from helpers import QAKIT
+        p = subprocess.run([sys.executable, str(QAKIT), "doctor", "--system", "--json"], text=True, capture_output=True, timeout=60)
+        d = json.loads(p.stdout)
+        keys = {r["key"] for r in d["checks"]}
+        self.assertTrue({"python", "xcode", "simulator", "xcodegen", "git", "claude", "java", "adb"} <= keys)
+        self.assertTrue(all(r["need"] in ("필수", "AI", "안드로이드") for r in d["checks"]))
+        self.assertTrue(next(r for r in d["checks"] if r["key"] == "python")["ok"])
+        self.assertEqual(d["problems"], sum(1 for r in d["checks"] if not r["ok"] and r["need"] == "필수"))
+
+
 if __name__ == "__main__":
     unittest.main()

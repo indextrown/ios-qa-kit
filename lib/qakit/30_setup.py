@@ -231,7 +231,71 @@ def copy_template(src, dst, values, force):
 
 # ─────────────────────────────── 명령: doctor ───────────────────────────────
 
+def system_checks():
+    """작업공간 없이 이 맥에 qakit이 쓰는 도구가 있는지 (맥 앱 처음 점검·qakit doctor --system).
+    need: 필수(iOS QA) · AI · 안드로이드 — 필수만 빠져도 문제로 센다."""
+    rows = []
+
+    def sh(cmd):   # 도구가 아예 없으면(Xcode 없는 맥) 실패로만 본다
+        try:
+            return run(cmd, check=False)
+        except OSError:
+            return subprocess.CompletedProcess(cmd, 127, "", "")
+
+    def add(key, name, need, ok_, detail, hint=""):
+        rows.append({"key": key, "name": name, "need": need, "ok": bool(ok_), "detail": detail, "hint": "" if ok_ else hint})
+
+    v = sys.version_info
+    add("python", "Python 3.9 이상", "필수", v >= (3, 9), f"{sys.executable} {v.major}.{v.minor}.{v.micro}",
+        "xcode-select --install (맥 기본 python3)")
+    xc = sh(["xcodebuild", "-version"])
+    dev = sh(["xcode-select", "-p"]).stdout.strip()
+    full = xc.returncode == 0 and "CommandLineTools" not in dev
+    add("xcode", "Xcode", "필수", full, (xc.stdout or "").splitlines()[0] if full else (dev or "없음"),
+        "App Store에서 Xcode 설치 → sudo xcode-select -s /Applications/Xcode.app")
+    sims = 0
+    if full:
+        with contextlib.suppress(ValueError, TypeError):
+            devs = json.loads(sh(["xcrun", "simctl", "list", "devices", "available", "-j"]).stdout or "{}")["devices"]
+            sims = sum(len(d) for rt, d in devs.items() if "iOS" in rt)
+    add("simulator", "iOS 시뮬레이터", "필수", sims > 0, f"{sims}개" if sims else "없음",
+        "Xcode → Settings → Components에서 iOS 플랫폼 받기")
+    add("xcodegen", "xcodegen", "필수", shutil.which("xcodegen"), shutil.which("xcodegen") or "없음", "brew install xcodegen")
+    add("git", "git", "필수", shutil.which("git"), shutil.which("git") or "없음", "xcode-select --install")
+    for cli, label in (("claude", "Claude Code"), ("codex", "Codex")):
+        add(cli, f"{label} (AI QA)", "AI", shutil.which(cli), shutil.which(cli) or "없음",
+            "npm install -g @anthropic-ai/claude-code" if cli == "claude" else "npm install -g @openai/codex")
+    try:
+        jh = android_java_home()
+    except OSError:
+        jh = None
+    add("java", "JDK 17 이상", "안드로이드", jh, str(jh) if jh else "없음", "brew install openjdk@17 (또는 qakit android setup)")
+    adb_ = android_tool("adb")
+    add("adb", "Android SDK (adb)", "안드로이드", adb_, adb_ or "없음", "qakit android setup")
+    return rows
+
+
+def cmd_doctor_system(args):
+    rows = system_checks()
+    if args.json:
+        print(json.dumps({"checks": rows, "problems": sum(1 for r in rows if not r["ok"] and r["need"] == "필수")},
+                         ensure_ascii=False))
+        return
+    for need in ("필수", "AI", "안드로이드"):
+        print(f"\n[{need}]" if need != "필수" else "[필수]")
+        for r in (x for x in rows if x["need"] == need):
+            mark = "✅" if r["ok"] else ("❌" if need == "필수" else "➖")
+            print(f"{mark} {r['name']}: {r['detail']}" + (f"\n   → {r['hint']}" if r["hint"] else ""))
+    bad = sum(1 for r in rows if not r["ok"] and r["need"] == "필수")
+    print()
+    if bad:
+        fail(f"필수 도구 {bad}개 없음", "위 → 안내대로 설치한 뒤 다시 qakit doctor --system")
+    ok("필수 도구 모두 있음 (AI·안드로이드는 쓸 때만)")
+
+
 def cmd_doctor(args):
+    if getattr(args, "system", False) or getattr(args, "json", False):
+        return cmd_doctor_system(args)
     ws = find_workspace(args.workspace)
     problems = 0
 

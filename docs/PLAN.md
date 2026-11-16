@@ -701,7 +701,7 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 
 ## 맥 앱(DMG) 설계 — 다음 단계
 
-> 상태: D1 ✅ 쓰는 곳 분리, D2 ✅ 앱 셸 (2026-11-16). 다음 D3 맥 기능.
+> 상태: D1 ✅ 쓰는 곳 분리, D2 ✅ 앱 셸, D3 ✅ 맥 기능·설정 창 (2026-11-16). 다음 D4 패키징.
 
 ### 왜
 
@@ -762,7 +762,7 @@ QA Kit.app
 |---|---|
 | **D1. 쓰는 곳 분리** ✅ | `WORK_DIR` = `QAKIT_HOME` → 도구 폴더에 쓸 수 있으면(git 설치) 도구 폴더 그대로 → 아니면 `~/Library/Application Support/qakit`. 빌드 결과(`.build/`: 시나리오 실행기·실기기 실행기·AutoID·안드로이드 실행기·simscreen·simtouch·swiftui-ids)는 `WORK_DIR/.build`, 소스 폴더 안에 쓰는 빌드(xcodegen 프로젝트·SwiftPM·Gradle)는 그 부분만 `WORK_DIR/src`에 복사(`writable_src`, 바뀐 파일만·지운 파일은 지움)해 빌드. git 설치는 경로가 그대로라 다시 빌드하지 않음. **확인**: 도구 사본을 `chmod -R a-w`로 읽기 전용으로 두고 맥 기본 Python 3.9.6으로 — AutoID·시나리오 실행기 빌드 → `do launch`·`dump`·`run`(실패 사진·영상까지) ✅, simscreen 10초·simtouch 2초·안드로이드 실행기 47초·swiftui-ids 4분 44초 빌드 ✅, 도구 폴더에 쓴 파일 0 |
 | **D2. 앱 셸** ✅ | `App/Sources`(AppKit + SwiftUI, swiftc 한 번에 빌드 — Xcode 프로젝트 없음) + `scripts/build-app.sh`(유니버설 바이너리, 도구 폴더를 Resources/kit로, ad-hoc 서명) → `dist/QA Kit.app`. 작업공간 고르기·최근 목록(Dock에 폴더 끌어 놓기도), 작업공간마다 창 하나·서버 하나(이미 열려 있으면 그 창), 포트는 작업공간마다 고정(UserDefaults). 창 닫기·앱 종료 = 서버 SIGINT(8초 뒤 SIGTERM·SIGKILL), 앱이 강제로 죽으면 서버가 부모를 보고 따라 꺼짐(`QAKIT_UI_PARENT`). 로그인 셸 PATH를 읽어 씀. WKWebView: 내려받기(`WKDownload` → ~/Downloads, blob·attachment 둘 다), alert·confirm·prompt, 새 창은 같은 세션의 작은 창(결과 파일은 쿠키 로그인이 필요), 바깥 링크는 기본 브라우저. 앱 번들 안 도구 폴더는 쓸 수 있어도 쓰지 않음(`.app/Contents/` → Application Support). **찾아 고친 것**: WebKit은 화면에서 빠진 `<img>`의 MJPEG 스트림을 끊지 않아 라이브 세션을 오갈 때마다 연결이 쌓이고, 서버당 6개를 채우면 화면이 검게 멈추고 화면 구조도 못 읽음 → 빠질 때 src를 빈 그림으로 + 서버는 스트림을 최근 3개만 두고 오래된 것을 끊음. **확인**: 실시간 화면 10~11 fps, 라이브 세션 8번 오가도 연결 3개 유지, 사진 내려받기, 창 닫기·⌘Q·kill -9 모두 서버·simscreen 정리 |
-| **D3. 맥 기능** | 메뉴 막대 아이콘·실행 중 표시, 처음 점검(`qakit doctor`), 명령줄·스킬 설치 메뉴 |
+| **D3. 맥 기능 · 설정 창** ✅ | **메뉴 막대 아이콘**: 열린 작업공간, 도는 것(시나리오 실행·AI·녹화)이 있으면 채운 아이콘 + "실행 중" — 서버의 `GET /api/busy`를 3초마다 (토큰은 `X-Qakit-Token` 헤더). 도는 중에 창 닫기·앱 종료는 먼저 묻기(설정에서 끔). **처음 점검**: `qakit doctor --system [--json]`(작업공간 없이 Python·Xcode·시뮬레이터·xcodegen·git / AI: claude·codex / 안드로이드: JDK·adb) — 필수가 빠지면 켤 때 설정의 환경 점검을 열고 처음 화면에도 경고, 설치 명령 복사. **명령줄·스킬**: `~/.local/bin/qakit`·Claude Code·Codex 스킬 링크가 이 앱 / 다른 곳(git 설치) / 없음인지 보여 주고, "이 앱으로 연결"(다른 곳이면 확인 후 `install-skill`)·"이 앱 연결 풀기"(앱을 가리키는 링크만). **설정 창(⌘,)**: 화면 크기 50~200%(슬라이더·버튼, 보기 메뉴 ⌘− ⌘0 ⌘+·⌘=, 모든 창 `pageZoom`), 메뉴 막대 아이콘 켜기·끄기, 실행 중 확인, 버전·도구 폴더·빌드 결과 위치. 앱 안 qakit에서 `qakit update`는 막고 릴리스 안내 |
 | **D4. 패키징** | release.sh에 앱·DMG·(서명·공증) 추가, 릴리스에 첨부 |
 | **D5. 업데이트** | 최신 릴리스 확인 → 이후 Sparkle |
 
@@ -798,7 +798,7 @@ QA Kit.app
 | 9. UI | `qakit ui` ([설계](#ui-설계-다음-단계)) | U1~U5 ✅, 실시간 화면·커서·캡처 ✅ |
 | 10. AI QA | AI가 MCP로 앱을 직접 QA ([설계](#ai-qa-설계-다음-단계)) | A1 ✅ (`qakit mcp`, 실제 Claude Code에서 확인) · A2 ✅ (라이브 세션 AI 활동) · A3 ✅ (UI에서 AI QA 시작, 실제 Claude Code로 끝까지) · A4 ✅ (지난 세션·통과 단계 → 시나리오) |
 | 11. AI QA 직접 터치 | tapflow 방식 — 앱은 simctl, 실행기는 읽기만, 누르기는 터치 신호 ([설계](#ai-qa-직접-터치-설계--tapflow-방식-다음-단계)) | 시험 ✅ · AutoID ✅ · H1 ✅ · H3 ✅ · H4 ✅ |
-| 12. 맥 앱(DMG) | 더블클릭으로 여는 앱, 웹 UI를 창으로 ([설계](#맥-앱dmg-설계--다음-단계)) | D1 ✅ (읽기 전용 도구 폴더 + Python 3.9), D2 ✅ (앱 셸 `scripts/build-app.sh`). 다음 D3 |
+| 12. 맥 앱(DMG) | 더블클릭으로 여는 앱, 웹 UI를 창으로 ([설계](#맥-앱dmg-설계--다음-단계)) | D1 ✅ (읽기 전용 도구 폴더 + Python 3.9), D2 ✅ (앱 셸 `scripts/build-app.sh`), D3 ✅ (메뉴 막대·처음 점검·명령줄·스킬·설정 창). 다음 D4 |
 
 ## 주요 결정과 배운 것
 

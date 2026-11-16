@@ -33,6 +33,12 @@ scripts/build-app.sh --open     # dist/QA Kit.app을 만들고 켭니다 (Xcode 
 - 사진·녹화·결과 파일 내려받기는 `~/Downloads`로, 결과 사진·리포트를 새로 열면 앱 안 작은 창으로, GitHub 같은 바깥 링크는 기본 브라우저로 엽니다.
 - 앱은 사용자 로그인 셸의 `PATH`를 읽어 씁니다 (xcodegen·adb·claude를 터미널에서처럼 찾게).
 - 앱 안 도구 폴더는 고치지 않고, 빌드 결과(실행기·AutoID·화면 도구)는 `~/Library/Application Support/qakit`에 둡니다. 처음 한 번은 이 빌드 때문에 느립니다.
+- **설정(⌘,)**
+  - 일반: 화면 크기 50~200% (보기 메뉴 ⌘− · ⌘0 · ⌘+), 메뉴 막대 아이콘, 도는 중일 때 닫기 전에 묻기
+  - 명령줄·스킬: 터미널 `qakit`과 Claude Code·Codex 스킬이 이 앱 / 다른 곳(git 설치) 중 어디를 쓰는지 보고 "이 앱으로 연결"
+  - 환경 점검: Xcode·시뮬레이터·xcodegen 등 필수 도구와 AI·안드로이드 도구 (`qakit doctor --system`과 같음). 필수가 빠지면 앱을 켤 때 이 탭이 열립니다
+- **메뉴 막대 아이콘**: 열린 작업공간과 지금 도는 것(시나리오 실행·AI·녹화). 도는 중이면 아이콘이 채워지고 "실행 중"이 붙습니다
+- 앱 안 qakit은 `qakit update` 대신 앱을 새 버전으로 바꿔 업데이트합니다
 - 개발 중에는 앱을 다시 만들지 않고 저장소를 바로 쓰게 할 수 있습니다: `QAKIT_KIT=$PWD "dist/QA Kit.app/Contents/MacOS/QAKit"`
 
 ## 메뉴
