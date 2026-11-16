@@ -5,6 +5,7 @@
 // 비공개 API라 Xcode가 바뀌면 깨질 수 있다 → 실패하면 0이 아닌 코드로 끝나고, qakit은 스크린샷 방식으로 돌아간다.
 //
 // 사용: simscreen <udid> [--fps 20] [--width 600] [--quality 0.7] [--once out.jpg]
+// 인코딩은 하드웨어 JPEG(VideoToolbox), 안 되면 CoreGraphics. SIMSCREEN_NO_HW=1이면 CoreGraphics만.
 // 출력(stdout): [4바이트 big-endian 길이][JPEG] 반복. 준비되면 stderr에 "ready <w>x<h>".
 //
 // 사용: simscreen --encode out.mp4   (qakit mcp 문제 보고 영상)
@@ -18,6 +19,7 @@ import ImageIO
 import UniformTypeIdentifiers
 import AVFoundation
 import CoreVideo
+import VideoToolbox
 
 func die(_ msg: String, _ code: Int32 = 2) -> Never { FileHandle.standardError.write("simscreen: \(msg)\n".data(using: .utf8)!); exit(code) }
 
@@ -167,12 +169,80 @@ func jpeg(_ s: IOSurface) -> Data? {
     return CGImageDestinationFinalize(d) ? out as Data : nil
 }
 
+// ── 하드웨어 JPEG (VideoToolbox): GPU로 줄이고(VTPixelTransfer) 미디어 엔진으로 JPEG. 900px 기준 약 7ms
+//    (CoreGraphics + ImageIO는 약 24ms). 만들지 못하면 nil → 위 jpeg()로.
+final class HardwareJPEG {
+    let w: Int, h: Int, srcW: Int, srcH: Int
+    private var session: VTCompressionSession
+    private let transfer: VTPixelTransferSession
+    private let small: CVPixelBuffer
+    private var n: Int64 = 0
+
+    init?(source s: IOSurface, width: Int, quality: Double) {
+        srcW = s.width; srcH = s.height
+        w = min(width, srcW) & ~1
+        h = Int(Double(srcH) * Double(w) / Double(srcW)) & ~1
+        guard w > 0, h > 0 else { return nil }
+        var t: VTPixelTransferSession?
+        guard VTPixelTransferSessionCreate(allocator: nil, pixelTransferSessionOut: &t) == 0, let t else { return nil }
+        VTSessionSetProperty(t, key: kVTPixelTransferPropertyKey_ScalingMode, value: kVTScalingMode_Trim)
+        var buf: CVPixelBuffer?
+        guard CVPixelBufferCreate(nil, w, h, kCVPixelFormatType_32BGRA,
+                                  [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary, &buf) == kCVReturnSuccess, let buf else { return nil }
+        var sess: VTCompressionSession?
+        guard VTCompressionSessionCreate(allocator: nil, width: Int32(w), height: Int32(h), codecType: kCMVideoCodecType_JPEG,
+                                         encoderSpecification: nil, imageBufferAttributes: nil, compressedDataAllocator: nil,
+                                         outputCallback: nil, refcon: nil, compressionSessionOut: &sess) == 0, let sess else { return nil }
+        VTSessionSetProperty(sess, key: kVTCompressionPropertyKey_Quality, value: quality as CFNumber)
+        VTSessionSetProperty(sess, key: kVTCompressionPropertyKey_RealTime, value: kCFBooleanTrue)
+        transfer = t; small = buf; session = sess
+    }
+
+    func matches(_ s: IOSurface) -> Bool { s.width == srcW && s.height == srcH }
+
+    func encode(_ s: IOSurface) -> Data? {
+        var src: Unmanaged<CVPixelBuffer>?
+        guard CVPixelBufferCreateWithIOSurface(nil, unsafeBitCast(s, to: IOSurfaceRef.self), nil, &src) == kCVReturnSuccess,
+              let src = src?.takeRetainedValue(),
+              VTPixelTransferSessionTransferImage(transfer, from: src, to: small) == 0 else { return nil }
+        var out: Data?
+        let done = DispatchSemaphore(value: 0)
+        n += 1
+        let st = VTCompressionSessionEncodeFrame(session, imageBuffer: small, presentationTimeStamp: CMTime(value: n, timescale: 60),
+                                                 duration: .invalid, frameProperties: nil, infoFlagsOut: nil) { status, _, sample in
+            defer { done.signal() }
+            guard status == 0, let sample, let bb = CMSampleBufferGetDataBuffer(sample) else { return }
+            let len = CMBlockBufferGetDataLength(bb)
+            var d = Data(count: len)
+            let ok = d.withUnsafeMutableBytes { CMBlockBufferCopyDataBytes(bb, atOffset: 0, dataLength: len, destination: $0.baseAddress!) } == 0
+            if ok { out = d }
+        }
+        guard st == 0 else { return nil }
+        done.wait()
+        return out
+    }
+}
+
+var hw: HardwareJPEG?
+var hwFailed = ProcessInfo.processInfo.environment["SIMSCREEN_NO_HW"] != nil
+
+/// 한 장: 하드웨어로, 안 되면 CoreGraphics로
+func frame(_ s: IOSurface) -> Data? {
+    if !hwFailed {
+        if hw == nil || !hw!.matches(s) { hw = HardwareJPEG(source: s, width: width, quality: quality) }
+        if let hw, let d = hw.encode(s), d.count > 2, d[0] == 0xFF, d[1] == 0xD8 { return d }
+        hwFailed = true
+        FileHandle.standardError.write("simscreen: 하드웨어 JPEG 실패 → CoreGraphics\n".data(using: .utf8)!)
+    }
+    return jpeg(s)
+}
+
 var surface = displaySurface()
 for _ in 0..<20 where surface == nil { usleep(250_000); surface = displaySurface() }
 guard var surf = surface else { die("화면 포트를 찾지 못함 (시뮬레이터가 켜져 있나요?)") }
 
 if let once {
-    guard let data = jpeg(surf) else { die("인코딩 실패") }
+    guard let data = frame(surf) else { die("인코딩 실패") }
     try? data.write(to: URL(fileURLWithPath: once))
     print("\(surf.width)x\(surf.height) \(data.count)B")
     exit(0)
@@ -183,20 +253,25 @@ signal(SIGPIPE, SIG_IGN)
 let out = FileHandle.standardOutput
 var lastSeed: UInt32 = .max
 var lastSent = Date.distantPast
+var lastPortCheck = Date()
 let interval = 1.0 / fps
 while true {
     let start = Date()
     let seed = surf.seed
     // 화면이 안 바뀌어도 2초마다 한 장 (새로 붙은 브라우저가 바로 보게)
     if seed != lastSeed || start.timeIntervalSince(lastSent) > 2 {
-        if let data = jpeg(surf) {
+        if let data = frame(surf) {
             var n = UInt32(data.count).bigEndian
             do { try out.write(contentsOf: Data(bytes: &n, count: 4) + data) } catch { exit(0) }   // 읽는 쪽이 끝남
             lastSeed = seed; lastSent = start
         }
     }
     // 회전·기기 재시작으로 화면 포트가 바뀌면 다시 잡는다
-    if Int(start.timeIntervalSince1970) % 3 == 0, let s = displaySurface(), s !== surf { surf = s; lastSeed = .max }
+    //  (3초에 한 번 — 포트 찾기가 한 번에 6~10ms라 매 장 하면 그만큼 느려진다)
+    if start.timeIntervalSince(lastPortCheck) > 3 {
+        lastPortCheck = start
+        if let s = displaySurface(), s !== surf { surf = s; lastSeed = .max }
+    }
     let spent = Date().timeIntervalSince(start)
     if spent < interval { usleep(UInt32((interval - spent) * 1_000_000)) }
 }

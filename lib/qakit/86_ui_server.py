@@ -360,7 +360,8 @@ def cmd_ui(args):
             with live["cond"]:
                 live.update(error="실시간 화면 도구 빌드 실패", failed_at=time.time())
             return False, live["error"]
-        proc = subprocess.Popen([str(tool), udid, "--fps", "24", "--width", str(live_frame_size("ios")), "--quality", "0.7"],
+        # 60: 하드웨어 JPEG(약 7ms/장)라 화면이 움직일 때 시뮬레이터 그리기 속도를 따라간다 (안 움직이면 2초에 한 장)
+        proc = subprocess.Popen([str(tool), udid, "--fps", "60", "--width", str(live_frame_size("ios")), "--quality", "0.7"],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         with live["cond"]:
             live.update(proc=proc, error=None, frame=None, idle_since=time.time())
