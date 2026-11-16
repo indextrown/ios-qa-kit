@@ -155,7 +155,14 @@ class Workspace:
         # 빌드 종류: debug(기본) = app.configuration / release = app.release.configuration (기본 Release)
         self.build = BUILD_MODE or "debug"
         self.state_name = "installed"
-        if self.build == "release":
+        if self.build == "release" and self.platform == "android":
+            # 안드로이드 release: app.release.variant(기본 release)·packageName(기본 debug와 같음)
+            rel = app.get("release") or {}
+            rel = rel if isinstance(rel, dict) else {}
+            self.variant = str(rel.get("variant", "release"))
+            self.package = str(rel.get("packageName") or self.package)
+            self.state_name = "installed-release"
+        elif self.build == "release":
             rel = app.get("release") or {}
             rel = rel if isinstance(rel, dict) else {}
             self.configuration = str(rel.get("configuration", "Release"))

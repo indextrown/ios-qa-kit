@@ -205,6 +205,8 @@ def serve_stop(udid, reason=None, quiet=False, force=False):
                 os.killpg(int(pid), 15)   # start_new_session으로 띄웠으므로 프로세스 그룹째
             except OSError:
                 pass
+    if st.get("platform") == "android":
+        android_runner_kill(udid)   # 기기 안 실행기까지 (호스트 adb만 끝나면 기기에 남는다)
     serve_state_file(udid).unlink(missing_ok=True)
     return True
 

@@ -74,6 +74,21 @@ def sim_lock(ws, what):
         f.close()
 
 
+def device_busy(udid):
+    """이 기기를 다른 qakit 실행(run·do·build-app)이 쓰는 중인가 — 기다리지 않고 바로 확인. 쓰는 중이면 그 설명 글."""
+    path = Path.home() / ".qakit" / "locks" / f"{udid}.lock"
+    if not path.exists():
+        return None
+    with open(path, "a+") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            f.seek(0)
+            return f.read().strip() or "다른 qakit 실행"
+        fcntl.flock(f, fcntl.LOCK_UN)
+    return None
+
+
 def app_installed(udid, bundle_id):
     r = run(["xcrun", "simctl", "get_app_container", udid, bundle_id], check=False)
     return r.returncode == 0

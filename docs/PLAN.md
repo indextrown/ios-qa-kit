@@ -776,7 +776,7 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 | A1 화면 파악 | `qakit android screen/dump`(작업공간 없이), 작업공간 `dump-ui`·`doctor` 안드로이드 분기 | 완료 |
 | A2 Compose ID | 소스 삽입 도구 (Kotlin 소스 파싱, `@Composable` 함수의 클릭·입력 요소에 testTag), 빌드 직전 삽입·복원 | 보류 (첫 앱은 이미 testTag 있음) |
 | A3 실행기 | UiAutomator2 instrumentation APK + HTTP, `.qa.yml` 단계 해석 (Kotlin) | 완료 |
-| A4 CLI 통합 | `init`(Gradle 탐지)·`build-app`·`run`·`do`·`coverage`·MCP 플랫폼 분기 | |
+| A4 CLI 통합 | `build-app`(Gradle → APK 찾기 → 설치 → 권한, 앱 변경 시 자동 재빌드)·`run`·`do` 완료. `init`(Gradle 탐지)·QA 워크트리·MCP 남음 | 부분 |
 | A5 로그·네트워크 | 실패 요약에 앱 패키지만 거른 logcat·크래시 스택. OkHttp 로그 우선, 필요하면 mitmproxy | |
 | A6 라이브 세션 | UI에서 화면 보기·직접 터치·녹화 | 완료 (AI QA는 아직) |
 
@@ -833,3 +833,8 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 - 방향: `qakit android boot --landscape`, `qakit android rotate`, qakit.yml `orientation:`. 자동 회전 끄고 `user_rotation` — 기본 방향(휴대폰 세로, 태블릿 가로)은 `wm size` Physical로 판단.
 - 웹: 안드로이드 덤프에 iOS처럼 `Application` 줄(화면 크기 dp)을 둔다 → UI가 화면 크기·방향을 읽는다 (이전에는 없어서 라이브 화면의 요소 상자·클릭이 안드로이드에서 동작하지 않았음). 라이브 세션·AI QA 기기 틀이 가로 화면이면 넓게.
 - 키보드: 태블릿에서 scroll-to 쓸기가 화면 키보드에 닿아 글라이드 입력("see see …")이 이메일 칸에 들어감. `show_ime_with_hard_keyboard=0` + `hw.keyboard=yes`는 이 이미지(Gboard)에서 듣지 않음, `ime disable`은 하나뿐인 키보드라 다시 켜짐 → 에뮬레이터에서 Gboard 앱을 `pm disable-user`(qakit.yml `keyboard: show`면 다시 켬). 실행기도 키보드 내용 영역을 피해 탭·쓸기, 가려진 요소는 hittable 아님.
+
+### A4 build-app (2026-11-16)
+
+- `:<module>:assemble<Variant>` → `output-metadata.json`(variantName 일치, flavor 폴더도)에서 APK·applicationId → packageName 확인 → `adb install -r -t` → permissions 허용 → 앱 상태(커밋·트리 해시, scheme=module, configuration=variant) 기록. `auto_sync`가 iOS처럼 앱 변경 시 다시 빌드 (ID 상수·Swift 컴파일 단계는 건너뜀).
+- 함정: `qakit ui`를 열어 둔 채 `qakit run`을 하면, 라이브 화면이 "실행기가 죽었다"고 보고 다시 띄우면서 run의 실행기와 번갈아 죽였다 ("Process crashed"). → 라이브 화면은 기기 잠금(run·do·build-app이 잡음)을 기다리지 않고 확인해, 쓰는 중이면 실행기를 건드리지 않는다. 실행기를 멈출 때·새로 띄우기 전에는 기기 안 프로세스까지 force-stop.

@@ -297,6 +297,10 @@ def cmd_ui(args):
         if android:
             try:
                 st = android_live_runner(ws, udid)
+            except RuntimeError as e:   # 다른 실행이 기기를 쓰는 중 → 잠깐 뒤 다시 (실패 기록은 5초만)
+                with live["cond"]:
+                    live.update(error=str(e), failed_at=time.time() - 25)
+                return False, live["error"]
             except SystemExit:
                 with live["cond"]:
                     live.update(error="상주 실행기를 띄우지 못함 (터미널 출력 확인)", failed_at=time.time())

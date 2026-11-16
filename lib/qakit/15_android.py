@@ -659,6 +659,7 @@ def android_serve_start(ws, serial, idle=1800, launch=True):
     if not android_app_installed(serial, ws.package):
         fail(f"기기({serial})에 {ws.package}가 설치되어 있지 않습니다.", "qakit build-app")
     ensure_android_runner_installed(serial)
+    android_runner_kill(serial)
     if ws.orientation:   # qakit.yml orientation: — 앱을 켜기 전에 방향을 맞춘다
         android_set_orientation(serial, ws.orientation)
     android_soft_keyboard(serial, show=ws.keyboard == "show")
@@ -787,8 +788,14 @@ def android_live_runner(ws, serial):
     if st and st.get("workspace") == str(ws.root) and st.get("runnerHash") == android_runner_hash() \
             and st.get("framePort") and serve_alive(st):
         return st
-    serve_stop(serial, quiet=True)
-    return android_serve_start(ws, serial, launch=False)
+    # 다른 실행(qakit run·do·build-app)이 실행기를 띄우거나 쓰는 중이면 건드리지 않는다 — 여기서 다시 띄우면 그 실행의
+    # 실행기를 죽이고 서로 번갈아 "Process crashed"가 난다 (qakit ui를 열어 둔 채 qakit run, 2026-11-16)
+    busy = device_busy(serial)
+    if busy:
+        raise RuntimeError(f"다른 실행이 기기를 쓰는 중 — 끝나면 화면이 다시 나옵니다 ({busy})")
+    with sim_lock(ws, "qakit ui 라이브 화면"):
+        serve_stop(serial, quiet=True)
+        return android_serve_start(ws, serial, launch=False)
 
 
 def cmd_android_frames(args):
@@ -927,3 +934,94 @@ def android_soft_keyboard(serial, show):
         elif not show and not is_off:
             adb(serial, "shell", "pm", "disable-user", "--user", "0", pkg, check=False)
             info("화면 키보드 끔 — 시험 중 버튼을 가리지 않게 (qakit.yml keyboard: show 로 켬, Mac 키보드 입력은 됨)")
+
+
+
+# ─────────────────────────────── A4: 앱 빌드·설치 (qakit build-app) ───────────────────────────────
+
+def android_gradle_task(ws):
+    """:app:assembleDebug 꼴. module은 app 또는 feature:home처럼 Gradle 경로, variant는 debug·prodDebug 등."""
+    module = ws.module.strip(":")
+    return f":{module}:assemble{ws.variant[:1].upper()}{ws.variant[1:]}"
+
+
+def android_find_apk(ws):
+    """빌드 결과에서 variant의 APK와 applicationId. Gradle이 쓰는 output-metadata.json을 읽는다 (flavor 폴더도)."""
+    out = ws.app_dir / Path(*ws.module.strip(":").split(":")) / "build" / "outputs" / "apk"
+    best = None
+    for meta in out.rglob("output-metadata.json"):
+        try:
+            data = json.loads(meta.read_text())
+        except (OSError, ValueError):
+            continue
+        if data.get("variantName") != ws.variant:
+            continue
+        for el in data.get("elements") or []:
+            apk = meta.parent / el.get("outputFile", "")
+            if apk.exists() and (best is None or apk.stat().st_mtime > best[0].stat().st_mtime):
+                best = (apk, data.get("applicationId"))
+    return best or (None, None)
+
+
+def android_build_app(ws):
+    """Gradle로 앱을 빌드하고 에뮬레이터(또는 연결된 기기)에 설치한 뒤 권한을 미리 허용한다."""
+    ws.results_dir.mkdir(exist_ok=True)
+    gradle_root = ws.app_dir
+    gradlew = gradle_root / "gradlew" if gradle_root else None
+    if not gradlew or not gradlew.exists():
+        fail(f"Gradle 프로젝트가 아닙니다 (gradlew 없음): {gradle_root}", "qakit.yml app.project에 settings.gradle(.kts)가 있는 폴더")
+    if not android_java_home():
+        fail("JDK가 없습니다.", "qakit android setup")
+    serial = ensure_booted(ws)
+    task = android_gradle_task(ws)
+    info(f"앱 빌드 중: {task} — 처음엔 라이브러리를 받느라 몇 분 걸립니다")
+    log_path = ws.results_dir / "build-app.log"
+    state = app_state(ws)
+    before = git(gradle_root, "status", "--porcelain", "--", *app_pathspec(ws))
+    started = time.time()
+    with open(log_path, "w", encoding="utf-8") as log:
+        r = subprocess.run(["./gradlew", "--console=plain", task], cwd=gradle_root, env=android_env(),
+                           stdout=log, stderr=subprocess.STDOUT, text=True)
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    after = git(gradle_root, "status", "--porcelain", "--", *app_pathspec(ws))
+    if before is not None and after != before:
+        changed = sorted(set((after or "").splitlines()) - set((before or "").splitlines()))
+        warn("빌드 중 앱 레포 파일이 바뀌었습니다: " + ", ".join(c[3:] for c in changed))
+    if r.returncode != 0:
+        lines = text.splitlines()
+        # Kotlin 컴파일 오류(e: …)와 Gradle 실패 이유(What went wrong 아래)를 먼저
+        errors = [l for l in lines if l.startswith("e: ") or "error:" in l]
+        i = next((n for n, l in enumerate(lines) if "What went wrong" in l), None)
+        why = lines[i + 1:i + 4] if i is not None else []
+        fail("앱 빌드 실패", "\n   ".join(dict.fromkeys([*errors[:12], *why])) or f"로그: {log_path}")
+    ok(f"빌드 완료 ({time.time() - started:.0f}초)")
+
+    apk, app_id = android_find_apk(ws)
+    if not apk:
+        fail(f"빌드 결과에서 {ws.variant} APK를 찾지 못했습니다.", "qakit.yml app.module·app.variant 확인")
+    if app_id and ws.package and app_id != ws.package:
+        fail(f"빌드한 앱({app_id})이 qakit.yml packageName({ws.package})과 다릅니다.",
+             "debug 빌드는 applicationIdSuffix(.debug 등)가 붙을 수 있습니다 — app.packageName을 맞추세요")
+    serve_stop(serial, quiet=True)   # 설치하면 앱이 꺼진다 → 실행기도 새로 띄운다
+    info(f"설치 중: {apk.name} ({apk.stat().st_size // (1 << 20)}MB) → {serial}")
+    r = adb(serial, "install", "-r", "-t", str(apk), check=False, timeout=900)
+    if "Success" not in (r.stdout or ""):
+        msg = (r.stdout + r.stderr).strip()
+        hint = None
+        if "INSTALL_FAILED_UPDATE_INCOMPATIBLE" in msg:
+            hint = f"다른 키로 서명된 같은 앱이 있습니다 → adb -s {serial} uninstall {ws.package} 뒤 다시 (앱 데이터가 지워짐)"
+        fail("설치 실패", (msg[-400:] + (f"\n   → {hint}" if hint else "")))
+    ok(f"설치: {apk.name} → {serial}")
+    android_grant_permissions(ws, serial)
+    state.update(installedOn=serial, apk=str(apk))
+    save_state(ws, ws.state_name, state)
+
+
+
+def android_runner_kill(serial):
+    """기기에 남은 실행기를 끝낸다. 호스트 쪽 adb만 끝나고 기기 안 실행기가 살아 있으면(상태 파일이 지워진 뒤 등)
+    새 am instrument가 그 프로세스와 부딪쳐 "Process crashed"로 실패한다 (build-app 직후 첫 실행에서 확인, 2026-11-16)."""
+    adb(serial, "shell", "am", "force-stop", "com.qakit.runner", check=False)
+    deadline = time.time() + 5
+    while time.time() < deadline and adb(serial, "shell", "pidof", "com.qakit.runner", check=False).stdout.strip():
+        time.sleep(0.2)
