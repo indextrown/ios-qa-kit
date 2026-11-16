@@ -2,6 +2,7 @@
 
 `qakit ui` 라이브 세션은 시뮬레이터 화면을 **사진(스크린샷)** 이 아니라 **실시간 영상**으로 보여 줍니다.
 이 문서는 그 원리와 qakit의 구현(`Tools/simscreen/simscreen.swift`), tapflow와의 차이를 정리합니다.
+쓰는 비공개 API 전체(형식·조사하는 법·위험과 대비)는 [private-apis.md](private-apis.md).
 
 ## 한 줄 요약
 

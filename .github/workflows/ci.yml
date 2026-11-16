@@ -58,6 +58,7 @@ jobs:
       - name: 화면·터치 도구 컴파일 (사용자 맥에서 처음 쓸 때 빌드되는 것)
         run: |
           for t in simscreen simtouch; do xcrun swiftc -O "Tools/$t/$t.swift" -o "/tmp/$t"; done
+          xcrun swiftc -O scripts/sim-probe.swift -o /tmp/sim-probe   # 비공개 API 조사 도구 (docs/private-apis.md)
       - name: 앱·DMG 만들기
         run: scripts/build-dmg.sh
       - name: 번들 확인
