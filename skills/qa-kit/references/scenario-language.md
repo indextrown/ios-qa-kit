@@ -47,7 +47,7 @@ steps:
 | `{ cell: 셀ID, has: { id?, label?, contains? } }` | 안에 조건에 맞는 요소가 있는 셀 |
 | `{ segment: 세그먼트ID, label: 항목 }` | UISegmentedControl 항목 |
 | `{ alert-button: 버튼 }` / `{ alert-field: true }` | 시스템 알림 버튼 / 입력칸 |
-| `{ id?, type?, row: 글자 }` | **(안드로이드)** 그 글자와 같은 줄(세로 가운데가 겹침)에 있는 요소. ID가 모두 같은 토글 목록에서 줄 이름으로 고른다: `{ id: mapseaSwitchTag, row: 거리 측정 }`. 켜짐 판정은 `selected:` (안드로이드 스위치는 켜짐이 selected로 나온다) |
+| `{ id?, type?, row: 글자 }` | **(안드로이드)** 그 글자와 같은 줄(세로 가운데가 겹침)에 있는 요소. ID가 모두 같은 토글 목록에서 줄 이름으로 고른다: `{ id: settingSwitch, row: 알림 }`. 켜짐 판정은 `selected:` (안드로이드 스위치는 켜짐이 selected로 나온다) |
 
 ## 조건
 
