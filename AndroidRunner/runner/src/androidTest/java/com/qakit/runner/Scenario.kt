@@ -521,6 +521,16 @@ class Scenario(private val screen: Screen, private val app: AppControl) {
         }
         var candidates: Sequence<Screen.Node> = all
         spec.opt("in")?.let { scope -> candidates = find(scope, tree)?.descendants() ?: return null }
+        // row: 글자 — 그 글자와 같은 줄(세로 가운데가 겹치는)에 있는 요소. ID가 모두 같은 토글 목록(Compose)에서
+        // "거리 측정" 줄의 스위치처럼 고를 때: { id: mapseaSwitchTag, row: 거리 측정 }
+        spec.opt("row")?.let { r ->
+            val rowText = text(r)
+            val label = candidates.firstOrNull { it.label == rowText || it.text == rowText } ?: return null
+            val cy = label.bounds.centerY()
+            candidates = candidates.filter { c ->
+                c !== label && abs(c.bounds.centerY() - cy) <= maxOf(label.bounds.height(), c.bounds.height()) / 2
+            }
+        }
         if (spec.has("cell")) {
             val cellId = text(spec.get("cell"))
             var cells = candidates.filter { it.type == "Cell" && (cellId == "*" || it.id == cellId) }
