@@ -169,7 +169,7 @@ def main():
     p.add_argument("--settle", type=float, default=0.5, help="dump 전에 기다릴 시간(초)")
     p.set_defaults(func=cmd_do)
 
-    p = sub.add_parser("touch", help="시뮬레이터에 터치 신호를 직접 넣기 (확인용, AI QA 직접 터치). 좌표는 화면 대비 0~1. 예) qakit touch tap 0.5 0.9")
+    p = sub.add_parser("touch", help="시뮬레이터에 터치 신호를 직접 넣기 (확인용, AI QA 직접 터치). 좌표는 화면 대비 0~1. 누른 뒤 화면이 그대로면 알림. 예) qakit touch tap 0.5 0.9")
     p.add_argument("action", nargs="+", help="tap x y [ms] · press x y 초 · swipe x1 y1 x2 y2 초 · ping")
     p.set_defaults(func=cmd_touch)
 

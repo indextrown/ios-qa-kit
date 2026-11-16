@@ -11,7 +11,10 @@
 //
 // 경로: SimulatorKit(비공개) SimDeviceLegacyHIDClient + IOKit 디지타이저 손가락 이벤트 → IndigoHIDMessageForTrackpadEventFromHIDEventRef,
 // 메시지 0x6c(·0x10c)에 경로 표시 UInt32(0x32). 디지타이저 함수가 없으면 IndigoHIDMessageForMouseNSEvent.
-// 주의: XCUITest가 켠 앱은 자동화 모드라 이 신호를 무시한다 — 앱은 simctl로 켜고 실행기는 붙기만 할 것.
+// 주의: 터치가 조용히 무시될 때가 있다 (답은 "ok"인데 화면이 그대로). 지금까지 본 것 (docs/private-apis.md "손가락처럼 누르기"):
+//   - XCUITest(상주 실행기)가 켠 앱에서도 보통은 먹힌다 — AI 직접 터치(H3·H4)를 실행기가 켠 앱으로 검증.
+//   - 무시된 때: 상주 실행기가 응답 없이 멈춰 있던 때, Device Hub에 한 번도 띄우지 않은 새 시뮬레이터 (켠 방식과 무관, 원인 확인 중).
+//   그래서 qakit은 누른 뒤 화면이 바뀌었는지 보고 알린다 (qakit touch, AI 직접 터치).
 // 비공개 API라 Xcode가 바뀌면 깨질 수 있다 → 시작에 실패하면 0이 아닌 코드로 끝나고, qakit은 XCUITest 탭으로 돌아간다.
 
 import Foundation

@@ -1,4 +1,6 @@
 """AI QA 직접 터치 (H3): 대상 찾기·expect 조건·화면 변화 판단·도구 목록 (시뮬레이터 없이)"""
+import contextlib
+import io
 import json
 import os
 import subprocess
@@ -6,6 +8,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from helpers import QAKIT, load_qakit, make_workspace
 
@@ -81,6 +84,41 @@ class Mark(unittest.TestCase):
             self.assertEqual((rows[1]["x"], rows[1]["y"], rows[1]["sw"], rows[1]["w"]), (0.5, 0.35, 1, 0))   # 커서 = (x + w/2) / sw
         finally:
             tmp.cleanup()
+
+
+class TouchCheck(unittest.TestCase):
+    """qakit touch: 답이 ok여도 터치가 조용히 무시될 수 있어 누른 뒤 화면이 바뀌었는지 본다"""
+
+    def touch(self, before, after, runner=None):
+        class Helper:
+            mode = "digitizer"
+            def __init__(self, udid): pass
+            def start(self): return None
+            def send(self, line): return True, "ok tap 90"
+            def stop(self): pass
+        shots = iter([before, after])
+        with mock.patch.object(q, "find_workspace", return_value=mock.Mock(device=None)), \
+                mock.patch.object(q, "ensure_booted", return_value="UDID"), \
+                mock.patch.object(q, "TouchHelper", Helper), \
+                mock.patch.object(q, "screen_jpeg", side_effect=lambda *a, **k: next(shots)), \
+                mock.patch.object(q, "serve_load", return_value=runner), \
+                mock.patch.object(q, "serve_alive", return_value=True), \
+                mock.patch.object(q.time, "sleep"), \
+                contextlib.redirect_stdout(io.StringIO()) as out:
+            q.cmd_touch(mock.Mock(workspace=None, action=["tap", "0.5", "0.5"]))
+        return out.getvalue()
+
+    def test_alike(self):
+        self.assertTrue(q.screens_alike(b"x" * 1000, b"x" * 1015))     # 시계·깜박임 정도
+        self.assertFalse(q.screens_alike(b"x" * 1000, b"x" * 1300))    # 화면 전환
+
+    def test_ignored_and_changed(self):
+        out = self.touch(b"x" * 1000, b"x" * 1005)
+        self.assertIn("화면이 그대로", out)
+        self.assertNotIn("serve --stop", out)                           # 상주 실행기가 없으면 그 안내는 안 함
+        self.assertIn("serve --stop", self.touch(b"x" * 1000, b"x" * 1005, runner={"pid": 1}))
+        self.assertIn("터치가 먹혔습니다", self.touch(b"x" * 1000, b"x" * 1400))
+        self.assertNotIn("XCUITest가 켠 앱은", self.touch(b"x" * 1000, b"x" * 1400, runner={"pid": 1}))   # 켠 방식으로 미리 경고하지 않음
 
 
 class Tools(unittest.TestCase):

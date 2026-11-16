@@ -286,7 +286,7 @@ def serve_start(ws, udid, idle=1800, launch=True):
     runner = json.loads(ready_file.read_text())
     st = {"udid": udid, "pid": proc.pid, "port": runner["port"], "token": runner["token"],
           "workspace": str(ws.root), "bundleId": ws.bundle_id, "runnerHash": scenario_runner_source_hash(),
-          "attachOnly": not launch,   # 앱을 켜지 않고 붙기만 (직접 터치가 먹히는 상태)
+          "attachOnly": not launch,   # 앱을 켜지 않고 붙기만 (화면 구조 읽기·조건 확인만 — serve --no-launch)
           "started": datetime.datetime.now().isoformat(timespec="seconds"), "log": str(log)}
     st.update(transport)
     serve_state_file(udid).write_text(json.dumps(st, ensure_ascii=False, indent=2))
@@ -546,26 +546,34 @@ def _known_ids(ws):
 
 
 def cmd_touch(args):
-    """qakit touch tap x y — 직접 터치 확인용. XCUITest가 켠 앱은 무시하므로, 상주 실행기가 앱을 켰다면 알려 준다."""
+    """qakit touch tap x y — 직접 터치 확인용. 터치는 답이 "ok"여도 조용히 무시될 수 있어, 누른 뒤 화면이 바뀌었는지도 본다."""
     ws = find_workspace(args.workspace)
     if ws.device:
         fail("직접 터치는 시뮬레이터만")
     udid = ensure_booted(ws)
-    st = serve_load(udid)
-    if st and serve_alive(st) and not st.get("attachOnly"):
-        warn("상주 실행기가 앱을 켜 두었습니다 — XCUITest가 켠 앱은 직접 터치를 무시합니다 "
-             "(qakit serve --stop 뒤 시뮬레이터에서 앱을 다시 켜거나, serve --no-launch)")
     helper = TouchHelper(udid)
     started = time.time()
     why = helper.start()
     if why:
-        fail(f"터치 도우미를 띄우지 못함: {why}", "Xcode가 바뀌었으면 비공개 API가 달라졌을 수 있습니다 (docs/PLAN.md 'AI QA 직접 터치')")
+        fail(f"터치 도우미를 띄우지 못함: {why}", "Xcode가 바뀌었으면 비공개 API가 달라졌을 수 있습니다 (docs/private-apis.md)")
     ready = time.time() - started
+    before = screen_jpeg(udid, 300)
     good, line = helper.send(" ".join(args.action))
     helper.stop()
     (ok if good else warn)(f"{line} · 도우미 준비 {ready:.1f}초 ({helper.mode})")
     if not good:
         sys.exit(1)
+    time.sleep(1)
+    after = screen_jpeg(udid, 300)
+    if before and after and screens_alike(before, after):
+        warn("1초 뒤에도 화면이 그대로입니다 — 터치가 무시됐을 수 있습니다 (누른 자리가 원래 화면을 바꾸지 않으면 괜찮음)")
+        st = serve_load(udid)
+        if st and serve_alive(st):
+            info("   → 상주 실행기가 응답 없이 멈춰 있을 때 무시된 적이 있습니다: qakit serve --stop 뒤 다시")
+        info("   → Device Hub에 한 번도 띄우지 않은 새 시뮬레이터에서는 모두 무시됐습니다 (원인 확인 중): qakit show로 띄운 뒤 다시")
+        info("   → 자세히: docs/private-apis.md '손가락처럼 누르기'")
+    elif before and after:
+        ok("화면이 바뀜 — 터치가 먹혔습니다")
 
 
 def coverage(ws):

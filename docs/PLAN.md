@@ -663,6 +663,7 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 | 상주 실행기가 **앱을 켜지 않고 붙기만**(`--no-launch`, `XCUIApplication(bundleIdentifier:)`로 화면 구조만 읽음) | ✅ 읽기 → 검색 탭 → 읽기(검색 화면) → 뒤로 → 읽기(홈), 읽기 1.0~1.2초 |
 
 - ~~XCUITest가 켠 앱은 자동화 모드라 바깥 터치 신호를 무시한다~~ → **정정 (H1에서 다시 잼)**: 실행기가 앱을 새로 켜고 XCUITest로 누른 뒤에도 직접 터치가 매번 먹혔다 (켠 직후 ✅, XCUITest 탭 뒤 ✅ ✅). 처음 막혔을 때는 실행기가 오래 떠 있었고 화면 구조 읽기가 60초 넘게 멈춘 적이 있었다 — **실행기가 무언가를 기다리며 멈춘 상태**에서 바깥 터치가 막힌 것으로 보이지만 재현이 안 돼 확정 못 함. → 설계: "붙기만"이 꼭 필요하진 않고, 대신 **직접 터치가 무시됐는지 알아채기**(터치 뒤 실시간 화면이 바뀌지 않으면 XCUITest 탭으로 다시)가 필요.
+- **추가 확인 (2026-11-16 밤, Xcode 27.0)**: 따로 만든 새 시뮬레이터(Device Hub에 한 번도 띄우지 않음)에서 설정 앱으로 시험 — 실행기가 켠 앱 ❌, 실행기를 멈추고 `simctl`로 켠 앱 ❌, 실행기 없이 도우미를 오래 띄워 탭·끌기·150ms 탭 ❌ (전후 화면이 바이트까지 같음). **켠 방식과 무관하게** 이 기기에선 모두 무시 → "XCUITest가 켠 앱은 무시"는 원인이 아니다. 공용 기기(Device Hub에 띄워 둠)에선 H3·H4 동안 실행기가 켠 앱에 계속 먹혔으니, Device Hub에 띄운 적이 있는지가 의심되지만 사용자 화면(Device Hub 대상)을 바꿔야 해서 아직 확인 못 함. → 코드 주석·`qakit touch` 경고를 "켠 방식으로 미리 경고" 대신 "누른 뒤 화면이 그대로면 알림 + 아는 원인 안내"로 바꿈.
 - 터치 경로: `SimDeviceLegacyHIDClient`(SimulatorKit, Xcode 27은 `Contents/SharedFrameworks/`) + IOKit `IOHIDEventCreateDigitizerEvent`/`…FingerEvent` → `IndigoHIDMessageForTrackpadEventFromHIDEventRef` → 메시지 0x6c(와 0x10c)에 경로 표시 `UInt32(0x32)` → `sendWithMessage:freeWhenDone:…`. 좌표는 화면 대비 0~1. 마우스 방식(`IndigoHIDMessageForMouseNSEvent`)은 이 환경에서 막혀 있을 때 시험했고, 풀린 상태에선 디지타이저만 확인.
 - 한 번씩 띄우는 도우미는 0.85초(프레임워크 불러오기 0.5 + 준비 0.2 + 보내기 0.1) → **계속 떠 있는 도우미**여야 탭이 0.1초대.
 
@@ -684,7 +685,7 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 
 | 단계 | 내용 |
 |---|---|
-| **H1. 터치 도우미** ✅ | `Tools/simtouch/simtouch.swift` (직접 작성): 계속 떠 있고 stdin 한 줄 명령(tap·press·swipe·down·move·up·ping) → 한 줄 답, 준비되면 `ready`, 디지타이저(없으면 마우스). `TouchHelper`(띄우기·준비 기다리기·죽으면 다시), `qakit touch`(확인용, 실행기가 앱을 켰으면 경고). **탭 왕복 약 90ms(누름 60ms 포함)**, 도우미 준비 0.46초, 쓸기 0.36초 — XCUITest 탭 0.8~2.2초 |
+| **H1. 터치 도우미** ✅ | `Tools/simtouch/simtouch.swift` (직접 작성): 계속 떠 있고 stdin 한 줄 명령(tap·press·swipe·down·move·up·ping) → 한 줄 답, 준비되면 `ready`, 디지타이저(없으면 마우스). `TouchHelper`(띄우기·준비 기다리기·죽으면 다시), `qakit touch`(확인용 — 처음엔 실행기가 앱을 켰으면 경고했으나, 지금은 누른 뒤 화면이 그대로면 알림). **탭 왕복 약 90ms(누름 60ms 포함)**, 도우미 준비 0.46초, 쓸기 0.36초 — XCUITest 탭 0.8~2.2초 |
 | **H2. 붙기만 하는 실행기** | `qakit serve --attach`: 앱은 simctl+AutoID로 켜고, 실행기는 화면 구조·조건 확인(wait·expect)만. `/dump`는 켠 앱이 없으면 떠 있는 앱에 붙어 읽음 (이 PR에 먼저 넣음) |
 | **H3. MCP 직접 터치 모드** ✅ | `QAKIT_TOUCH=direct`일 때만 (UI의 AI QA "직접 터치" 체크, 기본 켬 · 시나리오 만들기·터미널 MCP는 XCUITest 그대로). `launch`는 그대로(실행기가 켬 — 정정 참고). `tap`=대상(id·label·contains·type·index) → 화면 구조(바뀌었거나 5초 지나면 다시 읽음)에서 보이는 부분 가운데 → 직접 터치, 기록은 ID 단계(`do-steps`). expect는 누르기 전·후 `qakit do --no-record`로 확인, expect가 없으면 1.2초 안에 실시간 화면이 안 바뀌면 "무시됐을 수 있음" 경고. 화면에 없거나 밖이거나 도우미가 안 되면 XCUITest 탭으로 넘김, `via: xcuitest`로 고를 수도. 새 도구 `long_press`·`drag`(대상→대상 또는 방향)·`tap_point`(좌표) — 시나리오 단계가 없어 기록 안 함. 글자 입력은 그대로 XCUITest. **시뮬레이터 확인**: 검색 열기(expect) ✅, 뒤로 ✅, 변화 없는 탭 경고 ✅, 끌기로 스크롤 ✅, 길게 누르기 ✅. 탭 자체는 0.8~1.8초(화면 구조 읽기·expect 확인 포함), 터치 신호는 약 0.1초 |
 | **H4. 확인·화면** ✅ | 커서: 직접 터치는 실제로 누른 좌표(0~1) 그대로 `taps.jsonl`에 (`touch_mark`), 길게 누르기는 `press`→`press-done`("길게 누르기" 표시), 끌기는 `drag`(시작)→`drag-done`(끝, 0.5초 미끄러짐·"끌기" 표시). 라이브 세션: 도구 막대 **직접 터치 (실험)** 켜면 클릭=탭, 0.5초 넘게 꾹=길게 누르기, 끌기=끌기 → `POST /api/touch`(UI 서버가 터치 도우미 하나를 띄워 둠, 시나리오 실행·AI QA 중엔 거절). 탭이 요소 위이고 화면 구조가 지금 화면 것일 때만 그 단계를 기록 (터치 뒤·화면이 바뀐 뒤엔 다시 읽기 전까지 기록 안 함 — 옛 화면 요소로 잘못 기록하던 것 막음). **확인**: 브라우저(헤드리스 Chrome)에서 검색 열기·뒤로(단계 2개 기록 ✅), 끌기로 스크롤 ✅, 길게 누르기 ✅, 탭 왕복 약 90ms |
@@ -697,7 +698,7 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 |---|---|
 | 비공개 API가 Xcode 업데이트로 바뀜 (tapflow도 Xcode 27에서 위치가 바뀌어 고침) | 실시간 화면처럼 안 되면 XCUITest 탭으로 자동 전환, 이유 표시 |
 | 직접 터치로 된 것이 XCUITest 재생에선 안 됨 (또는 반대) | 저장 전 XCUITest 재생 통과가 거름 |
-| AI QA 중 XCUITest로 켠 앱이 섞이면 터치가 조용히 무시됨 | 모드 시작 때 앱을 simctl로 다시 켜고, 탭 뒤 화면이 안 바뀌면 "터치가 무시됨"으로 알림 |
+| 직접 터치가 조용히 무시됨 (켠 방식과 무관 — 멈춘 실행기, Device Hub에 띄운 적 없는 새 시뮬레이터에서 봄) | AI 직접 터치: 탭 뒤 1초 안에 화면이 안 바뀌면 알림, `expect`면 실패, `via: xcuitest`. `qakit touch`: 전후 화면을 비교해 알리고 아는 원인 안내 |
 
 ## 맥 앱(DMG) 설계 — 다음 단계
 
