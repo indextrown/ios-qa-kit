@@ -293,7 +293,10 @@ class McpSession:
     def udid(self):
         if self._udid is False:
             self._udid = None
-            if not self.ws.device:
+            if self.ws.platform == "android":
+                with contextlib.suppress(Exception, SystemExit):
+                    self._udid = android_serial(self.ws.emulator, boot=False)
+            elif not self.ws.device:
                 with contextlib.suppress(Exception, SystemExit):
                     self._udid = simulator_udid(self.ws.simulator)[0]
         return self._udid
@@ -367,6 +370,8 @@ class McpSession:
         """작은 JPEG (simscreen, 안 되면 simctl)."""
         if not self.udid:
             return None
+        if self.ws.platform == "android":
+            return android_shot_jpeg(self.udid, width)
         tmp = Path(tempfile.mkstemp(suffix=".jpg")[1])
         try:
             tool = ensure_simscreen()
@@ -394,7 +399,7 @@ class McpSession:
 
     def touch_helper(self):
         if self.touch is None:
-            self.touch = TouchHelper(self.udid)
+            self.touch = AndroidTouch(self.udid) if self.ws.platform == "android" else TouchHelper(self.udid)
         return self.touch
 
     def write_touch(self, kind, el, scr):
@@ -498,7 +503,8 @@ class McpSession:
 
     def call(self, name, a):
         """→ (content 목록, 오류인가)"""
-        if self.ring is None and name in MCP_ACTIONS and os.environ.get("QAKIT_AI_VIDEO", "1") != "0":
+        if self.ring is None and name in MCP_ACTIONS and os.environ.get("QAKIT_AI_VIDEO", "1") != "0" \
+                and self.ws.platform != "android":   # 장면 보관은 simscreen (iOS)
             self.ring = FrameRing(self.udid)
             self.ring.start()
         text = lambda t: [{"type": "text", "text": t}]
@@ -686,7 +692,7 @@ def ai_prompt(goal, minutes, save, direct=False):
             if save else "시나리오는 저장하지 않는다 (save_scenario 쓰지 않음). 남길 만한 경로는 보고서에 단계로 적는다.")
     return f"""목표: {goal}
 
-qakit MCP 도구로 이 iOS 앱(시뮬레이터)을 직접 QA한다. qakit 도구 말고 다른 도구는 없다.
+qakit MCP 도구로 이 앱(시뮬레이터·에뮬레이터)을 직접 QA한다. qakit 도구 말고 다른 도구는 없다.
 1. get_testing_guide를 먼저 읽고 그대로 따른다.
 2. launch로 시작하고 screen으로 화면을 읽으며 진행한다. 조작 도구마다 why(왜 하는지 한 줄)를 준다.
 3. 문제는 launch부터 같은 단계로 재현한 뒤 report_issue로 남긴다. 확실하지 않으면 보고서에 '확인 필요'로만.
@@ -695,8 +701,18 @@ qakit MCP 도구로 이 iOS 앱(시뮬레이터)을 직접 QA한다. qakit 도�
 6. 마지막 답변은 지침의 보고 형식으로, 한국어 마크다운.{chr(10) + "7. 누르기는 직접 터치(손가락처럼, 빠름)다. long_press·drag도 쓸 수 있고, tap_point(좌표)는 화면 구조에 이름이 없는 곳만. 탭 뒤 '화면 변화 없음' 경고가 나오면 expect를 주거나 via: xcuitest로 다시." if direct else ""}"""
 
 
-def ai_command(engine, ws, d, prompt, turns, read_source=False, direct=False):
-    """AI CLI 명령 (qakit 도구만 허용, read_source면 앱 소스 읽기(Read·Grep·Glob)도 — 셸·수정은 막음)."""
+AI_CHAT_SYSTEM = """너는 qakit ui의 채팅창에서 QA 담당자와 대화하며 모바일 앱(시뮬레이터·에뮬레이터)을 대신 조작하는 QA 도우미다.
+- 쓸 수 있는 것은 qakit MCP 도구뿐이다. 처음 조작하기 전에 get_testing_guide를 한 번 읽는다.
+- 사용자가 말한 만큼만 한다. 범위가 모호하면 짧게 되묻는다. 앱을 처음부터 다시 켜는 launch는 필요할 때만 (지금 화면에서 이어서 하는 게 기본).
+- 조작 도구마다 why(왜 하는지 한 줄)를 준다. 화면은 screen으로 읽고, 필요할 때만 screenshot.
+- 되돌릴 수 없는 일(삭제·탈퇴·결제·게시·실제 전송)은 사용자가 이 대화에서 분명히 시키기 전에는 하지 않는다.
+- 문제를 찾으면 재현한 뒤 report_issue로 남긴다. 사용자가 시나리오로 남기라고 하면 save_scenario.
+- 답은 한국어로 짧게: 한 일, 본 것(화면·결과), 다음에 할 수 있는 것. 긴 보고서 형식은 쓰지 않는다."""
+
+
+def ai_command(engine, ws, d, prompt, turns, read_source=False, direct=False, chat=None):
+    """AI CLI 명령 (qakit 도구만 허용, read_source면 앱 소스 읽기(Read·Grep·Glob)도 — 셸·수정은 막음).
+    chat: {"id": 세션 uuid, "resume": 이어서인가} — 채팅창 (대화를 이어 가도록 세션을 남긴다)."""
     mcp = {"command": str(KIT_DIR / "bin" / "qakit"), "args": ["-w", str(ws.root), "mcp"],
            "env": {"QAKIT_AI_DIR": str(d), **({"QAKIT_TOUCH": "direct"} if direct else {})}}
     if engine == "claude":
@@ -705,9 +721,11 @@ def ai_command(engine, ws, d, prompt, turns, read_source=False, direct=False):
         tools = ["--tools", "Read,Grep,Glob", "--allowedTools", "mcp__qakit,Read,Grep,Glob"] if read_source \
             else ["--tools", "", "--allowedTools", "mcp__qakit"]
         extra = ["--add-dir", str(ws.app_dir)] if read_source and ws.app_dir else []
+        session = (["--resume", chat["id"]] if chat["resume"] else ["--session-id", chat["id"]]) + \
+            ["--append-system-prompt", AI_CHAT_SYSTEM] if chat else ["--no-session-persistence"]
         return [shutil.which("claude") or "claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
                 "--strict-mcp-config", "--mcp-config", str(cfg), *tools, *extra,
-                "--permission-mode", "dontAsk", "--max-turns", str(turns), "--no-session-persistence"]
+                "--permission-mode", "dontAsk", "--max-turns", str(turns), *session]
     # codex (이 Mac에 없어 시험하지 못함): exec + JSON 이벤트, 읽기 전용 샌드박스, MCP는 -c로
     toml = lambda v: json.dumps(v, ensure_ascii=False)
     return [shutil.which("codex") or "codex", "exec", "--json", "--skip-git-repo-check", "-s", "read-only",

@@ -19,6 +19,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import uuid
 import queue
 import threading
 import time
