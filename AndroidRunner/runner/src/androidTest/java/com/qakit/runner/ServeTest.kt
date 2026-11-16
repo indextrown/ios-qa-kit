@@ -125,6 +125,7 @@ class ServeTest {
                     json.put("ok", ok).put("message", message)
                         .put("durationMs", SystemClock.elapsedRealtime() - started)
                         .put("density", screen.density.toDouble())
+                        .put("screenW", screen.device.displayWidth).put("screenH", screen.device.displayHeight)
                         .put("package", pkg)
                     respond(s, 200, json)
                 }

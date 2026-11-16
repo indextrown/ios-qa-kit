@@ -826,3 +826,10 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 | 스크린샷(/api/screen) | 라이브 화면 프레임을 쓴다 |
 | 라이브 화면을 열 때 | 실행기가 없으면 앱을 다시 켜지 않고(launch=0) 띄운다 |
 | 아직 | 시나리오 실행 중 누르는 자리 커서(iOS QA_TAPS_FILE), AI QA(MCP) |
+
+### 가로 화면·태블릿 (2026-11-16)
+
+- 태블릿 AVD `qakit-tablet` (pixel_tablet 2560x1600, Navigation e2e 기준 기기와 같음). Navigation 작업공간은 태블릿 + `orientation: landscape`로 바꿈, first-login 통과 (31.5초·29.7초).
+- 방향: `qakit android boot --landscape`, `qakit android rotate`, qakit.yml `orientation:`. 자동 회전 끄고 `user_rotation` — 기본 방향(휴대폰 세로, 태블릿 가로)은 `wm size` Physical로 판단.
+- 웹: 안드로이드 덤프에 iOS처럼 `Application` 줄(화면 크기 dp)을 둔다 → UI가 화면 크기·방향을 읽는다 (이전에는 없어서 라이브 화면의 요소 상자·클릭이 안드로이드에서 동작하지 않았음). 라이브 세션·AI QA 기기 틀이 가로 화면이면 넓게.
+- 키보드: 태블릿에서 scroll-to 쓸기가 화면 키보드에 닿아 글라이드 입력("see see …")이 이메일 칸에 들어감. `show_ime_with_hard_keyboard=0` + `hw.keyboard=yes`는 이 이미지(Gboard)에서 듣지 않음, `ime disable`은 하나뿐인 키보드라 다시 켜짐 → 에뮬레이터에서 Gboard 앱을 `pm disable-user`(qakit.yml `keyboard: show`면 다시 켬). 실행기도 키보드 내용 영역을 피해 탭·쓸기, 가려진 요소는 hittable 아님.

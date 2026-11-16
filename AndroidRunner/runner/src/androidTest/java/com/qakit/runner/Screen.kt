@@ -34,6 +34,10 @@ class Screen(val pkg: String) {
 
     val density: Float get() = instrumentation.targetContext.resources.displayMetrics.density
 
+    /** 마지막으로 읽은 화면에서 키보드 창이 차지한 영역 (없으면 빈 사각형). 탭·쓸기가 키보드에 닿지 않게 뺀다 —
+     *  태블릿에서 scroll-to 쓸기가 키보드에 닿아 글라이드 입력("see see …")이 이메일 칸에 들어간 적 있음 (2026-11-16) */
+    @Volatile var imeRect = Rect()
+
     val screenRect: Rect
         get() = Rect(0, 0, device.displayWidth, device.displayHeight)
 
@@ -91,10 +95,16 @@ class Screen(val pkg: String) {
         val roots = mutableListOf<Node>()
         val kept = mutableListOf<Win>()
         var keyboard = false
+        var ime = Rect()
         // ua.windows는 위 창이 먼저 → 뒤집어서 위 창이 목록 끝에 오게 (iOS 덤프처럼 팝업이 끝에)
         for ((i, w) in wins.reversed().withIndex()) {
             when (w.type) {
-                AccessibilityWindowInfo.TYPE_INPUT_METHOD -> { keyboard = true; continue }
+                AccessibilityWindowInfo.TYPE_INPUT_METHOD -> {
+                    // 창 크기가 아니라 실제 내용(키 배치)의 영역 — 보이지 않는 입력 창(음성 입력 등)은 화면 전체 크기라도 빈 창이다
+                    w.root?.takeIf { it.isVisibleToUser && it.childCount > 0 }?.getBoundsInScreen(ime)
+                    keyboard = !ime.isEmpty
+                    continue
+                }
                 AccessibilityWindowInfo.TYPE_SYSTEM, AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY,
                 AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER -> continue
             }
@@ -112,6 +122,7 @@ class Screen(val pkg: String) {
                 roots += build(r, null, win, 0)
             }
         }
+        imeRect = ime
         return Tree(roots, kept, keyboard)
     }
 
@@ -188,12 +199,23 @@ class Screen(val pkg: String) {
         return r
     }
 
+    /** 보이는 영역에서 키보드에 가려진 아래쪽을 뺀 곳 (누르거나 쓸 수 있는 곳) */
+    fun touchRect(n: Node): Rect {
+        val r = visibleRect(n)
+        val ime = imeRect
+        if (!r.isEmpty && !ime.isEmpty && Rect.intersects(r, ime)) {
+            if (ime.top > r.top) r.bottom = minOf(r.bottom, ime.top) else return Rect()
+        }
+        return r
+    }
+
     fun isVisible(n: Node): Boolean = n.visibleToUser && !visibleRect(n).isEmpty
 
     /** 보이고, 그 가운데를 위 창(팝업·대화상자·키보드 제외)이 덮지 않음 */
     fun isHittable(n: Node, tree: Tree): Boolean {
         if (!isVisible(n)) return false
-        val r = visibleRect(n)
+        val r = touchRect(n)
+        if (r.isEmpty) return false   // 키보드에 가려짐
         return tree.windows.none { it.z > n.window.z && it.bounds.contains(r.centerX(), r.centerY()) }
     }
 
@@ -209,12 +231,14 @@ class Screen(val pkg: String) {
     // ───────────────────────────── 조작 ─────────────────────────────
 
     fun tap(n: Node) {
-        val r = visibleRect(n).takeUnless { it.isEmpty } ?: n.bounds
+        val r = touchRect(n).takeUnless { it.isEmpty }
+            ?: throw QAFailure("누를 자리가 키보드에 가려졌거나 화면 밖: ${n.type} ${n.id.ifEmpty { n.label }}")
         device.click(r.centerX(), r.centerY())
     }
 
     fun swipe(n: Node, dir: String) {
-        val r = visibleRect(n).takeUnless { it.isEmpty } ?: screenRect
+        val r = touchRect(n).takeUnless { it.isEmpty || it.height() < 40 }
+            ?: throw QAFailure("쓸 자리가 키보드에 가려졌거나 너무 작음: ${n.type} ${n.id.ifEmpty { n.label }}")
         val dx = (r.width() * 0.35).toInt()
         val dy = (r.height() * 0.35).toInt()
         val (x1, y1, x2, y2) = when (dir) {

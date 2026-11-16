@@ -207,9 +207,10 @@ def cmd_android_setup(args):
     avd = args.avd or ANDROID_AVD
     if avd in android_avds():
         ok(f"AVD 있음: {avd}")
-        if android_avd_gpu_on(avd) is False:
+        if android_avd_tuned(avd) is False:
             android_avd_enable_gpu(avd)
-            ok(f"AVD GPU 가속을 켰습니다 ({avd}) — 실행 중인 에뮬레이터는 다시 켜야 반영됩니다 (adb emu kill → qakit android boot)")
+            ok(f"AVD 설정을 맞췄습니다 ({avd}: GPU 가속·하드웨어 키보드) — 실행 중인 에뮬레이터는 다시 켜야 반영됩니다 "
+               "(adb emu kill → qakit android boot)")
     else:
         avdm = require_tool("avdmanager")
         r = subprocess.run([avdm, "create", "avd", "-n", avd, "-k", image, "-d", args.device_profile],
@@ -229,20 +230,26 @@ def android_avd_config(avd):
     return Path(os.environ.get("ANDROID_AVD_HOME") or Path.home() / ".android" / "avd") / f"{avd}.avd" / "config.ini"
 
 
-def android_avd_gpu_on(avd):
-    """AVD GPU 가속이 켜져 있나. 꺼져 있으면 화면 캡처가 한 장에 2~3초라 라이브 화면이 1fps 안팎 (켜면 12fps)."""
+AVD_TUNING = {
+    "hw.gpu.enabled": "yes", "hw.gpu.mode": "host",   # 꺼져 있으면 화면 캡처 한 장 2.5초 → 라이브 화면 1fps
+    "hw.keyboard": "yes",   # 하드웨어 키보드가 있으면 소프트 키보드를 숨길 수 있다 (실행기가 show_ime_with_hard_keyboard=0)
+}
+
+
+def android_avd_tuned(avd):
+    """qakit용 AVD 설정(GPU 가속·하드웨어 키보드)이 다 맞나. 설정 파일이 없으면 None."""
     try:
-        text = android_avd_config(avd).read_text()
+        cfg = dict(l.split("=", 1) for l in android_avd_config(avd).read_text().splitlines() if "=" in l)
     except OSError:
         return None
-    return "hw.gpu.enabled=no" not in text and "hw.gpu.mode=off" not in text
+    return all(cfg.get(k) == v for k, v in AVD_TUNING.items())
 
 
 def android_avd_enable_gpu(avd):
-    """AVD 설정에서 GPU 가속을 켠다 (hw.gpu.enabled=yes, mode=host). 에뮬레이터를 다시 켜야 반영된다."""
+    """AVD 설정을 qakit에 맞춘다 (GPU 가속, 하드웨어 키보드). 에뮬레이터를 다시 켜야 반영된다."""
     f = android_avd_config(avd)
-    lines = [l for l in f.read_text().splitlines() if not l.startswith(("hw.gpu.enabled=", "hw.gpu.mode="))]
-    f.write_text("\n".join(lines + ["hw.gpu.enabled=yes", "hw.gpu.mode=host"]) + "\n")
+    lines = [l for l in f.read_text().splitlines() if l.split("=", 1)[0] not in AVD_TUNING]
+    f.write_text("\n".join(lines + [f"{k}={v}" for k, v in AVD_TUNING.items()]) + "\n")
 
 
 def android_doctor_lines():
@@ -256,9 +263,10 @@ def android_doctor_lines():
     ]
     avds = android_avds()
     rows.append((bool(avds), f"AVD: {', '.join(avds)}", "AVD 없음", "qakit android setup"))
-    slow = [a for a in avds if android_avd_gpu_on(a) is False]
-    rows.append((not slow, "AVD GPU 가속 켜짐", f"AVD GPU 가속 꺼짐: {', '.join(slow)} (라이브 화면이 1fps 안팎)",
-                 "qakit android setup --avd <이름> 으로 켠 뒤 에뮬레이터 다시 켜기"))
+    off = [a for a in avds if android_avd_tuned(a) is False]
+    rows.append((not off, "AVD 설정 (GPU 가속·하드웨어 키보드)",
+                 f"AVD 설정이 qakit용이 아님: {', '.join(off)} (GPU 가속이 꺼지면 라이브 화면 1fps 안팎, 하드웨어 키보드가 없으면 "
+                 "소프트 키보드가 버튼을 가림)", "qakit android setup --avd <이름> 으로 맞춘 뒤 에뮬레이터 다시 켜기"))
     devs = adb_devices()
     ready = [f"{s}{' ' + d if d else ''}" for s, st, d in devs if st == "device"]
     bad = [f"{s}({st})" for s, st, _ in devs if st != "device"]
@@ -285,8 +293,12 @@ def cmd_android_boot(args):
     serial = android_serial(args.avd or ANDROID_AVD, boot=False)
     if serial and (not args.avd or emulator_avd_name(serial) == args.avd):
         ok(f"이미 실행 중: {serial}")
-        return
-    android_boot(args.avd or ANDROID_AVD, headless=args.headless)
+    else:
+        serial = android_boot(args.avd or ANDROID_AVD, headless=args.headless)
+    if args.orientation:
+        android_set_orientation(serial, args.orientation)
+        w, h = android_display_size(serial)
+        ok(f"화면 방향: {args.orientation} ({w}x{h})")
 
 
 # ─────────────────────────────── A1: 지금 화면 파악 ───────────────────────────────
@@ -403,10 +415,15 @@ def first_text(node):
     return ""
 
 
-def android_dump_lines(xml, target, density):
-    """uiautomator XML → (덤프 줄들, 통계). iOS dump-ui와 같은 꼴: `타입 #ID "라벨" ... @x,y wxh` (dp)."""
+def android_dump_lines(xml, target, density, screen=None):
+    """uiautomator XML → (덤프 줄들, 통계). iOS dump-ui와 같은 꼴: `타입 #ID "라벨" ... @x,y wxh` (dp).
+    screen=(가로, 세로 픽셀)을 주면 맨 위에 iOS처럼 `Application` 줄을 둔다 — qakit ui가 화면 크기·방향을 여기서 읽는다."""
     root = ET.fromstring(xml)
     lines, stats = [], {"interactive": 0, "withId": 0, "missing": []}
+    base = 0
+    if screen:
+        lines.append(f'Application "{target}" @0,0 {round(screen[0] / density)}x{round(screen[1] / density)}')
+        base = 1
 
     def coord(v):
         return str(int(round(v / density)))   # iOS 덤프처럼 정수 (공용 파서가 정수만 읽는다)
@@ -448,7 +465,7 @@ def android_dump_lines(xml, target, density):
         for c in node:
             visit(c, depth + 1 if meaningful else depth)   # 이름 없는 레이아웃 칸은 접어서 깊이를 늘리지 않는다
 
-    visit(root, 0)
+    visit(root, base)
     return lines, stats
 
 
@@ -457,7 +474,7 @@ def android_dump_text(serial, package=None):
     fg = android_foreground(serial)
     target = package or fg["package"]
     density = android_density(serial)
-    lines, st = android_dump_lines(android_ui_xml(serial), target, density)
+    lines, st = android_dump_lines(android_ui_xml(serial), target, density, android_display_size(serial))
     frags = android_fragments(serial, target)
     total, with_id = st["interactive"], st["withId"]
     ratio = round(with_id * 100 / total) if total else 100
@@ -642,6 +659,9 @@ def android_serve_start(ws, serial, idle=1800, launch=True):
     if not android_app_installed(serial, ws.package):
         fail(f"기기({serial})에 {ws.package}가 설치되어 있지 않습니다.", "qakit build-app")
     ensure_android_runner_installed(serial)
+    if ws.orientation:   # qakit.yml orientation: — 앱을 켜기 전에 방향을 맞춘다
+        android_set_orientation(serial, ws.orientation)
+    android_soft_keyboard(serial, show=ws.keyboard == "show")
     token = hashlib.sha1(os.urandom(32)).hexdigest()
     r = adb(serial, "forward", "tcp:0", f"tcp:{ANDROID_RUNNER_DEVICE_PORT}")
     port = int(r.stdout.strip())
@@ -682,9 +702,9 @@ def android_serve_start(ws, serial, idle=1800, launch=True):
     return st
 
 
-def android_format_dump(xml, package, density, activity=None, fragments=None):
+def android_format_dump(xml, package, density, activity=None, fragments=None, screen=None):
     """실행기가 보낸 uiautomator 형식 XML → qakit 덤프 텍스트 (android_dump_text와 같은 머리말)."""
-    lines, st = android_dump_lines(xml, package, density or 1.0)
+    lines, st = android_dump_lines(xml, package, density or 1.0, screen)
     total, with_id = st["interactive"], st["withId"]
     header = ["# qakit dump-ui", f"# package: {package}"]
     if activity:
@@ -702,11 +722,12 @@ def android_convert_response(res):
     """실행기 응답의 XML(화면 구조, dump: 단계 파일)을 덤프 텍스트로 바꾼다. iOS 응답은 그대로."""
     if not isinstance(res, dict) or "density" not in res:
         return res
+    screen = (res["screenW"], res["screenH"]) if res.get("screenW") and res.get("screenH") else None
     if res.get("xml"):
-        res["dump"] = android_format_dump(res.pop("xml"), res.get("package"), res.get("density"))
+        res["dump"] = android_format_dump(res.pop("xml"), res.get("package"), res.get("density"), screen=screen)
     for k, v in list((res.get("files") or {}).items()):
         if isinstance(v, str) and v.startswith("@xml "):
-            res["files"][k] = android_format_dump(v[5:], res.get("package"), res.get("density"))
+            res["files"][k] = android_format_dump(v[5:], res.get("package"), res.get("density"), screen=screen)
     return res
 
 
@@ -845,3 +866,64 @@ def android_record_stop(serial, proc, out):
     time.sleep(0.5)
     adb(serial, "pull", ANDROID_REC_REMOTE, str(out), check=False, timeout=120)
     adb(serial, "shell", "rm", "-f", ANDROID_REC_REMOTE, check=False)
+
+
+# ─────────────────────────────── 화면 방향 ───────────────────────────────
+
+def android_set_orientation(serial, orientation):
+    """화면 방향 고정: landscape(가로) · portrait(세로) · auto(기기 회전 따름).
+    자동 회전을 끄고 user_rotation을 정한다. 기기의 기본 방향(휴대폰=세로, 태블릿=가로)에 따라 값이 다르다."""
+    orientation = (orientation or "").lower()
+    if orientation in ("", "auto"):
+        adb(serial, "shell", "settings", "put", "system", "accelerometer_rotation", "1", check=False)
+        return
+    if orientation not in ("landscape", "portrait"):
+        fail(f"화면 방향은 landscape·portrait·auto 중 하나: {orientation}")
+    m = re.search(r"Physical size: (\d+)x(\d+)", adb(serial, "shell", "wm", "size", check=False).stdout)
+    natural_landscape = bool(m) and int(m.group(1)) > int(m.group(2))
+    want_landscape = orientation == "landscape"
+    rotation = "0" if natural_landscape == want_landscape else "1"
+    adb(serial, "shell", "settings", "put", "system", "accelerometer_rotation", "0", check=False)
+    adb(serial, "shell", "settings", "put", "system", "user_rotation", rotation, check=False)
+    DISPLAY_SIZE.pop(serial, None)
+    deadline = time.time() + 5   # 회전이 끝날 때까지 (화면 크기 가로·세로가 바뀜)
+    while time.time() < deadline:
+        w, h = android_display_size(serial)
+        if (w > h) == want_landscape:
+            break
+        DISPLAY_SIZE.pop(serial, None)
+        time.sleep(0.3)
+
+
+def cmd_android_rotate(args):
+    serial = android_serial(args.avd, boot=False)
+    if not serial:
+        fail("연결된 안드로이드 기기가 없습니다.", "qakit android boot")
+    android_set_orientation(serial, args.orientation)
+    w, h = android_display_size(serial)
+    ok(f"화면 방향: {args.orientation} ({w}x{h})")
+
+
+# 에뮬레이터의 화면 키보드 앱. 꺼 두면 입력칸에 포커스가 가도 키보드가 뜨지 않는다 (음성 입력만 남아 화면에 안 보임)
+SOFT_KEYBOARDS = ("com.google.android.inputmethod.latin", "com.android.inputmethod.latin")
+
+
+def android_soft_keyboard(serial, show):
+    """에뮬레이터 화면 키보드 켜기/끄기 (qakit.yml keyboard: show | hide(기본)).
+    qakit은 글자를 키보드 없이 넣는다(SET_TEXT). 떠 있는 키보드는 버튼을 가리고, 쓸기가 키보드에 닿으면
+    글라이드 입력으로 글자가 들어간다 (태블릿에서 확인, 2026-11-16). show_ime_with_hard_keyboard=0은 이 이미지에서 듣지 않았다.
+    실기기는 건드리지 않는다. 끈 뒤에도 Mac 키보드로 에뮬레이터 창에 입력할 수 있다 (AVD hw.keyboard=yes)."""
+    if not serial.startswith("emulator-"):
+        return
+    installed = adb(serial, "shell", "pm", "list", "packages", check=False).stdout
+    disabled = adb(serial, "shell", "pm", "list", "packages", "-d", check=False).stdout
+    for pkg in SOFT_KEYBOARDS:
+        if f"package:{pkg}" not in installed.split():
+            continue
+        is_off = f"package:{pkg}" in disabled
+        if show and is_off:
+            adb(serial, "shell", "pm", "enable", pkg, check=False)
+            info(f"화면 키보드 켬 ({pkg})")
+        elif not show and not is_off:
+            adb(serial, "shell", "pm", "disable-user", "--user", "0", pkg, check=False)
+            info("화면 키보드 끔 — 시험 중 버튼을 가리지 않게 (qakit.yml keyboard: show 로 켬, Mac 키보드 입력은 됨)")

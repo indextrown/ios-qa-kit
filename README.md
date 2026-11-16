@@ -1332,9 +1332,10 @@ worktree:
 
 | 명령 | 하는 일 |
 |---|---|
-| `qakit android setup` | JDK 17·Android SDK·에뮬레이터·AVD(`qakit`) 설치. **Android Studio 없이** |
+| `qakit android setup` | JDK 17·Android SDK·에뮬레이터·AVD(`qakit`) 설치. **Android Studio 없이**. 태블릿: `--avd qakit-tablet --device-profile pixel_tablet` |
 | `qakit android doctor` | 안드로이드 도구·AVD·연결된 기기 점검 |
-| `qakit android boot [--headless]` | 에뮬레이터 띄우기 (부팅 완료까지 기다림) |
+| `qakit android boot [--avd 이름] [--landscape]` | 에뮬레이터 띄우기 (부팅 완료까지 기다림). `--landscape`: 가로로 고정 |
+| `qakit android rotate landscape\|portrait\|auto` | 실행 중인 에뮬레이터 화면 방향 바꾸기 |
 | `qakit android screen [--json]` | 지금 화면의 앱·Activity·Fragment |
 | `qakit android dump [--package P] [-o 파일] [--json]` | 지금 화면 구조를 iOS `dump-ui`와 같은 형식으로 (작업공간 없이) |
 
