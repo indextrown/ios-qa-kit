@@ -174,10 +174,10 @@ def write(root, name, app_line=""):
     else:
         new = f"""# {name} QA
 
-이 폴더는 ios-qa-kit QA 작업공간이다. {app_line}
+이 폴더는 qa-kit QA 작업공간이다. {app_line}
 
 - 실행: `qakit run <시나리오>` / `qakit test` / 기록 `qakit history`
-- 새 QA 만들기: AI에게 `/ios-qa-kit <시나리오 설명>` (만든 뒤 `qakit save`)
+- 새 QA 만들기: AI에게 `/qa-kit <시나리오 설명>` (만든 뒤 `qakit save`)
 - 앱 특이사항: `NOTES.md` · 복구: `qakit restore`
 
 {auto}

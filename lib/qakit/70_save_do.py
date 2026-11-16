@@ -120,15 +120,54 @@ def cmd_history(args):
 
 # ─────────────────────────────── 명령: install-skill ───────────────────────────────
 
-def cmd_install_skill(args):
-    """스킬을 Claude Code·Codex에, qakit을 PATH에 심볼릭 링크로 설치 (도구 레포 수정이 바로 반영됨)."""
-    skill = KIT_DIR / "skills" / "ios-qa-kit"
-    links = [
-        (Path.home() / ".claude" / "skills" / "ios-qa-kit", skill, "Claude Code 스킬"),
-        (Path.home() / ".agents" / "skills" / "ios-qa-kit", skill, "Codex 스킬"),
+OLD_SKILL_NAMES = ("ios-qa-kit",)   # 레포 이름이 ios-qa-kit이던 때의 스킬 이름 (v0.38 이하)
+
+
+def skill_links():
+    skill = KIT_DIR / "skills" / "qa-kit"
+    return [
+        (Path.home() / ".claude" / "skills" / "qa-kit", skill, "Claude Code 스킬"),
+        (Path.home() / ".agents" / "skills" / "qa-kit", skill, "Codex 스킬"),
         (Path.home() / ".local" / "bin" / "qakit", KIT_DIR / "bin" / "qakit", "qakit 명령"),
     ]
-    for link, target, label in links:
+
+
+def old_skill_links():
+    """이 도구의 옛 스킬 폴더(…/skills/ios-qa-kit)를 가리키는 링크. 이름 변경 뒤에는 대개 끊어진 링크다."""
+    found = []
+    for old in OLD_SKILL_NAMES:
+        for base, label in ((Path.home() / ".claude" / "skills", "Claude Code 스킬"),
+                            (Path.home() / ".agents" / "skills", "Codex 스킬")):
+            link = base / old
+            if not link.is_symlink():
+                continue
+            dest = Path(os.readlink(link))
+            if dest.name == old and dest.parent.name == "skills":   # 다른 도구가 같은 이름을 쓰면 두고 본다
+                found.append((link, label))
+    return found
+
+
+def migrate_old_skill_links():
+    """옛 이름(ios-qa-kit) 스킬 링크를 지우고 새 이름(qa-kit) 링크를 만든다. 옮긴 것이 있으면 True."""
+    found = old_skill_links()
+    for link, label in found:
+        link.unlink()
+        new = link.parent / "qa-kit"
+        if not new.exists() and not new.is_symlink():
+            new.symlink_to(KIT_DIR / "skills" / "qa-kit")
+        ok(f"옮김: {label} {link} → {new}  (이제 /qa-kit, $qa-kit으로 부릅니다)")
+    return bool(found)
+
+
+def cmd_install_skill(args):
+    """스킬을 Claude Code·Codex에, qakit을 PATH에 심볼릭 링크로 설치 (도구 레포 수정이 바로 반영됨)."""
+    if args.uninstall:
+        for link, label in old_skill_links():
+            link.unlink()
+            ok(f"제거: {label} ({link})")
+    else:
+        migrate_old_skill_links()
+    for link, target, label in skill_links():
         if args.uninstall:
             if link.is_symlink():
                 link.unlink()

@@ -52,8 +52,8 @@ jobs:
 
       - name: qakit 설치
         run: |
-          git clone --depth 1 -b main https://github.com/indextrown/ios-qa-kit.git "$HOME/ios-qa-kit"
-          echo "$HOME/ios-qa-kit/bin" >> "$GITHUB_PATH"
+          git clone --depth 1 -b main https://github.com/indextrown/qa-kit.git "$HOME/qa-kit"
+          echo "$HOME/qa-kit/bin" >> "$GITHUB_PATH"
 
       - name: 러너에 맞게 설정 (시뮬레이터 이름, 워크트리 자동 최신화 끔)
         run: |

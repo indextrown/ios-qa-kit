@@ -48,9 +48,10 @@ def cmd_update(args):
     kit_version.cache_clear()   # 한 명령 안에서 기억해 둔 옛 버전 대신 받은 뒤의 버전을 읽는다
     ok(f"업데이트 완료: qakit {kit_version()}")
 
+    # 레포 이름 변경(ios-qa-kit → qa-kit)으로 끊어진 옛 스킬 링크를 새 이름으로 옮긴다
+    migrate_old_skill_links()
     # 명령·스킬 링크가 이 폴더를 가리키는지 (다른 폴더를 가리키면 업데이트가 반영되지 않는다)
-    links = [Path.home() / ".local" / "bin" / "qakit", Path.home() / ".claude" / "skills" / "ios-qa-kit",
-             Path.home() / ".agents" / "skills" / "ios-qa-kit"]
+    links = [link for link, _, _ in skill_links()]
     elsewhere = [str(l) for l in links if l.is_symlink() and not Path(os.path.realpath(l)).is_relative_to(repo.resolve())]
     if elsewhere:
         warn("다른 폴더를 가리키는 링크가 있습니다: " + ", ".join(elsewhere) + f" → {repo}/bin/qakit install-skill")

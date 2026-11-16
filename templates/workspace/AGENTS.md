@@ -1,10 +1,10 @@
 # QA 작업공간 ({{NAME}})
 
-이 폴더는 ios-qa-kit 작업공간이다. 테스트 대상 앱: `qakit.yml`의 `app.project`.
+이 폴더는 qa-kit 작업공간이다. 테스트 대상 앱: `qakit.yml`의 `app.project`.
 
-AI는 작업 전에 ios-qa-kit 스킬을 따른다:
-- 설치된 경우: Claude Code `/ios-qa-kit`, Codex `$ios-qa-kit`
-- 아니면: `{{KIT_DIR}}/skills/ios-qa-kit/SKILL.md`를 읽는다
+AI는 작업 전에 qa-kit 스킬을 따른다:
+- 설치된 경우: Claude Code `/qa-kit`, Codex `$qa-kit`
+- 아니면: `{{KIT_DIR}}/skills/qa-kit/SKILL.md`를 읽는다
 
 핵심 규칙 (스킬 요약):
 1. 대상 앱 레포를 수정하지 않는다. 이 작업공간에만 쓴다.

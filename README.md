@@ -1,4 +1,4 @@
-# ios-qa-kit
+# qa-kit
 
 **앱 코드를 한 줄도 고치지 않고** iOS 앱에 XCUITest를 붙이고, AI가 테스트를 만들고 고치게 하는 도구입니다.
 
@@ -55,9 +55,9 @@ qakit ui                            # 서버를 열고 브라우저가 자동으
 
 <p align="center"><img src="docs/images/architecture-before.png" alt="기존 방식: 앱 코드에 ID 추가 → 앱 안 UI 테스트 타깃 → 고칠 때마다 컴파일 → 실행마다 실행기를 새로 띄움 → .xcresult를 열어 원인 찾기를 반복" width="480"></p>
 
-### ios-qa-kit
+### qa-kit
 
-<p align="center"><img src="docs/images/architecture-qakit-flow.png" alt="ios-qa-kit 흐름: AI가 처음 한 번 ① qakit do로 화면 탐색 → ② 통과한 단계를 .qa.yml로 → ③ qakit check·run (실패하면 요약을 보고 ②로) → 그다음부터 ④ qakit run 한 줄(AI 토큰 0). 밑바탕: 상주 실행기, 시뮬레이터/실기기, 앱 레포(읽기만), AutoID" width="100%"></p>
+<p align="center"><img src="docs/images/architecture-qakit-flow.png" alt="qa-kit 흐름: AI가 처음 한 번 ① qakit do로 화면 탐색 → ② 통과한 단계를 .qa.yml로 → ③ qakit check·run (실패하면 요약을 보고 ②로) → 그다음부터 ④ qakit run 한 줄(AI 토큰 0). 밑바탕: 상주 실행기, 시뮬레이터/실기기, 앱 레포(읽기만), AutoID" width="100%"></p>
 
 그림 원본: [`docs/images/architecture-before.drawio`](docs/images/architecture-before.drawio), [`architecture-qakit-flow.drawio`](docs/images/architecture-qakit-flow.drawio) (draw.io로 열어 고친 뒤 PNG로 내보냄)
 
@@ -100,7 +100,7 @@ flowchart TD
 3. 실행할 때마다 `xcodebuild`가 테스트 실행기를 새로 띄웁니다.
 4. 실패하면 `.xcresult`를 열어 원인을 찾고, 고치고, 다시 빌드합니다.
 
-**ios-qa-kit**
+**qa-kit**
 
 1. 앱 레포는 읽기만 합니다. 앱이 바뀌면 qakit이 다시 빌드·설치하고, 실행할 때 AutoID가 프로퍼티 이름으로 ID를 붙입니다.
 2. AI가 `qakit do '단계'`로 떠 있는 실행기(상주 실행기)에 한 단계씩 보내며 화면을 탐색합니다 (단계당 1~2초, 화면 구조는 텍스트).
@@ -121,9 +121,9 @@ flowchart TD
 
 ---
 
-## 왜 ios-qa-kit인가
+## 왜 qa-kit인가
 
-XCUITest는 Apple이 주는 **UI 테스트 엔진**입니다. 엔진은 좋지만, 실제 앱에 붙여 계속 쓰려면 준비할 게 많습니다. ios-qa-kit이 그 준비를 대신합니다.
+XCUITest는 Apple이 주는 **UI 테스트 엔진**입니다. 엔진은 좋지만, 실제 앱에 붙여 계속 쓰려면 준비할 게 많습니다. qa-kit이 그 준비를 대신합니다.
 
 **같은 테스트("로그인하면 홈 화면이 뜬다")를 만들 때**
 
@@ -131,7 +131,7 @@ XCUITest는 Apple이 주는 **UI 테스트 엔진**입니다. 엔진은 좋지�
 XCUITest만   앱 코드에 ID 추가 → 앱에 UI 테스트 타깃 추가 → 테스트 코드 작성
              → xcodebuild로 실행 → 실패하면 .xcresult를 열어 원인 찾기 → 고치고 다시 빌드
 
-ios-qa-kit   "/ios-qa-kit 로그인하면 홈이 뜨는지 확인해줘" (AI가 작성 → 실행 → 통과할 때까지 수정)
+qa-kit   "/qa-kit 로그인하면 홈이 뜨는지 확인해줘" (AI가 작성 → 실행 → 통과할 때까지 수정)
              → 다음부터는 qakit run 한 줄
 ```
 
@@ -144,7 +144,7 @@ XCUITest로 버튼을 안정적으로 찾으려면 앱 코드에 ID를 붙여야
 loginButton.accessibilityIdentifier = "loginButton"
 ```
 
-ios-qa-kit은 **프로퍼티 이름을 그대로 ID로** 붙입니다. 앱에는 아무것도 추가하지 않습니다.
+qa-kit은 **프로퍼티 이름을 그대로 ID로** 붙입니다. 앱에는 아무것도 추가하지 않습니다.
 
 ```swift
 // 앱 코드는 그대로
@@ -176,7 +176,7 @@ let loginButton = UIButton()
 ### 4. 한 번 만들면 AI 없이 계속 돌립니다
 
 - computer use(스크린샷 보며 조작)는 **돌릴 때마다** AI 비용이 듭니다.
-- ios-qa-kit은 AI가 **처음 한 번** 만들어 두면 이후는 `qakit run` 한 줄이고 **토큰 0**입니다.
+- qa-kit은 AI가 **처음 한 번** 만들어 두면 이후는 `qakit run` 한 줄이고 **토큰 0**입니다.
 - 시나리오 파일은 [컴파일 없이](#시나리오-파일에-컴파일이-필요-없는-이유) 바로 돌고, 값만 바꿔 다시 실행할 수 있습니다.
 
   ```bash
@@ -186,7 +186,7 @@ let loginButton = UIButton()
 <details>
 <summary>XCUITest만 쓸 때와 항목별 비교</summary>
 
-| XCUITest만 쓰면 | ios-qa-kit을 쓰면 |
+| XCUITest만 쓰면 | qa-kit을 쓰면 |
 |---|---|
 | **요소에 ID를 붙이려면 앱 코드를 고쳐야 합니다.** 화면마다 `accessibilityIdentifier`를 넣어야 하고, 없으면 글자·순서로 찾아 쉽게 깨집니다 | 시뮬레이터에서 실행할 때 **프로퍼티 이름으로 ID가 자동으로** 붙습니다 (`LoginView.loginButton`). 앱 코드는 한 줄도 고치지 않습니다 |
 | ID를 문자열로 써서, 앱에서 이름이 바뀌면 **실행해 봐야** 깨진 걸 압니다 | ID를 Swift 상수(`QAID`)로 만들어 줍니다. 이름이 바뀌면 **컴파일 에러**로 바로 위치를 알려 줍니다 |
@@ -206,7 +206,7 @@ let loginButton = UIButton()
 
 한 번은 됩니다. 문제는 **계속 유지하는 비용**입니다.
 
-| | 브랜치에서 `accessibilityIdentifier` 직접 추가 | AutoID (ios-qa-kit) |
+| | 브랜치에서 `accessibilityIdentifier` 직접 추가 | AutoID (qa-kit) |
 |---|---|---|
 | 처음 작업 | 화면마다 수백~수천 곳 수정 | 0줄 |
 | develop이 바뀔 때 | 브랜치를 계속 맞춰야 하고, 같은 파일을 고친 커밋마다 충돌 | 영향 없음. 어떤 커밋이든 그대로 빌드 |
@@ -215,7 +215,7 @@ let loginButton = UIButton()
 | 이름 규칙 | 사람마다, 작업마다 달라질 수 있음 | 항상 `타입.프로퍼티` (예: `LoginView.loginButton`). 바뀌면 실행 전에 알려 줌 |
 | 앱 레포 | 테스트용 코드가 섞이고 리뷰 부담 | 그대로 |
 
-**팀이 테스트용 ID를 앱에 정식으로 넣기로 합의했다면** 그게 가장 튼튼합니다. 앱이 직접 붙인 ID가 있으면 ios-qa-kit은 그걸 그대로 씁니다 (AutoID는 앱의 ID를 덮어쓰지 않음). AutoID는 그 합의와 유지 없이 바로 시작하게 해 주는 부분입니다.
+**팀이 테스트용 ID를 앱에 정식으로 넣기로 합의했다면** 그게 가장 튼튼합니다. 앱이 직접 붙인 ID가 있으면 qa-kit은 그걸 그대로 씁니다 (AutoID는 앱의 ID를 덮어쓰지 않음). AutoID는 그 합의와 유지 없이 바로 시작하게 해 주는 부분입니다.
 
 그리고 ID는 일부일 뿐입니다. ID를 앱에 직접 붙여도 아래는 따로 필요합니다.
 
@@ -225,7 +225,7 @@ let loginButton = UIButton()
 - `--device` 실기기 서명·설치·실행
 - QA 워크트리를 develop에 맞춰 최신화
 
-ios-qa-kit의 필요성은 "ID 붙이기"보다 **QA를 누구나 같은 명령으로 반복할 수 있게 만드는 것**에 있습니다.
+qa-kit의 필요성은 "ID 붙이기"보다 **QA를 누구나 같은 명령으로 반복할 수 있게 만드는 것**에 있습니다.
 
 ### 시나리오 파일에 컴파일이 필요 없는 이유
 
@@ -291,8 +291,8 @@ if let target = step["tap"] {            // "LoginView.loginButton"
 
 ```bash
 # ① 설치 (컴퓨터당 한 번)
-git clone -b main https://github.com/indextrown/ios-qa-kit.git ~/ios-qa-kit
-~/ios-qa-kit/bin/qakit install-skill
+git clone -b main https://github.com/indextrown/qa-kit.git ~/qa-kit
+~/qa-kit/bin/qakit install-skill
 
 # ② 앱에 QA 작업공간 만들기 (앱당 한 번)
 qakit init ~/path/to/MyApp --worktree
@@ -309,7 +309,7 @@ cp secrets.example.txt secrets.txt
 
 ```text
 # ⑤ 작업공간 폴더에서 Claude Code / Codex를 열고 요청
-/ios-qa-kit 로그인 화면에서 테스트 계정으로 로그인하면 홈 화면이 뜨는지 확인하는 테스트 만들어줘
+/qa-kit 로그인 화면에서 테스트 계정으로 로그인하면 홈 화면이 뜨는지 확인하는 테스트 만들어줘
 ```
 
 **이미 설정했다면** — 작업공간 폴더에서:
@@ -352,7 +352,7 @@ cp secrets.example.txt secrets.txt
 
 - **[빠른 시작](#빠른-시작)** — [CLI 방식](#cli-방식-터미널) · [UI 방식 (서버 여는 법)](#ui-방식-브라우저)
 
-0. [구조 한눈에 보기](#구조-한눈에-보기) · [왜 ios-qa-kit인가](#왜-ios-qa-kit인가) · [AI가 ID를 직접 붙이면 되지 않나?](#ai가-브랜치에서-accessibilityidentifier를-붙이면-되지-않나) · [시나리오 파일에 컴파일이 필요 없는 이유](#시나리오-파일에-컴파일이-필요-없는-이유)
+0. [구조 한눈에 보기](#구조-한눈에-보기) · [왜 qa-kit인가](#왜-qa-kit인가) · [AI가 ID를 직접 붙이면 되지 않나?](#ai가-브랜치에서-accessibilityidentifier를-붙이면-되지-않나) · [시나리오 파일에 컴파일이 필요 없는 이유](#시나리오-파일에-컴파일이-필요-없는-이유)
 1. [빠른 실행](#빠른-실행)
 2. [준비물](#준비물)
 3. [단계별 시작 가이드](#단계별-시작-가이드)
@@ -413,8 +413,8 @@ cp secrets.example.txt secrets.txt
 ### 1단계 설치
 
 ```bash
-git clone -b main https://github.com/indextrown/ios-qa-kit.git ~/ios-qa-kit
-~/ios-qa-kit/bin/qakit install-skill
+git clone -b main https://github.com/indextrown/qa-kit.git ~/qa-kit
+~/qa-kit/bin/qakit install-skill
 ```
 
 `install-skill`은 아래 세 가지를 **심볼릭 링크**로 설치합니다.
@@ -422,17 +422,22 @@ git clone -b main https://github.com/indextrown/ios-qa-kit.git ~/ios-qa-kit
 | 무엇 | 설치 위치 | 호출 |
 |---|---|---|
 | `qakit` 명령 | `~/.local/bin/qakit` | PATH에 없으면 안내가 나옵니다 |
-| Claude Code 스킬 | `~/.claude/skills/ios-qa-kit` | `/ios-qa-kit` |
-| Codex 스킬 | `~/.agents/skills/ios-qa-kit` | `$ios-qa-kit` |
+| Claude Code 스킬 | `~/.claude/skills/qa-kit` | `/qa-kit` |
+| Codex 스킬 | `~/.agents/skills/qa-kit` | `$qa-kit` |
 
 - 링크라서 레포를 고치면 **바로 반영**됩니다.
 - 제거는 `qakit install-skill --uninstall`.
 
 > [!TIP]
 > **업데이트**
-> - `qakit update` — 설치 폴더(`~/ios-qa-kit`)를 원격 main으로 빨리 감기(fast-forward)합니다. 명령과 스킬이 함께 바뀝니다.
+> - `qakit update` — 설치 폴더(`~/qa-kit`)를 원격 main으로 빨리 감기(fast-forward)합니다. 명령과 스킬이 함께 바뀝니다.
 > - `qakit update --check` — 받지 않고 새 버전과 변경 목록만 봅니다.
 > - `qakit --version` — 지금 버전을 봅니다.
+
+> [!NOTE]
+> **예전 이름 `ios-qa-kit`으로 설치했다면** — 레포와 스킬 이름이 `qa-kit`으로 바뀌었습니다 (안드로이드 지원 준비).
+> `qakit update`(또는 `qakit install-skill`)를 한 번 실행하면 옛 스킬 링크(`~/.claude/skills/ios-qa-kit` 등)를 지우고 `qa-kit`으로 다시 연결합니다.
+> 스킬은 이제 `/qa-kit`, `$qa-kit`으로 부릅니다. 설치 폴더(`~/ios-qa-kit`)는 그대로 써도 되고, 옛 GitHub 주소는 새 주소로 자동 연결됩니다.
 
 ### 2단계 QA 워크트리 만들기
 
@@ -522,7 +527,7 @@ PASSWORD=...
 작업공간 폴더에서 Claude Code / Codex를 열고:
 
 ```text
-/ios-qa-kit 로그인 화면에서 테스트 계정으로 로그인하면 홈 화면이 뜨는지 확인하는 테스트 만들어줘
+/qa-kit 로그인 화면에서 테스트 계정으로 로그인하면 홈 화면이 뜨는지 확인하는 테스트 만들어줘
 ```
 
 AI는 스킬 규칙대로 **ID 상수 찾기 → Page·테스트 작성 → `qakit test` 통과할 때까지 수정**합니다.
@@ -679,7 +684,7 @@ qakit run search-favorite --var item=라떼   # vars 값을 바꿔서 실행 (�
 | 화면에 안 나오는 앱 상태 (예: 지도 줌) | 앱 설정(UserDefaults) 값으로 판정 `pref`, `read-pref` |
 | 목표 값까지 반복 (예: "줌 15가 될 때까지 핀치") | `repeat` + `watch` |
 
-- 전체 문법: [scenario-language.md](skills/ios-qa-kit/references/scenario-language.md)
+- 전체 문법: [scenario-language.md](skills/qa-kit/references/scenario-language.md)
 - 언어로 표현이 안 되는 계산·판정만 Swift(`QA/Runner/UITests/Flows`)로 씁니다. **두 방식은 같은 작업공간에서 함께** 씁니다.
 
 <sub>[↑ 목차](#목차)</sub>
@@ -947,7 +952,7 @@ cd ~/path/to/MyApp-qa/QA && qakit run <시나리오>
 ```
 
 - 결과물(시나리오·공통 단계·Swift·NOTES·설정·실행 기록)은 지우기 전과 **완전히 같게** 돌아옵니다. 앱을 처음부터 빌드하는 몇 분이 대부분입니다.
-- 보관소 말고 필요한 것: 원래 개발 폴더(앱 코드, 키가 든 xcconfig 같은 git에 없는 설정 파일), ios-qa-kit 도구, `secrets.txt`.
+- 보관소 말고 필요한 것: 원래 개발 폴더(앱 코드, 키가 든 xcconfig 같은 git에 없는 설정 파일), qa-kit 도구, `secrets.txt`.
 
 > [!WARNING]
 > 보관소(`~/.qakit/archive`)는 **이 컴퓨터에만** 있습니다. 컴퓨터가 바뀌어도 살리려면 `QA/`를 git에 커밋하거나 보관소를 따로 백업하세요.
@@ -963,7 +968,7 @@ cd ~/path/to/MyApp-qa/QA && qakit run <시나리오>
 | 곳 | 예시 위치 | 들어 있는 것 | 누가 바꾸나 |
 |---|---|---|---|
 | **앱 프로젝트** (기존 그대로) | `~/work/MyApp` | 앱 소스. **복사하지 않고 경로만 참조**합니다 | 아무도 (qakit은 읽기만) |
-| **도구** (이 레포) | `~/ios-qa-kit` | qakit CLI, 자동 ID 라이브러리, QAKit, 스킬, 템플릿 | 도구 개발자 ([docs/gitflow.md](docs/gitflow.md)) |
+| **도구** (이 레포) | `~/qa-kit` | qakit CLI, 자동 ID 라이브러리, QAKit, 스킬, 템플릿 | 도구 개발자 ([docs/gitflow.md](docs/gitflow.md)) |
 | **작업공간** (앱별 QA 폴더) | `~/work/qa-workspaces/myapp` | 설정·계정·테스트·빌드 결과. git으로 관리하지 않는 일회용 | 사람(설정·계정) + AI(테스트) + qakit(자동 생성) |
 
 ```mermaid
@@ -1031,7 +1036,7 @@ flowchart LR
 |---|---|---|---|
 | 1 | 👤 사람 | `qakit init <앱>` → `qakit.yml` 확인(권한 등) → `secrets.txt`에 계정 | 작업공간, 기본 테스트(`SmokeTests`) |
 | 2 | ⚙️ qakit | `build-app`: 앱 빌드·설치·권한 허용 / `dump-ui`: 첫 화면 구조 | `.build/`, `results/ui-dump.txt` |
-| 3 | 👤 사람 | AI에게 시나리오를 한 문장으로 요청: `/ios-qa-kit 로그인 후 홈이 뜨는지 확인해줘` | — |
+| 3 | 👤 사람 | AI에게 시나리오를 한 문장으로 요청: `/qa-kit 로그인 후 홈이 뜨는지 확인해줘` | — |
 | 4 | 🤖 AI | `NOTES.md`·기존 공통 단계 읽기 → `QAIDs.swift`에서 화면 ID grep → 필요하면 앱 소스·덤프 확인 | — (읽기만) |
 | 5 | 🤖 AI | 화면마다 Page, 시나리오 테스트, 여러 테스트가 쓸 공통 단계 작성 | `Pages/LoginPage.swift`, `Flows/LoginTests.swift`, `Flows/AuthSteps.swift` |
 | 6 | 🤖 ↔ ⚙️ | `qakit test` → 실패하면 텍스트 요약(원인·마지막 단계·그 순간 화면 구조)을 읽고 수정 → 통과할 때까지 (같은 원인 3번이면 멈추고 사람에게 보고) | 통과하는 테스트 |
@@ -1358,7 +1363,7 @@ worktree:
 | `-w <작업공간>` | 작업공간 지정 |
 | `--build debug\|release` | 빌드 종류 (기본 debug = `qakit.yml`의 `app.configuration`, release = `app.release.configuration` 기본 `Release`) |
 
-상세: [cli.md](skills/ios-qa-kit/references/cli.md) · QAKit API: [qakit-api.md](skills/ios-qa-kit/references/qakit-api.md)
+상세: [cli.md](skills/qa-kit/references/cli.md) · QAKit API: [qakit-api.md](skills/qa-kit/references/qakit-api.md)
 
 <sub>[↑ 목차](#목차)</sub>
 
@@ -1391,7 +1396,7 @@ worktree:
 | SwiftUI 화면 | `qakit init --worktree`로 만든 QA 워크트리에서만 ID가 붙음 (개발 폴더 소스는 안 건드림). 시스템 기본 뒤로가기·동적 라벨 버튼은 라벨·순서 번호로 |
 | 실기기 | `--device`로 시나리오·`--bench`는 된다 ([실기기에서 실행](#실기기에서-실행---device)). 상주 실행기(`qakit serve`·`qakit do`)도 USB·Wi-Fi 모두. Swift 테스트(`qakit test`)와 권한 미리 허용은 아직 시뮬레이터만 |
 
-문제가 생기면: [troubleshooting.md](skills/ios-qa-kit/references/troubleshooting.md)
+문제가 생기면: [troubleshooting.md](skills/qa-kit/references/troubleshooting.md)
 
 <sub>[↑ 목차](#목차)</sub>
 
@@ -1407,14 +1412,14 @@ worktree:
 <summary>폴더 구성 보기</summary>
 
 ```text
-ios-qa-kit/
+qa-kit/
 ├── bin/qakit                 CLI 입구 (lib/qakit/*.py를 순서대로 읽음)
 ├── lib/qakit/                CLI 본체, 구역별 파일 (Python 3 표준 라이브러리만): 00_base · 10_device · 20_build · 30_setup · 40_results_sync · 50_run_serve · 60_bench · 70_save_do · 80_ui_data · 85_mcp_ai · 86_ui_server · 90_update_main
 ├── AutoID/                   자동 ID 라이브러리 (시뮬레이터 주입용 dylib)
 ├── Sources/QAKit/            테스트용 Swift 라이브러리 (BasePage, QATestCase, QAWait …)
 ├── Tools/gen-ids/            앱 소스 → QAID 상수 생성기
 ├── templates/workspace/      qakit init이 복사하는 작업공간 틀
-├── skills/ios-qa-kit/        AI 스킬 (SKILL.md + references)
+├── skills/qa-kit/        AI 스킬 (SKILL.md + references)
 ├── scripts/build-autoid.sh
 └── docs/
     ├── PLAN.md               설계·진행 기록
