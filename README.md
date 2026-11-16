@@ -1338,8 +1338,9 @@ worktree:
 | `qakit android rotate landscape\|portrait\|auto` | 실행 중인 에뮬레이터 화면 방향 바꾸기 |
 | `qakit android screen [--json]` | 지금 화면의 앱·Activity·Fragment |
 | `qakit android dump [--package P] [-o 파일] [--json]` | 지금 화면 구조를 iOS `dump-ui`와 같은 형식으로 (작업공간 없이) |
+| `qakit android logs [--since 10m] [-f] [--level W] [--grep 글자] [--crash] [--net]` | 앱 로그(uid로 거름, 재실행해도 이어짐). 끝에 크래시·ANR·실패한 요청·많은 오류 요약. `--crash`: 크래시·ANR만 (release는 `mapping.txt`로 스택 복원) |
 
-`qakit.yml`에 `platform: android`를 적은 작업공간에서는 `qakit doctor`·`dump-ui`·`run`·`do`·`serve`가 안드로이드로 동작합니다 (같은 `.qa.yml` 문법, UiAutomator2 상주 실행기). `qakit ui`의 라이브 세션(화면 보기 12fps·직접 터치·녹화)도 됩니다 — 에뮬레이터 GPU 가속이 켜져 있어야 부드럽습니다(`qakit android setup`이 켬). `build-app`(Gradle 빌드 → 설치 → 권한)과 앱 변경 시 자동 재빌드도 됩니다. 실패 영상, `--bench`, AI QA는 아직입니다 ([설계](docs/PLAN.md#안드로이드-지원-설계-진행-중)).
+`qakit.yml`에 `platform: android`를 적은 작업공간에서는 `qakit doctor`·`dump-ui`·`run`·`do`·`serve`가 안드로이드로 동작합니다 (같은 `.qa.yml` 문법, UiAutomator2 상주 실행기). `qakit ui`의 라이브 세션(화면 보기 12fps·직접 터치·녹화)도 됩니다 — 에뮬레이터 GPU 가속이 켜져 있어야 부드럽습니다(`qakit android setup`이 켬). `build-app`(Gradle 빌드 → 설치 → 권한)과 앱 변경 시 자동 재빌드도 됩니다. `run`이 실패하면 요약에 그 실행 동안의 앱 크래시·ANR·실패한 요청(OkHttp 로그, 보통 debug 빌드만)·오류 로그가 붙고, 결과 폴더에 `logcat.txt`(인증 값 가림)·`crash.txt`가 남습니다. 실패 영상, `--bench`, AI QA는 아직입니다 ([설계](docs/PLAN.md#안드로이드-지원-설계-진행-중)).
 
 **실행·결과**
 

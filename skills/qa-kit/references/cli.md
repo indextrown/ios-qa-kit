@@ -68,6 +68,7 @@
 | `qakit android rotate landscape\|portrait\|auto [--avd 이름]` | 실행 중인 에뮬레이터 화면 방향 바꾸기 (자동 회전 끄고 고정, auto는 다시 켬). 휴대폰·태블릿의 기본 방향 차이를 알아서 맞춘다 |
 | `qakit android screen [--json]` | 지금 앞의 앱 패키지·Activity·Fragment(바깥 → 안쪽). 덤프보다 빠름 |
 | `qakit android dump [--package P] [--settle 초] [-o 파일 [--print]] [--json]` | 지금 화면 구조. 형식은 iOS `dump-ui`와 같다 (`타입 #ID "라벨" value="…" (disabled) @x,y wxh`, 좌표 dp). 머리말에 package·activity·fragments·ID 없는 요소 |
+| `qakit android logs [--since 10m] [-n 300] [-f] [--level W] [--grep 정규식] [--crash] [--net] [--json] [--build release]` | 앱 로그 (uid로 거름 — 재실행·크래시 뒤에도 이어짐). 끝에 크래시·ANR·실패한 요청·많은 오류 요약. `--crash`: 크래시·ANR만 (난독화 빌드는 `mapping.txt`로 복원). `--net`: OkHttp 로그(보통 debug 빌드만). 인증 헤더·토큰 값은 가린다. 작업공간 기본은 debug 빌드 패키지 → release 앱이면 `--build release` |
 
 - ID: XML 뷰 `com.app:id/loginButton` → `#loginButton`, 프레임워크 `android:id/button1` → `#android.button1`, Compose testTag(testTagsAsResourceId)는 그대로. Compose 화면은 대개 ID가 없어 글자(`"Navigate up"`)로 찾는다.
 - 기기가 여러 대면 `ANDROID_SERIAL=<serial>` 또는 `--avd`.

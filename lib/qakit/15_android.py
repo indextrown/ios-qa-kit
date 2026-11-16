@@ -1025,3 +1025,271 @@ def android_runner_kill(serial):
     deadline = time.time() + 5
     while time.time() < deadline and adb(serial, "shell", "pidof", "com.qakit.runner", check=False).stdout.strip():
         time.sleep(0.2)
+
+
+# ─────────────────────────────── A5: 로그·크래시·네트워크 ───────────────────────────────
+# 앱 로그는 uid로 거른다 (pid는 재실행·크래시 뒤 바뀜). 크래시는 crash 버퍼, ANR은 system 버퍼(ActivityManager).
+# 네트워크는 앱이 OkHttp HttpLoggingInterceptor로 남긴 줄을 읽는다 — 보통 debug 빌드에만 있다.
+
+LOGCAT_RE = re.compile(r"^(\d\d-\d\d \d\d:\d\d:\d\d\.\d+)\s+(\d+)\s+(\d+)\s+([VDIWEFA])\s+(.*?)\s*: ?(.*)$")
+LOG_LEVELS = "VDIWEFA"
+HTTP_TAGS = ("okhttp.OkHttpClient", "OkHttp", "OkHttpClient")
+HTTP_REQ_RE = re.compile(r"^--> (GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS) (\S+)")
+HTTP_RES_RE = re.compile(r"^<-- (\d{3})\b.*?(https?://\S+).*?\((\d+)ms")
+HTTP_FAIL_RE = re.compile(r"^<-- HTTP FAILED: (.*)")
+_REDACT = [   # 결과 폴더에 남기기 전에 인증 값 가리기 (secrets.txt 값은 masker가 따로 가린다)
+    (re.compile(r"(?i)\b(authorization|proxy-authorization|cookie|set-cookie|x-api-key|[\w-]*token)\s*:\s*\S.*"), r"\1: •••"),
+    (re.compile(r'(?i)("[\w-]*(?:token|password|passwd|secret|cookie)[\w-]*"\s*:\s*)"[^"]*"'), r'\1"•••"'),
+    (re.compile(r"(?i)\b((?:access|refresh|id)_?token=)[^&\s]+"), r"\1•••"),
+]
+
+
+def log_redact(line):
+    for rx, rep in _REDACT:
+        line = rx.sub(rep, line)
+    return line
+
+
+def android_app_uid(serial, pkg):
+    out = adb(serial, "shell", "pm", "list", "packages", "-U", pkg, check=False, timeout=20).stdout
+    for line in out.splitlines():
+        m = re.match(r"package:(\S+) uid:(\d+)", line.strip())
+        if m and m.group(1) == pkg:
+            return m.group(2)
+    return None
+
+
+def android_device_time(serial):
+    """기기 시각 (logcat -T에 넣을 epoch 초.밀리초). 호스트 시계와 어긋나도 되게 기기에서 읽는다."""
+    t = adb(serial, "shell", "date", "+%s.%3N", check=False, timeout=10).stdout.strip()
+    return t if re.fullmatch(r"\d+\.\d{3}", t) else None
+
+
+def parse_since(text, serial):
+    """'90s'·'10m'·'2h' → 기기 기준 그 시각 (epoch 문자열). 숫자만 쓰면 분."""
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([smh]?)", (text or "").strip())
+    if not m:
+        fail(f"--since 형식: 30s, 10m, 2h (받은 값: {text})")
+    sec = float(m.group(1)) * {"s": 1, "m": 60, "h": 3600, "": 60}[m.group(2)]
+    now = android_device_time(serial)
+    return f"{float(now) - sec:.3f}" if now else None
+
+
+def android_logcat(serial, pkg, since=None, tail=None):
+    """→ (앱 로그 줄, crash 버퍼 줄, system 버퍼 줄). since: 기기 epoch 문자열, tail: 앱 로그 마지막 N줄.
+    logcat -t는 거르기 전 전체 줄 수라서 쓰지 않고 다 받아 자른다 (앱 로그 1.7MB ≈ 0.1초)."""
+    win = ["-T", since] if since else []
+    base = ["shell", "logcat", "-d", "-v", "threadtime", *win]
+    uid = android_app_uid(serial, pkg)
+    app = adb(serial, *base, f"--uid={uid}", check=False, timeout=60).stdout.splitlines() if uid else []
+    app = [l for l in app if not l.startswith("--------- beginning of")]
+    if tail:
+        app = app[-tail:]
+    crash = adb(serial, *base, "-b", "crash", check=False, timeout=30).stdout.splitlines()
+    system = adb(serial, *base, "-b", "system", check=False, timeout=30).stdout.splitlines()
+    return app, crash, system
+
+
+def _owns(text, pkg):
+    """크래시·ANR 글이 이 앱 것인지 (com.app이 com.app.debug에 걸리지 않게)."""
+    p = re.escape(pkg)
+    return bool(re.search(rf"(?:Process: {p},|>>> {p} <<<|Cmdline: {p}(?:\s|$)|ANR in {p}(?:\s|$|\())", text))
+
+
+def android_log_report(app, crash, system, pkg):
+    """로그 줄 → {crashes: [[줄]], anrs: [[줄]], errors: [(횟수, 줄)], http: {...}}."""
+    parsed = [(l, LOGCAT_RE.match(l)) for l in app]
+    # 크래시: FATAL EXCEPTION(자바)·*** *** ***(네이티브)에서 시작해 같은 pid 줄을 모은다
+    crashes, cur, cur_pid = [], None, None
+    for line in crash:
+        m = LOGCAT_RE.match(line)
+        msg, pid = (m.group(6), m.group(2)) if m else (line, None)
+        if "FATAL EXCEPTION" in msg or msg.startswith("*** *** ***"):
+            cur, cur_pid = [line], pid
+            crashes.append(cur)
+        elif cur is not None and pid == cur_pid:
+            cur.append(line)
+    crashes = [c for c in crashes if _owns("\n".join(c), pkg)]
+    # ANR: ActivityManager의 "ANR in <앱>"과 바로 뒤 같은 스레드의 설명 줄
+    anrs = []
+    for i, line in enumerate(system):
+        if _owns(line, pkg) and "ANR in" in line:
+            m = LOGCAT_RE.match(line)
+            block = [line]
+            for nxt in system[i + 1:i + 12]:
+                n = LOGCAT_RE.match(nxt)
+                if not (m and n and n.group(3) == m.group(3)):
+                    break
+                block.append(nxt)
+            anrs.append(block)
+    # 오류: E/F 줄, 숫자를 지운 문장이 같으면 한 번만 (횟수)
+    errors = {}
+    for line, m in parsed:
+        if m and m.group(4) in "EF" and m.group(5) not in HTTP_TAGS:
+            key = (m.group(5), re.sub(r"\d+", "#", m.group(6))[:160])
+            n, first = errors.get(key, (0, line))
+            errors[key] = (n + 1, first)
+    # 네트워크 (OkHttp 로그)
+    reqs, failed, last_req = 0, [], {}
+    for line, m in parsed:
+        if not m or m.group(5) not in HTTP_TAGS:
+            continue
+        msg, tid = m.group(6), m.group(3)
+        if (q := HTTP_REQ_RE.match(msg)):
+            reqs += 1
+            last_req[tid] = f"{q.group(1)} {q.group(2)}"
+        elif (r := HTTP_RES_RE.match(msg)):
+            if int(r.group(1)) >= 400:
+                failed.append(f"{m.group(1)}  {r.group(1)}  {r.group(2)} ({r.group(3)}ms)")
+        elif (f := HTTP_FAIL_RE.match(msg)):
+            failed.append(f"{m.group(1)}  실패  {last_req.get(tid, '?')} — {f.group(1)[:160]}")
+    return {"crashes": crashes, "anrs": anrs, "lines": len(app),
+            "errors": sorted(errors.values(), key=lambda e: -e[0]),
+            "http": {"requests": reqs, "failed": failed, "logged": reqs > 0}}
+
+
+def android_mapping_file(ws):
+    """난독화(R8) 빌드의 mapping.txt (크래시 스택 복원용). 없으면 None."""
+    base = ws.app_dir / Path(*ws.module.strip(":").split(":")) / "build" / "outputs" / "mapping"
+    for cand in [base / ws.variant / "mapping.txt", *sorted(base.glob(f"*/{ws.variant}/mapping.txt"))]:
+        if cand.is_file():
+            return cand
+    return None
+
+
+def android_retrace(mapping, lines):
+    """R8 retrace로 난독화된 스택을 원래 이름으로. 실패하면 원래 줄."""
+    tool = android_tool("retrace")
+    if not (tool and mapping):
+        return lines
+    try:
+        r = subprocess.run([tool, str(mapping)], input="\n".join(lines) + "\n", capture_output=True, text=True,
+                           timeout=120, env=android_env())
+    except (OSError, subprocess.TimeoutExpired):
+        return lines
+    out = [l for l in r.stdout.rstrip("\n").splitlines() if not l.startswith("Waiting for stack-trace input")]
+    return out if r.returncode == 0 and out else lines
+
+
+def _log_msg(line):
+    m = LOGCAT_RE.match(line)
+    return m.group(6) if m else line
+
+
+def android_report_lines(rep, indent="   ", max_errors=8, mapping=None):
+    """보고서 → 요약에 넣을 줄 (없으면 빈 목록)."""
+    out = []
+    for c in rep["crashes"][-2:]:
+        body = android_retrace(mapping, c) if mapping else c
+        msgs = [_log_msg(l) for l in body]
+        out.append(f"{indent}💥 앱 크래시 ({len(rep['crashes'])}번)" + (" — mapping으로 복원" if mapping and body != c else ""))
+        out += [f"{indent}   {m}" for m in msgs[:25]] + ([f"{indent}   …({len(msgs) - 25}줄 더)"] if len(msgs) > 25 else [])
+    for a in rep["anrs"][-1:]:
+        out.append(f"{indent}⏳ ANR (응답 없음, {len(rep['anrs'])}번)")
+        out += [f"{indent}   {_log_msg(l)}" for l in a[:8]]
+    if rep["http"]["failed"]:
+        out.append(f"{indent}🌐 실패한 요청 {len(rep['http']['failed'])}개 / 전체 {rep['http']['requests']}개")
+        out += [f"{indent}   {log_redact(x)}" for x in rep["http"]["failed"][-8:]]
+    if rep["errors"] and max_errors:
+        out.append(f"{indent}앱 오류 로그 (E) {sum(n for n, _ in rep['errors'])}줄 — 많은 순")
+        for n, line in rep["errors"][:max_errors]:
+            m = LOGCAT_RE.match(line)
+            text = f"{m.group(5)}: {m.group(6)}" if m else line
+            out.append(f"{indent}   {('×' + str(n)).ljust(5)} {log_redact(text)[:200]}")
+    return out
+
+
+def android_collect_run_logs(ws, serial, since, rd, mask):
+    """run 하나의 로그를 결과 폴더에 (logcat.txt, crash.txt) → 보고서 (실패하면 None)."""
+    if not since:
+        return None
+    try:
+        app, crash, system = android_logcat(serial, ws.package, since=since)
+    except SystemExit:
+        return None
+    rep = android_log_report(app, crash, system, ws.package)
+    rep["mapping"] = android_mapping_file(ws) if ws.variant != "debug" else None
+    text = "\n".join(log_redact(l) for l in app)
+    (rd / "logcat.txt").write_text(mask(text) + "\n", encoding="utf-8")
+    if rep["crashes"] or rep["anrs"]:
+        blocks = [android_retrace(rep["mapping"], c) for c in rep["crashes"]] + rep["anrs"]
+        (rd / "crash.txt").write_text(mask("\n\n".join("\n".join(b) for b in blocks)) + "\n", encoding="utf-8")
+    return rep
+
+
+def _logs_target(args):
+    """(serial, 패키지, 작업공간 또는 None)"""
+    ws = None
+    explicit = getattr(args, "workspace", None)
+    if explicit or any((d / "qakit.yml").exists() for d in [Path.cwd(), *Path.cwd().parents]):
+        ws = find_workspace(explicit)
+    if ws and ws.platform != "android":
+        ws = None
+    serial = android_serial(args.avd or (ws.emulator if ws else None), boot=False)
+    if not serial:
+        fail("연결된 안드로이드 기기가 없습니다.", "qakit android boot")
+    pkg = args.package or (ws.package if ws else None) or android_foreground(serial)["package"]
+    if not pkg:
+        fail("어느 앱의 로그인지 모릅니다.", "--package <앱 패키지> 또는 작업공간 폴더에서 실행")
+    return serial, pkg, ws
+
+
+def cmd_android_logs(args):
+    """앱 로그 보기: 기본은 최근 줄, --crash 크래시·ANR만, --net 네트워크만, -f 실시간."""
+    serial, pkg, ws = _logs_target(args)
+    mask = masker(ws.secrets()) if ws else (lambda s: s)
+    min_level = LOG_LEVELS.index(args.level) if args.level else 0
+    grep = re.compile(args.grep, re.I) if args.grep else None
+
+    def keep(line):
+        m = LOGCAT_RE.match(line)
+        if m and LOG_LEVELS.index(m.group(4)) < min_level:
+            return False
+        if args.net and not (m and m.group(5) in HTTP_TAGS):
+            return False
+        return not grep or bool(grep.search(line))
+
+    if args.follow:
+        uid = android_app_uid(serial, pkg)
+        if not uid:
+            fail(f"{pkg}가 설치돼 있지 않습니다.")
+        info(f"{pkg} 로그 (uid {uid}, 끝내려면 Ctrl-C)")
+        proc = subprocess.Popen([require_tool("adb"), "-s", serial, "logcat", "-v", "threadtime", "-T", "1", f"--uid={uid}"],
+                                stdout=subprocess.PIPE, text=True, errors="replace")
+        try:
+            for line in proc.stdout:
+                if keep(line.rstrip("\n")):
+                    print(mask(log_redact(line.rstrip("\n"))), flush=True)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            proc.kill()
+        return
+    since = parse_since(args.since, serial) if args.since else None
+    app, crash, system = android_logcat(serial, pkg, since=since)
+    rep = android_log_report(app, crash, system, pkg)
+    mapping = android_mapping_file(ws) if ws and ws.variant != "debug" else None
+    if args.json:
+        print(json.dumps({"serial": serial, "package": pkg, "lines": rep["lines"],
+                          "crashes": [android_retrace(mapping, c) for c in rep["crashes"]], "anrs": rep["anrs"],
+                          "errors": [{"count": n, "line": log_redact(l)} for n, l in rep["errors"]],
+                          "http": rep["http"]}, ensure_ascii=False, indent=1))
+        return
+    if args.crash:
+        lines = android_report_lines({**rep, "errors": [], "http": {**rep["http"], "failed": []}}, indent="", mapping=mapping)
+        print(mask("\n".join(lines)) if lines else "크래시·ANR 없음" + (f" (최근 {args.since})" if args.since else ""))
+        return
+    if not app:
+        warn(f"{pkg} 로그가 없습니다" + ("" if android_app_uid(serial, pkg) else " (설치돼 있지 않음)")
+             + (" — 작업공간 기본은 debug 빌드입니다. release 앱이면 --build release" if ws and ws.variant == "debug" else ""))
+    shown = [l for l in app if keep(l)]
+    if not since:
+        shown = shown[-args.lines:]
+    for l in shown:
+        print(mask(log_redact(l)))
+    if args.net and not rep["http"]["logged"]:
+        warn("OkHttp 로그가 없습니다 — 보통 debug 빌드만 HttpLoggingInterceptor를 켭니다 (--build release면 안 보임)")
+    summary = android_report_lines(rep, indent="", max_errors=0 if args.net else 5, mapping=mapping)
+    if summary and not args.grep:
+        print("\n── 요약")
+        print(mask("\n".join(summary)))

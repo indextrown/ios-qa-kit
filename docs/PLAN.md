@@ -777,7 +777,7 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 | A2 Compose ID | 소스 삽입 도구 (Kotlin 소스 파싱, `@Composable` 함수의 클릭·입력 요소에 testTag), 빌드 직전 삽입·복원 | 보류 (첫 앱은 이미 testTag 있음) |
 | A3 실행기 | UiAutomator2 instrumentation APK + HTTP, `.qa.yml` 단계 해석 (Kotlin) | 완료 |
 | A4 CLI 통합 | `build-app`(Gradle → APK 찾기 → 설치 → 권한, 앱 변경 시 자동 재빌드)·`run`·`do` 완료. `init`(Gradle 탐지)·QA 워크트리·MCP 남음 | 부분 |
-| A5 로그·네트워크 | 실패 요약에 앱 패키지만 거른 logcat·크래시 스택. OkHttp 로그 우선, 필요하면 mitmproxy | |
+| A5 로그·네트워크 | 실패 요약에 앱 패키지만 거른 logcat·크래시 스택. OkHttp 로그 우선, 필요하면 mitmproxy | 완료 (mitmproxy는 안 함) |
 | A6 라이브 세션 | UI에서 화면 보기·직접 터치·녹화 | 완료 (AI QA는 아직) |
 
 ### 미결
@@ -838,3 +838,13 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 
 - `:<module>:assemble<Variant>` → `output-metadata.json`(variantName 일치, flavor 폴더도)에서 APK·applicationId → packageName 확인 → `adb install -r -t` → permissions 허용 → 앱 상태(커밋·트리 해시, scheme=module, configuration=variant) 기록. `auto_sync`가 iOS처럼 앱 변경 시 다시 빌드 (ID 상수·Swift 컴파일 단계는 건너뜀).
 - 함정: `qakit ui`를 열어 둔 채 `qakit run`을 하면, 라이브 화면이 "실행기가 죽었다"고 보고 다시 띄우면서 run의 실행기와 번갈아 죽였다 ("Process crashed"). → 라이브 화면은 기기 잠금(run·do·build-app이 잡음)을 기다리지 않고 확인해, 쓰는 중이면 실행기를 건드리지 않는다. 실행기를 멈출 때·새로 띄우기 전에는 기기 안 프로세스까지 force-stop.
+
+### A5 로그·크래시·네트워크 (2026-11-16)
+
+- 거르기: 앱 로그는 `logcat --uid=<앱 uid>` (`pm list packages -U`). pid로 거르면 재실행·크래시 뒤 새 프로세스를 놓친다. 크래시는 `-b crash`(자바 `FATAL EXCEPTION`·네이티브 `*** *** ***`에서 같은 pid 줄 묶음, `Process: <앱>,`로 이 앱 것만 — `com.app`이 `com.app.debug`에 걸리지 않게), ANR은 `-b system`의 `ActivityManager: ANR in <앱>`과 같은 스레드 설명 줄.
+- 기간: run 직전 **기기 시각**(`date +%s.%3N`)을 `logcat -T`에 넣는다 (호스트 시계와 어긋나도 됨). `logcat -t N`은 uid로 거르기 전 줄 수라서 쓰지 않고 다 받아 자른다 (앱 로그 1.7MB ≈ 0.1초).
+- 결과: run마다 `logcat.txt`(인증 헤더·토큰·secrets 가림), 크래시·ANR이 있으면 `crash.txt`. 실패 요약은 원인 바로 아래 크래시·ANR·실패한 요청, 화면 구조 뒤에 오류(E) 로그를 숫자만 다른 줄끼리 묶어 많은 순. 통과했는데 크래시가 있었으면 경고. 실행 기록에 `"crash": true`.
+- 네트워크: 앱의 OkHttp `HttpLoggingInterceptor` 줄(`--> GET url`, `<-- 401 url (190ms)`, `<-- HTTP FAILED`)을 읽는다. 시범 앱은 debug 빌드만 켠다 → release에서는 "네트워크 로그 없음"으로 알린다. mitmproxy(인증서 설치·release 앱의 network security config)는 필요해질 때.
+- 난독화: release는 R8 → `<module>/build/outputs/mapping/<variant>/mapping.txt`가 있으면 SDK `retrace`로 스택을 복원 (첫 줄 "Waiting for stack-trace input..."은 버림). mapping이 설치된 APK와 같은 빌드인지는 보지 않는다 (build-app 직후가 아니면 어긋날 수 있음).
+- 확인: `am crash <앱>`으로 일부러 크래시 → `qakit android logs --crash`에 스택. 일부러 실패하는 시나리오로 결과 폴더에 `logcat.txt`.
+
