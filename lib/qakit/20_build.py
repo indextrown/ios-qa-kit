@@ -64,9 +64,30 @@ def ensure_simscreen():
     return ensure_swift_tool("simscreen")
 
 
+def screen_jpeg(udid, width=440):
+    """시뮬레이터 화면 한 장 → 작은 JPEG 바이트 (simscreen, 안 되면 simctl 스크린샷). 못 읽으면 None."""
+    tmp = Path(tempfile.mkstemp(suffix=".jpg")[1])
+    try:
+        tool = ensure_simscreen()
+        if tool and run([str(tool), udid, "--once", str(tmp), "--width", str(width)], check=False).returncode == 0:
+            return tmp.read_bytes()
+        if run(["xcrun", "simctl", "io", udid, "screenshot", "--type=jpeg", str(tmp)], check=False).returncode == 0:
+            return tmp.read_bytes()
+        return None
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def screens_alike(a, b, ratio=0.02):
+    """두 화면이 사실상 같은가 — JPEG 크기 차이가 ratio 이하 (qakit ui의 '화면이 바뀜' 판단과 같은 기준:
+    시계·커서 깜박임은 2% 미만, 화면 전환은 3~51%)."""
+    return abs(len(a) - len(b)) <= max(len(a), len(b)) * ratio
+
+
 class TouchHelper:
     """시뮬레이터에 터치 신호를 직접 넣는 도우미(simtouch)를 계속 띄워 두고 한 줄 명령을 보낸다 (AI QA 직접 터치).
-    좌표는 화면 대비 0~1. XCUITest가 켠 앱은 이 신호를 무시하므로, 앱은 simctl로 켜고 실행기는 붙기만 해야 한다."""
+    좌표는 화면 대비 0~1. XCUITest가 켠 앱에서도 보통 먹히지만, 조용히 무시될 때가 있어(멈춘 실행기, Device Hub에
+    띄운 적 없는 새 시뮬레이터 — docs/private-apis.md) 쓰는 쪽이 누른 뒤 화면 변화를 본다."""
 
     def __init__(self, udid, tool=None, ready_timeout=15):
         self.udid, self.tool, self.ready_timeout = udid, tool, ready_timeout

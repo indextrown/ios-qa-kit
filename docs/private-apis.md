@@ -224,7 +224,19 @@ sendWithMessage:freeWhenDone:completionQueue:completion:          (보내기)
 - 디지타이저 함수가 없으면 `IndigoHIDMessageForMouseNSEvent`(마우스 방식)로.
 - 연결 직후 첫 입력은 버려질 수 있어 0.25초 기다립니다.
 - 상주(`TouchHelper`가 계속 띄워 둠)로 한 번에 약 90ms. 매번 새로 띄우면 부품 로딩 때문에 약 0.85초.
-- **알려진 것**: 한 번은 상주 실행기(XCUITest가 앱을 켠 상태)가 붙어 있을 때 터치가 모두 무시됐습니다. 같은 날 새로 띄운 실행기·XCUITest 탭 뒤에도 다시 확인하니 매번 먹혔습니다. 그때 실행기가 응답 없이 멈춰 있어서, 원인은 확정하지 못했습니다. 그래서 qakit은 탭 뒤 1초 안에 화면이 안 바뀌면 경고하고, `expect`로 확인하거나 `via: xcuitest`로 XCUITest 탭을 쓸 수 있게 해 둡니다. `qakit touch`는 이 일 때문에 실행기가 앱을 켜 두었으면 보수적으로 경고합니다.
+- **답이 `ok`여도 조용히 무시될 수 있습니다.** 지금까지 본 것 (Xcode 27.0):
+
+  | 상황 | 결과 |
+  |---|---|
+  | 공용 시뮬레이터(Device Hub에 띄워 둠), 상주 실행기(XCUITest)가 켠 앱 — AI 직접 터치 H3·H4 검증 | ✅ 탭·끌기·길게 누르기 |
+  | 같은 기기, 실행기가 켜고 XCUITest로 누른 뒤 | ✅ |
+  | 같은 기기, 오래 떠 있던 실행기 (화면 구조 읽기가 60초 넘게 멈춘 상태) | ❌ 모두 무시 |
+  | **새로 만든 시뮬레이터 (Device Hub에 한 번도 띄우지 않음)** — 실행기가 켠 앱 / `simctl`로 켠 앱 / 실행기 없음 | ❌ 모두 무시 (탭·끌기·150ms 탭, 전후 화면이 바이트까지 같음) |
+
+  즉 **"XCUITest가 켠 앱이라서" 무시되는 것은 아닙니다.** 새 기기에서 무시되는 이유는 아직 모릅니다 (Device Hub에 띄운 적이 있는지가 의심되지만, 확인하려면 사용자 화면의 Device Hub 대상을 바꿔야 해서 미확인).
+- 그래서 qakit은 **누른 뒤 화면이 바뀌었는지**로 판단합니다:
+  - AI 직접 터치: 탭 뒤 1초 안에 화면이 안 바뀌면 알림, `expect`를 주면 그 자리에서 실패, `via: xcuitest`로 XCUITest 탭.
+  - `qakit touch`: 누르기 전후 화면을 비교(JPEG 크기 차이 2% 이하 = 그대로)해 그대로면 알리고, 아는 원인(멈춘 실행기 → `qakit serve --stop`, 새 기기 → `qakit show`로 띄운 뒤 다시)을 안내합니다.
 
 ## 5. 자동 ID (AutoID) — 비공개 API는 아니지만 공식 지원 밖
 
@@ -273,7 +285,7 @@ strings -a "$SK" | grep -E "register.*Callbacks|unregister|framebufferSurface|In
 | 프레임 콜백 (없음·형식 바뀜·끊김) | 콜백 없이 화면만 바뀜 | 세 번 쌓이면 **seed 폴링**으로 (`SIMSCREEN_POLL=1`로 처음부터) |
 | 하드웨어 JPEG | 결과가 JPEG가 아님 | CoreGraphics + ImageIO로 (`SIMSCREEN_NO_HW=1`) |
 | SimulatorKit 위치·HID 함수·메시지 구조 | simtouch 시작 실패 | AI 직접 터치가 **XCUITest 탭**으로 |
-| 터치가 조용히 무시됨 | 탭 뒤 화면 변화 없음 | 1초 안에 변화가 없으면 경고, `expect`로 실패 처리, `via: xcuitest` |
+| 터치가 조용히 무시됨 | 답은 `ok`인데 화면 변화 없음 | AI 직접 터치: 1초 안에 변화가 없으면 경고, `expect`로 실패 처리, `via: xcuitest`. `qakit touch`: 전후 화면 비교 후 원인 안내 |
 | AutoID 주입 | ID가 안 붙음 | `autoid: embedded`(앱에 AutoID.swift를 넣는 방식) |
 
 - CI(GitHub Actions, macOS)가 simscreen·simtouch가 **컴파일되는지** 확인합니다. 실제 동작(시뮬레이터)은 위 순서로 손으로 확인합니다.

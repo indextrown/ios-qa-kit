@@ -427,16 +427,7 @@ class McpSession:
             return None
         if self.ws.platform == "android":
             return android_shot_jpeg(self.udid, width)
-        tmp = Path(tempfile.mkstemp(suffix=".jpg")[1])
-        try:
-            tool = ensure_simscreen()
-            if tool and run([str(tool), self.udid, "--once", str(tmp), "--width", str(width)], check=False).returncode == 0:
-                return tmp.read_bytes()
-            if run(["xcrun", "simctl", "io", self.udid, "screenshot", "--type=jpeg", str(tmp)], check=False).returncode == 0:
-                return tmp.read_bytes()
-            return None
-        finally:
-            tmp.unlink(missing_ok=True)
+        return screen_jpeg(self.udid, width)
 
     # ── 직접 터치 (tapflow 방식) ──
     def parsed_screen(self):
