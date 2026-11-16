@@ -1293,3 +1293,44 @@ def cmd_android_logs(args):
     if summary and not args.grep:
         print("\n── 요약")
         print(mask("\n".join(summary)))
+
+
+class AndroidTouch:
+    """AI 직접 터치용 (TouchHelper와 같은 꼴: tap(x, y)·send("tap|press|swipe …")). 좌표는 0~1."""
+
+    def __init__(self, serial):
+        self.serial = serial
+
+    def tap(self, x, y):
+        return android_touch(self.serial, "tap", [x, y], 0.06)
+
+    def send(self, cmd, timeout=None):
+        p = cmd.split()
+        try:
+            if p[0] == "tap":
+                return android_touch(self.serial, "tap", [float(p[1]), float(p[2])], 0.06)
+            if p[0] == "press":
+                return android_touch(self.serial, "press", [float(p[1]), float(p[2])], float(p[3]))
+            if p[0] == "swipe":
+                return android_touch(self.serial, "swipe", [float(v) for v in p[1:5]], float(p[5]))
+        except (IndexError, ValueError):
+            pass
+        return False, f"모르는 터치 명령: {cmd}"
+
+
+def android_shot_jpeg(serial, width=440):
+    """작은 JPEG 한 장 (screencap PNG → sips로 줄여 JPEG). 실패하면 None."""
+    r = subprocess.run([require_tool("adb"), "-s", serial, "exec-out", "screencap", "-p"], capture_output=True, timeout=30)
+    if r.returncode != 0 or not r.stdout.startswith(b"\x89PNG"):
+        return None
+    src = Path(tempfile.mkstemp(suffix=".png")[1])
+    dst = src.with_suffix(".jpg")
+    try:
+        src.write_bytes(r.stdout)
+        ok_ = subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "70", "--resampleWidth", str(width),
+                              str(src), "--out", str(dst)], capture_output=True).returncode == 0
+        return dst.read_bytes() if ok_ and dst.exists() else None
+    finally:
+        src.unlink(missing_ok=True)
+        dst.unlink(missing_ok=True)
+

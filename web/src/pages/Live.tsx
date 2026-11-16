@@ -5,6 +5,7 @@ import { SaveScenario } from "../components/SaveScenario";
 import { StepList } from "../components/StepList";
 import { RunScenario } from "../components/RunScenario";
 import { AiActivity } from "../components/AiActivity";
+import { AiChat } from "../components/AiChat";
 import { RobotCursor } from "../components/RobotCursor";
 import { cx, store, stored } from "../lib/util";
 import { Badge, Button, Card, Empty, Mono, PageHeader } from "../components/ui";
@@ -464,8 +465,9 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
             <SaveScenario job={job} refreshJob={refreshJob} stepsCount={steps?.steps.length ?? 0} />
           </div>
           <div className={cx("space-y-3", tab !== "ai" && "hidden")}>
+            <AiChat />
             <AiActivity onBusy={onAiBusy} />
-            {!ai.active && <div className="px-1 text-[12px] text-sub">AI(Claude Code·Codex)가 qakit 도구로 조작하면 여기에 활동이 쌓입니다 — <a href="#/ai" className="text-link hover:underline">AI QA에서 시작</a></div>}
+            <div className="px-1 text-[12px] text-sub">목표 한 줄로 오래 맡기려면 <a href="#/ai" className="text-link hover:underline">AI QA</a></div>
           </div>
         </div>
       </div>
@@ -473,7 +475,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   );
 }
 
-const TABS = [["act", "조작"], ["run", "시나리오 실행"], ["save", "저장"], ["ai", "AI"]] as const;
+const TABS = [["act", "조작"], ["run", "시나리오 실행"], ["save", "저장"], ["ai", "AI 채팅"]] as const;
 type Tab = (typeof TABS)[number][0];
 
 function Sep() { return <span className="mx-1.5 my-0.5 h-px bg-line" />; }
