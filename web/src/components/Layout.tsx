@@ -99,7 +99,7 @@ export function Layout({ active, info, running, crumbs, children }:
               <span className="relative flex h-2 w-2"><span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ok opacity-60" /><span className="relative inline-flex h-2 w-2 rounded-full bg-ok" /></span>
               실행 중</a>}
             <ThemeSwitch />
-            <a href="https://github.com/indextrown/ios-qa-kit#readme" target="_blank" rel="noreferrer" title="qakit 문서 (README)" className="rounded-md p-1.5 text-sub hover:bg-muted hover:text-fg"><BookOpen className="h-4 w-4" /></a>
+            <a href="https://github.com/indextrown/qa-kit#readme" target="_blank" rel="noreferrer" title="qakit 문서 (README)" className="rounded-md p-1.5 text-sub hover:bg-muted hover:text-fg"><BookOpen className="h-4 w-4" /></a>
           </div>
         </header>
         <main className="min-w-0 flex-1 overflow-auto">

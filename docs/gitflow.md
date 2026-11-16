@@ -3,7 +3,7 @@
 이 저장소는 Git Flow 브랜치 모델을 쓴다. 명령은 `git-flow-next`(git-flow의 현재 관리판)로 실행한다.
 문서 구성과 설명은 marine-algorithms 저장소의 `docs/gitflow.md`를 따랐고, 이 저장소에 맞게 **CI 대신 직접 돌리는 머지 전 확인 목록**을 더했다.
 
-- 저장소: https://github.com/indextrown/ios-qa-kit (공개, 기본 브랜치 `develop`)
+- 저장소: https://github.com/indextrown/qa-kit (공개, 기본 브랜치 `develop`)
 
 - 처음이면 [1부](#1부-처음-쓰는-사람을-위한-안내)를 위에서부터 읽는다.
 - 쓰는 법을 알면 [2부](#2부-참고)에서 명령을 찾는다.
@@ -258,7 +258,7 @@ Homebrew의 `git-flow`(원조, 2026-12-19 비활성화 예정)나 `git-flow-avh`
 git-flow 설정은 `.git/config`에 저장되고 커밋되지 않는다. **저장소를 새로 받은 컴퓨터마다** 한 번 실행한다.
 
 ```sh
-git clone https://github.com/indextrown/ios-qa-kit.git && cd ios-qa-kit
+git clone https://github.com/indextrown/qa-kit.git && cd qa-kit
 git switch main && git pull
 git flow init --preset=classic --defaults          # main, develop, feature/ … 기본 이름
 git config gitflow.branch.release.tagprefix v      # 태그를 0.1.0 이 아니라 v0.1.0 으로

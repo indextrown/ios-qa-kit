@@ -1,9 +1,9 @@
 ---
-name: ios-qa-kit
-description: iOS 앱의 QA 시나리오를 XCUITest로 만들고, 돌리고, 고친다. 앱 코드를 수정하지 않고 시뮬레이터에서 자동으로 붙는 accessibilityIdentifier(타입.프로퍼티 경로)와 qakit CLI를 쓴다. 사용자가 "이 화면 테스트 만들어줘", "QA 시나리오 자동화", "UI 테스트 돌려줘", "XCUITest 작성", "로그인부터 ○○까지 확인하는 테스트", "테스트 깨진 거 고쳐줘", "앱 바뀌었는데 테스트 최신화"처럼 요청하거나, 폴더에 qakit.yml이 있거나, 스킬을 직접 호출할 때(Codex `$ios-qa-kit`, Claude Code `/ios-qa-kit`) 사용한다. 스크린샷을 보며 앱을 직접 조작하는 computer use QA 대신 이 스킬로 재실행 가능한 테스트를 남긴다. 앱 기능 개발이나 단위 테스트에는 쓰지 않는다.
+name: qa-kit
+description: iOS 앱의 QA 시나리오를 XCUITest로 만들고, 돌리고, 고친다. 앱 코드를 수정하지 않고 시뮬레이터에서 자동으로 붙는 accessibilityIdentifier(타입.프로퍼티 경로)와 qakit CLI를 쓴다. 사용자가 "이 화면 테스트 만들어줘", "QA 시나리오 자동화", "UI 테스트 돌려줘", "XCUITest 작성", "로그인부터 ○○까지 확인하는 테스트", "테스트 깨진 거 고쳐줘", "앱 바뀌었는데 테스트 최신화"처럼 요청하거나, 폴더에 qakit.yml이 있거나, 스킬을 직접 호출할 때(Codex `$qa-kit`, Claude Code `/qa-kit`) 사용한다. 스크린샷을 보며 앱을 직접 조작하는 computer use QA 대신 이 스킬로 재실행 가능한 테스트를 남긴다. 앱 기능 개발이나 단위 테스트에는 쓰지 않는다.
 ---
 
-# ios-qa-kit: AI가 XCUITest를 만들고 돌리는 방법
+# qa-kit: AI가 XCUITest를 만들고 돌리는 방법
 
 목표는 **한 번 만들면 토큰 없이 계속 돌릴 수 있는 테스트**를 남기는 것이다. 화면은 스크린샷이 아니라 텍스트(ID 상수, 화면 덤프)로 파악한다.
 
@@ -15,7 +15,7 @@ description: iOS 앱의 QA 시나리오를 XCUITest로 만들고, 돌리고, 고
 ## 절대 규칙
 
 1. **대상 앱 레포를 수정하지 않는다.** 테스트·Page·노트는 작업공간에만 쓴다. ID가 없으면 앱에 ID를 추가하지 말고 라벨이나 좌표로 찾는다.
-2. **도구 레포(ios-qa-kit)에 앱 전용 코드를 넣지 않는다.** 범용 기능이 필요하면 사용자에게 제안한다.
+2. **도구 레포(qa-kit)에 앱 전용 코드를 넣지 않는다.** 범용 기능이 필요하면 사용자에게 제안한다.
 3. **되돌릴 수 없는 동작은 사용자 승인 없이 테스트에 넣지 않는다.** 회원탈퇴, 결제, 데이터 삭제, 실제 메시지·신고 전송, 다른 사용자에게 보이는 변경 등. 승인받으면 `NOTES.md`에 날짜와 함께 기록한다.
 4. **비밀값은 `QASecrets`로만 읽고** 출력·로그·note·테스트 이름에 넣지 않는다. secrets.txt를 직접 열어 값을 읽지 않는다 (키 확인은 `qakit doctor`).
 5. **`sleep` 금지.** `waitForExistence`, `QAWait.forAny`, `BasePage.waitUntilDisplayed`를 쓴다.

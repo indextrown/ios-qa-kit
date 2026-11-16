@@ -893,7 +893,7 @@ def mcp_loop(session, tools, send):
 
 def mcp_install(ws, args):
     """AI 도구에 qakit MCP 서버를 등록한다. Claude Code: 작업공간 .mcp.json (이 폴더에서 연 세션). Codex: codex mcp add."""
-    command = str(KIT_DIR / "bin" / "qakit")   # 지금 실행 중인 qakit (설치본이면 ~/ios-qa-kit/bin/qakit)
+    command = str(KIT_DIR / "bin" / "qakit")   # 지금 실행 중인 qakit (설치본이면 ~/qa-kit/bin/qakit)
     margs = ["-w", str(ws.root), "mcp"]
     if not (args.claude or args.codex):
         fail("어디에 등록할지 고르세요", "qakit mcp install --claude  또는  --codex")
