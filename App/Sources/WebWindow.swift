@@ -1,5 +1,5 @@
 import AppKit
-import UniformTypeIdentifiers
+import Combine
 import WebKit
 
 /// 웹 UI를 담는 창. 작업공간 창(서버 있음)과 그 창에서 새 탭으로 연 결과 파일 창(서버 없음)이 같이 쓴다.
@@ -22,6 +22,7 @@ class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate,
         }()
         web = WKWebView(frame: NSRect(origin: .zero, size: size), configuration: cfg)
         if #available(macOS 13.3, *) { web.isInspectable = true }
+        web.pageZoom = AppState.shared.zoom
         window = NSWindow(contentRect: NSRect(origin: .zero, size: size),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         super.init()
@@ -35,7 +36,10 @@ class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate,
         if let autosave, !window.setFrameUsingName(autosave) { window.center() }
         if let autosave { window.setFrameAutosaveName(autosave) }
         if autosave == nil { window.center() }
+        zoomSub = AppState.shared.$zoom.sink { [weak self] z in self?.web.pageZoom = z }
     }
+
+    private var zoomSub: AnyCancellable?
 
     func show() {
         window.makeKeyAndOrderFront(nil)
@@ -230,9 +234,56 @@ final class WorkspaceWindow: WebWindow {
         window.tabbingMode = .disallowed
         server.onExit = { [weak self] log in
             self?.origin = nil
+            self?.busyText = nil
             self?.showStatus(title: "qakit ui 서버가 멈췄습니다", detail: log, retry: true)
         }
         startServer()
+    }
+
+    private var token: String?
+    private var poll: Timer?
+    /// 지금 도는 것 ("시나리오 실행 중: home-01" 등). 없으면 nil
+    private(set) var busyText: String? {
+        didSet { AppState.shared.busy[path] = busyText }
+    }
+
+    /// 서버의 /api/busy를 3초마다 (메뉴 막대·닫기 전 확인용). 토큰은 헤더로.
+    private func startPolling() {
+        poll?.invalidate()
+        poll = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.checkBusy() }
+        checkBusy()
+    }
+
+    func checkBusy(sync: Bool = false) {
+        guard let o = origin, let token, let url = URL(string: "/api/busy", relativeTo: o) else { busyText = nil; return }
+        var req = URLRequest(url: url, timeoutInterval: 2)
+        req.setValue(token, forHTTPHeaderField: "X-Qakit-Token")
+        let sem = DispatchSemaphore(value: 0)
+        URLSession.shared.dataTask(with: req) { [weak self] data, _, _ in
+            defer { sem.signal() }
+            struct Busy: Decodable { let run: Bool; let runArgs: [String]?; let ai: Bool; let aiGoal: String?; let record: Bool }
+            let b = data.flatMap { try? JSONDecoder().decode(Busy.self, from: $0) }
+            var parts: [String] = []
+            if let b {
+                if b.run { parts.append("시나리오 실행 중" + ((b.runArgs?.dropFirst().first).map { ": \($0)" } ?? "")) }
+                if b.ai { parts.append("AI 작업 중" + (b.aiGoal.map { ": \($0.prefix(30))" } ?? "")) }
+                if b.record { parts.append("녹화 중") }
+            }
+            let text = parts.isEmpty ? nil : parts.joined(separator: " · ")
+            DispatchQueue.main.async { if self?.busyText != text { self?.busyText = text } }
+        }.resume()
+        if sync { _ = sem.wait(timeout: .now() + 2) }
+    }
+
+    /// 도는 중이면 닫기 전에 묻는다 (설정에서 끌 수 있음)
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        guard AppState.shared.confirmWhenBusy, let b = busyText else { return true }
+        let a = NSAlert()
+        a.messageText = "\(window.title) — \(b)"
+        a.informativeText = "창을 닫으면 서버와 함께 멈춥니다."
+        a.addButton(withTitle: "닫기")
+        a.addButton(withTitle: "취소")
+        return a.runModal() == .alertFirstButtonReturn
     }
 
     private func startServer() {
@@ -242,8 +293,10 @@ final class WorkspaceWindow: WebWindow {
             switch result {
             case .success(let url):
                 var o = URLComponents(url: url, resolvingAgainstBaseURL: false)!
+                self.token = o.queryItems?.first { $0.name == "token" }?.value
                 o.path = ""; o.query = nil
                 self.origin = o.url
+                self.startPolling()
                 self.web.load(URLRequest(url: url))
             case .failure(let e):
                 self.showStatus(title: "qakit ui를 켜지 못했습니다", detail: e.text, retry: true)
@@ -261,6 +314,8 @@ final class WorkspaceWindow: WebWindow {
 
     override func windowWillClose(_ notification: Notification) {
         super.windowWillClose(notification)
+        poll?.invalidate()
+        busyText = nil
         server.stop()
         onClose?(self)
     }

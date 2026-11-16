@@ -26,6 +26,8 @@ struct LauncherView: View {
     @ObservedObject var recents: Recents
     let open: (String) -> Void
     let openFolder: () -> Void
+    var settings: (() -> Void)? = nil
+    @ObservedObject var state = AppState.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -35,6 +37,14 @@ struct LauncherView: View {
                     .font(.callout).foregroundColor(Kit.dir == nil ? .red : .secondary)
             }
             .padding(.horizontal, 28).padding(.top, 36).padding(.bottom, 18)
+
+            if state.problems > 0 {
+                Button { settings?() } label: {
+                    Label("필수 도구 \(state.problems)개가 없습니다 — 환경 점검 보기", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout).foregroundColor(.orange)
+                }
+                .buttonStyle(.plain).padding(.horizontal, 28).padding(.bottom, 12)
+            }
 
             Text("최근 작업공간").font(.subheadline.weight(.semibold)).foregroundColor(.secondary)
                 .padding(.horizontal, 28).padding(.bottom, 6)
