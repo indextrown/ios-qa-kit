@@ -425,6 +425,13 @@ def serve_ensure(ws, udid):
         elif not serve_alive(st):
             why = "응답 없음"
         if why is None:
+            if st.get("platform") == "android":
+                # 비밀값은 실행기가 시작할 때 받는다 → 그 뒤 secrets.txt를 고쳐도 옛 값으로 돌던 문제 (iOS는 매번 파일을 읽음).
+                # 실행마다 지금 값을 다시 보낸다
+                try:
+                    serve_request(st, "/config", {"secrets": ws.secrets()}, timeout=10)
+                except (ServeTimeout, ConnectionError):
+                    pass
             return st
         info(f"상주 실행기를 다시 띄웁니다: {why}")
         serve_stop(udid, quiet=True)
