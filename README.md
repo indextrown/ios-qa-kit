@@ -126,6 +126,8 @@ qakit ui            # 브라우저가 열립니다. 끄려면 Ctrl+C
 
 `127.0.0.1`에만 열립니다. 자세히: [docs/web-ui.md](docs/web-ui.md)
 
+맥 앱(미리 보기): `scripts/build-app.sh`로 만든 `dist/QA Kit.app`을 켜면 작업공간을 고르고 같은 웹 UI를 창으로 엽니다 (서버는 앱이 켜고 끔). 자세히: [docs/web-ui.md](docs/web-ui.md#맥-앱-미리-보기)
+
 ## AI와 함께 쓰기
 
 `install-skill`이 Claude Code(`/qa-kit`)와 Codex(`$qa-kit`) 스킬을 설치합니다.

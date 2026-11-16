@@ -20,6 +20,8 @@ class WorkDir(unittest.TestCase):
         with mock.patch.dict(os.environ, {"QAKIT_HOME": ""}):
             with mock.patch.object(q.os, "access", return_value=True):
                 self.assertEqual(q._work_dir(), q.KIT_DIR)          # git 설치: 지금처럼
+                self.assertEqual(q._work_dir(Path("/Applications/QA Kit.app/Contents/Resources/kit")),
+                                 Path.home() / "Library" / "Application Support" / "qakit")   # 앱 번들 안은 쓸 수 있어도 안 씀
             with mock.patch.object(q.os, "access", return_value=False):
                 self.assertEqual(q._work_dir(), Path.home() / "Library" / "Application Support" / "qakit")
 

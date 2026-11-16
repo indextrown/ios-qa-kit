@@ -36,14 +36,16 @@ import qa_readme  # noqa: E402
 ARCHIVE_DIR = Path.home() / ".qakit" / "archive"
 
 
-def _work_dir():
+def _work_dir(kit=None):
     """qakit이 빌드 결과를 쓰는 곳. 도구 폴더(KIT_DIR)는 읽기만 해도 되게 (맥 앱 번들 안에 넣으면 고칠 수 없음 — PLAN "맥 앱(DMG) 설계" D1).
-    QAKIT_HOME이 있으면 거기, 도구 폴더에 쓸 수 있으면(git 설치) 지금처럼 도구 폴더, 아니면 ~/Library/Application Support/qakit."""
+    QAKIT_HOME이 있으면 거기, 도구 폴더에 쓸 수 있으면(git 설치) 지금처럼 도구 폴더, 아니면 ~/Library/Application Support/qakit.
+    앱 번들 안(…/QA Kit.app/Contents/Resources/kit)은 쓸 수 있어도 쓰지 않는다 — 끌어다 놓은 앱은 내 소유라 쓰기가 되지만 서명이 깨진다."""
+    kit = kit or KIT_DIR
     env = os.environ.get("QAKIT_HOME")
     if env:
         return Path(env).expanduser().resolve()
-    if os.access(KIT_DIR, os.W_OK):
-        return KIT_DIR
+    if ".app/Contents/" not in str(kit) and os.access(kit, os.W_OK):
+        return kit
     return Path.home() / "Library" / "Application Support" / "qakit"
 
 
