@@ -38,13 +38,18 @@ final class AppState: ObservableObject {
     struct Check: Decodable, Identifiable {
         let key, name, need, detail, hint: String
         let ok: Bool
+        let unknown: Bool?   // 도구가 제한 시간 안에 답하지 않아 확인 못 함 (없는 것과 다름, 0.58 이전 qakit에는 없음)
         var id: String { key }
+        var isUnknown: Bool { unknown ?? false }
     }
 
     @Published var checks: [Check] = []
     @Published var checking = false
     @Published var checkError: String?
-    var problems: Int { checks.filter { !$0.ok && $0.need == "필수" }.count }
+    /// 없는 필수 도구 (확인 못 한 것은 빼고)
+    var problems: Int { checks.filter { !$0.ok && !$0.isUnknown && $0.need == "필수" }.count }
+    /// 확인 못 한 필수 항목 (시뮬레이터 서비스가 처음 뜰 때 등 — 다시 점검하면 대개 풀린다)
+    var unknowns: Int { checks.filter { $0.isUnknown && $0.need == "필수" }.count }
 
     func runChecks(done: (() -> Void)? = nil) {
         guard !checking, let qakit = Kit.qakit else { return }

@@ -52,6 +52,12 @@ struct LauncherView: View {
                         .font(.callout).foregroundColor(.orange)
                 }
                 .buttonStyle(.plain).padding(.horizontal, 28).padding(.bottom, 12)
+            } else if state.unknowns > 0 {
+                Button { settings?(.check) } label: {
+                    Label("환경 점검 \(state.unknowns)개 항목을 확인하지 못했습니다 — 환경 점검 보기", systemImage: "questionmark.circle.fill")
+                        .font(.callout).foregroundColor(.orange)
+                }
+                .buttonStyle(.plain).padding(.horizontal, 28).padding(.bottom, 12)
             }
 
             Text("최근 작업공간").font(.subheadline.weight(.semibold)).foregroundColor(.secondary)

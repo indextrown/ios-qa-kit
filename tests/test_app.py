@@ -31,7 +31,10 @@ class DoctorSystem(unittest.TestCase):
         self.assertTrue({"python", "xcode", "simulator", "xcodegen", "git", "claude", "java", "adb"} <= keys)
         self.assertTrue(all(r["need"] in ("필수", "AI", "안드로이드") for r in d["checks"]))
         self.assertTrue(next(r for r in d["checks"] if r["key"] == "python")["ok"])
-        self.assertEqual(d["problems"], sum(1 for r in d["checks"] if not r["ok"] and r["need"] == "필수"))
+        # 바깥 도구가 멈추면(CI의 simctl 등) 그 항목은 unknown — '없음'(problems)과 따로 센다
+        required = [r for r in d["checks"] if r["need"] == "필수" and not r["ok"]]
+        self.assertEqual(d["problems"], sum(1 for r in required if not r["unknown"]))
+        self.assertEqual(d["unknown"], sum(1 for r in required if r["unknown"]))
 
 
 if __name__ == "__main__":

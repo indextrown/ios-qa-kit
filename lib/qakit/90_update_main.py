@@ -211,6 +211,8 @@ def main():
     p = sub.add_parser("doctor", help="환경 점검")
     p.add_argument("--system", action="store_true", help="작업공간 없이 이 맥의 도구만 (Xcode·xcodegen·AI·안드로이드)")
     p.add_argument("--json", action="store_true", help="--system 결과를 JSON으로 (맥 앱이 읽음)")
+    p.add_argument("--timeout", type=int, default=DOCTOR_TIMEOUT,
+                   help=f"바깥 도구(xcodebuild·simctl 등) 하나를 기다리는 최대 초 (기본 {DOCTOR_TIMEOUT}) — 넘기면 그 항목만 '확인 못 함'")
     p.set_defaults(func=cmd_doctor)
 
     p = sub.add_parser("build-app", help="대상 앱 빌드 + 설치 + 권한 허용")

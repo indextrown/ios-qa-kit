@@ -2,8 +2,8 @@
 # bin/qakit이 lib/qakit/*.py를 이름 순서대로 한 이름 공간에 읽는다 (따로 import하지 않음).
 # ─────────────────────────────── 시뮬레이터 ───────────────────────────────
 
-def simulator_udid(name_or_udid):
-    data = json.loads(run(["xcrun", "simctl", "list", "devices", "available", "-j"]).stdout)
+def simulator_udid(name_or_udid, timeout=None):
+    data = json.loads(run(["xcrun", "simctl", "list", "devices", "available", "-j"], timeout=timeout).stdout)
     candidates = []
     for runtime, devices in data["devices"].items():
         if "iOS" not in runtime:
@@ -89,8 +89,8 @@ def device_busy(udid):
     return None
 
 
-def app_installed(udid, bundle_id):
-    r = run(["xcrun", "simctl", "get_app_container", udid, bundle_id], check=False)
+def app_installed(udid, bundle_id, timeout=None):
+    r = run(["xcrun", "simctl", "get_app_container", udid, bundle_id], check=False, timeout=timeout)
     return r.returncode == 0
 
 
