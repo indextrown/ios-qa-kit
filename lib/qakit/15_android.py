@@ -493,7 +493,8 @@ def android_launch(serial, package, fresh=True):
         fail(f"{package}가 기기에 없거나 실행할 화면이 없습니다.", "qakit build-app")
     if fresh:
         adb(serial, "shell", "am", "force-stop", package, check=False)
-    r = adb(serial, "shell", "am", "start", "-W", "-n", comp[0], check=False, timeout=60)
+    # 다른 앱 화면(브라우저 로그인 등)이 이 앱 작업 위에 남아 있으면 force-stop으로 안 닫힌다 → 작업째 비우고 시작
+    r = adb(serial, "shell", "am", "start", "-W", "--activity-clear-task", "-n", comp[0], check=False, timeout=60)
     if "Error" in (r.stdout + r.stderr):
         fail(f"앱 실행 실패: {comp[0]}", (r.stdout + r.stderr).strip()[-300:])
 
@@ -539,3 +540,153 @@ def android_doctor_ws(ws, check, problem_count):
     if problem_count():
         fail(f"문제 {problem_count()}개", "위 → 안내대로 고친 뒤 다시 qakit doctor")
     ok("모두 정상")
+
+
+# ─────────────────────────────── A3: 상주 실행기 (AndroidRunner, UiAutomator2) ───────────────────────────────
+# iOS 상주 실행기와 같은 HTTP 명령(/ping /step /dump /run /launch /reset /stop). 기기 안 127.0.0.1:7912에 열고
+# adb forward로 붙는다. 그래서 serve_request·run_via_serve·qakit do는 그대로 쓴다.
+
+ANDROID_RUNNER_DIR = KIT_DIR / "AndroidRunner"
+ANDROID_RUNNER_BUILD = KIT_DIR / ".build" / "android-runner"
+ANDROID_RUNNER_DEVICE_PORT = 7912
+ANDROID_RUNNER_TEST = "com.qakit.runner.test/androidx.test.runner.AndroidJUnitRunner"
+
+
+def android_runner_hash():
+    """실행기 소스 해시 (빌드·설치·상주 실행기 재시작 판단)."""
+    h = hashlib.sha1()
+    for f in sorted(ANDROID_RUNNER_DIR.rglob("*")):
+        rel = f.relative_to(ANDROID_RUNNER_DIR)
+        if f.is_file() and not ({"build", ".gradle"} & set(rel.parts)):
+            h.update(str(rel).encode())
+            h.update(f.read_bytes())
+    return h.hexdigest()
+
+
+def ensure_android_runner_built():
+    """실행기 APK 두 개(빈 앱 + instrumentation)를 소스가 바뀌었을 때만 빌드한다. → (app_apk, test_apk)"""
+    app_apk, test_apk = ANDROID_RUNNER_BUILD / "runner.apk", ANDROID_RUNNER_BUILD / "runner-test.apk"
+    stamp = ANDROID_RUNNER_BUILD / "hash"
+    h = android_runner_hash()
+    if app_apk.exists() and test_apk.exists() and stamp.exists() and stamp.read_text() == h:
+        return app_apk, test_apk
+    if not android_java_home() or not android_sdk_root():
+        fail("안드로이드 실행기를 빌드할 JDK·SDK가 없습니다.", "qakit android setup")
+    info("안드로이드 실행기 빌드 중 (처음에는 Gradle을 받느라 몇 분 걸립니다)…")
+    r = subprocess.run(["./gradlew", "-q", "--console=plain", ":runner:assembleDebug", ":runner:assembleDebugAndroidTest"],
+                       cwd=ANDROID_RUNNER_DIR, env=android_env(), capture_output=True, text=True)
+    if r.returncode != 0:
+        fail("안드로이드 실행기 빌드 실패", ((r.stdout or "") + (r.stderr or ""))[-1500:])
+    out = ANDROID_RUNNER_DIR / "runner" / "build" / "outputs" / "apk"
+    ANDROID_RUNNER_BUILD.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(out / "debug" / "runner-debug.apk", app_apk)
+    shutil.copyfile(out / "androidTest" / "debug" / "runner-debug-androidTest.apk", test_apk)
+    stamp.write_text(h)
+    ok("안드로이드 실행기 빌드됨")
+    return app_apk, test_apk
+
+
+def ensure_android_runner_installed(serial):
+    app_apk, test_apk = ensure_android_runner_built()
+    h = android_runner_hash()
+    stamp = SERVE_DIR / f"{serial}.android-runner"
+    installed = adb(serial, "shell", "pm", "list", "instrumentation", check=False).stdout
+    if stamp.exists() and stamp.read_text() == h and "com.qakit.runner.test" in installed:
+        return
+    info("기기에 실행기 설치 중…")
+    for apk in (app_apk, test_apk):
+        r = adb(serial, "install", "-r", "-t", str(apk), check=False, timeout=180)
+        if "Success" not in (r.stdout or ""):
+            fail(f"실행기 설치 실패: {apk.name}", (r.stdout + r.stderr).strip()[-400:])
+    SERVE_DIR.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(h)
+
+
+def android_app_installed(serial, package):
+    return adb(serial, "shell", "pm", "path", package, check=False).stdout.startswith("package:")
+
+
+def android_serve_start(ws, serial, idle=1800, launch=True):
+    """안드로이드 상주 실행기를 띄우고 /ping이 될 때까지 기다린다. iOS serve_start와 같은 상태 파일을 쓴다."""
+    SERVE_DIR.mkdir(parents=True, exist_ok=True)
+    if not ws.package:
+        fail("qakit.yml에 app.packageName이 없습니다.")
+    if not android_app_installed(serial, ws.package):
+        fail(f"기기({serial})에 {ws.package}가 설치되어 있지 않습니다.", "qakit build-app")
+    ensure_android_runner_installed(serial)
+    token = hashlib.sha1(os.urandom(32)).hexdigest()
+    r = adb(serial, "forward", "tcp:0", f"tcp:{ANDROID_RUNNER_DEVICE_PORT}")
+    port = int(r.stdout.strip())
+    log = SERVE_DIR / f"{serial}.log"
+    cmd = [require_tool("adb"), "-s", serial, "shell", "am", "instrument", "-w",
+           "-e", "port", str(ANDROID_RUNNER_DEVICE_PORT), "-e", "token", token, "-e", "package", ws.package,
+           "-e", "idle", str(int(idle)), "-e", "launch", "1" if launch else "0",
+           "-e", "class", "com.qakit.runner.ServeTest", ANDROID_RUNNER_TEST]
+    info("상주 실행기 시작 중 (안드로이드)…")
+    started_at = time.time()
+    with open(log, "w") as out:
+        proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+    probe = {"port": port, "token": token}
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        try:
+            if serve_request(probe, "/ping", timeout=5).get("ok"):
+                break
+        except (ServeTimeout, ConnectionError):
+            pass
+        if proc.poll() is not None:
+            kept = SERVE_DIR / f"{serial}.failed.log"
+            shutil.copyfile(log, kept)
+            tail = "\n   ".join(log.read_text(errors="replace").strip().splitlines()[-12:])
+            fail("상주 실행기가 시작되지 않았습니다. 다시 실행하면 새로 띄웁니다.", f"{tail}\n   전체 로그: {kept}")
+        time.sleep(0.5)
+    else:
+        os.killpg(proc.pid, 15)
+        fail("상주 실행기가 120초 안에 준비되지 않았습니다.", f"로그: {log}")
+    serve_request(probe, "/config", {"secrets": ws.secrets()}, timeout=10)   # 비밀값은 명령줄 대신 요청 본문으로
+    st = {"udid": serial, "platform": "android", "pid": proc.pid, "port": port, "token": token,
+          "workspace": str(ws.root), "bundleId": ws.package, "runnerHash": android_runner_hash(),
+          "attachOnly": not launch, "started": datetime.datetime.now().isoformat(timespec="seconds"), "log": str(log)}
+    serve_state_file(serial).write_text(json.dumps(st, ensure_ascii=False, indent=2))
+    ok(f"상주 실행기 준비됨 (포트 {port}, {time.time() - started_at:.0f}초)")
+    return st
+
+
+def android_format_dump(xml, package, density, activity=None, fragments=None):
+    """실행기가 보낸 uiautomator 형식 XML → qakit 덤프 텍스트 (android_dump_text와 같은 머리말)."""
+    lines, st = android_dump_lines(xml, package, density or 1.0)
+    total, with_id = st["interactive"], st["withId"]
+    header = ["# qakit dump-ui", f"# package: {package}"]
+    if activity:
+        header.append(f"# activity: {activity}")
+    if fragments is not None:
+        header.append(f"# fragments: {' > '.join(fragments) or '-'}")
+    header += [f"# interactive: {total}, with ID: {with_id} ({round(with_id * 100 / total) if total else 100}%)",
+               f"# coords: dp (density {density or 1:g})"]
+    if st["missing"]:
+        header.append("# missing ID: " + ", ".join(st["missing"][:20]))
+    return "\n".join(header + lines) + "\n"
+
+
+def android_convert_response(res):
+    """실행기 응답의 XML(화면 구조, dump: 단계 파일)을 덤프 텍스트로 바꾼다. iOS 응답은 그대로."""
+    if not isinstance(res, dict) or "density" not in res:
+        return res
+    if res.get("xml"):
+        res["dump"] = android_format_dump(res.pop("xml"), res.get("package"), res.get("density"))
+    for k, v in list((res.get("files") or {}).items()):
+        if isinstance(v, str) and v.startswith("@xml "):
+            res["files"][k] = android_format_dump(v[5:], res.get("package"), res.get("density"))
+    return res
+
+
+def android_seen_ids(ws):
+    """안드로이드는 앱 소스에서 ID를 뽑지 않는다 → 저장된 화면 덤프에서 본 ID (coverage용)."""
+    ids = set()
+    files = [ws.results_dir / "ui-dump.txt"] + sorted((ws.results_dir / "dumps").glob("*.txt"))
+    for f in files:
+        try:
+            ids |= {e["id"] for e in ui_parse_dump(f.read_text(encoding="utf-8"))["elements"] if e["id"]}
+        except OSError:
+            pass
+    return ids

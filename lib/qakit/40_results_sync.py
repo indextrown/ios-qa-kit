@@ -560,7 +560,7 @@ def auto_sync(ws):
         return
     AUTO_SYNCED.add(str(ws.root))
     follow_worktree(ws)
-    if ws.sync_mode == "off":
+    if ws.sync_mode == "off" or ws.platform == "android":   # 안드로이드 자동 재빌드는 A4 (build-app)
         return
     changed, why, _ = app_changed(ws)
     if not changed:

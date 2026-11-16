@@ -731,7 +731,8 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 
 ## 안드로이드 지원 설계 (진행 중)
 
-> 상태: A0(설치)·A1(화면 파악) 완료(2026-11-16, Pixel 7 AVD, Android 15 설정 앱으로 확인). 다음은 A2(Compose ID).
+> 상태: A0(설치)·A1(화면 파악)·A3(상주 실행기) 완료(2026-11-16, Pixel 7 AVD, Android 15 설정 앱으로 확인). `qakit run`·`qakit do`·`qakit serve`가 안드로이드에서 동작.
+> 첫 실제 앱 Navigation(mapsea-project)은 Compose만 쓰고 testTag(+testTagsAsResourceId)가 이미 있어 A2는 뒤로 미룬다. 다음은 Navigation으로 검증 → A4(build-app) → A5(logcat).
 > 대상 앱은 XML 뷰와 Compose가 섞인 앱을 전제로 한다. 레포는 이 저장소에 통합하고(`ios-qa-kit` → `qa-kit`), 시나리오·UI·coverage·MCP는 공유, 실행기만 플랫폼별로 둔다.
 
 ### iOS와 대응
@@ -773,8 +774,8 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 |---|---|---|
 | A0 환경 | `qakit android setup/doctor/boot` — JDK·SDK·이미지·AVD 설치, 부팅 대기 | 완료 |
 | A1 화면 파악 | `qakit android screen/dump`(작업공간 없이), 작업공간 `dump-ui`·`doctor` 안드로이드 분기 | 완료 |
-| A2 Compose ID | 소스 삽입 도구 (Kotlin 소스 파싱, `@Composable` 함수의 클릭·입력 요소에 testTag), 빌드 직전 삽입·복원 | 다음 |
-| A3 실행기 | UiAutomator2 instrumentation APK + HTTP, `.qa.yml` 단계 해석 (Kotlin) | |
+| A2 Compose ID | 소스 삽입 도구 (Kotlin 소스 파싱, `@Composable` 함수의 클릭·입력 요소에 testTag), 빌드 직전 삽입·복원 | 보류 (첫 앱은 이미 testTag 있음) |
+| A3 실행기 | UiAutomator2 instrumentation APK + HTTP, `.qa.yml` 단계 해석 (Kotlin) | 완료 |
 | A4 CLI 통합 | `init`(Gradle 탐지)·`build-app`·`run`·`do`·`coverage`·MCP 플랫폼 분기 | |
 | A5 로그·네트워크 | 실패 요약에 앱 패키지만 거른 logcat·크래시 스택. OkHttp 로그 우선, 필요하면 mitmproxy | |
 | A6 라이브 세션 | UI에서 화면 보기·직접 터치 | |
@@ -783,3 +784,17 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 
 - Compose ID 규칙: `화면Composable.요소` 형식으로 할지, 변수·파라미터 이름을 어디서 가져올지 (A2에서 시범 앱으로 정함)
 - 실기기(USB): adb는 같지만 권한(`pm grant`)과 설치 서명 차이 확인 필요
+
+### A3 상주 실행기 (2026-11-16)
+
+| 부분 | 내용 |
+|---|---|
+| 위치 | `AndroidRunner/` (Gradle 9.8.2, AGP 9.5.0 — Navigation과 같은 판). 실행기 본체는 `runner/src/androidTest` |
+| 구조 | 빈 앱 APK + instrumentation APK. `am instrument -w … ServeTest`가 기기 안 127.0.0.1:7912에 HTTP를 열고, qakit은 `adb forward tcp:0`으로 받은 포트로 붙는다. 상태 파일·`serve_request`·`run_via_serve`·`qakit do`는 iOS와 같다 |
+| 화면 읽기 | 접근성 API로 모든 창(`FLAG_RETRIEVE_INTERACTIVE_WINDOWS`)을 직접 읽는다 — 팝업·드롭다운·권한 대화상자 포함, 키보드·상태 표시줄 제외. 조건 한 번 확인 ≈ 20~30ms |
+| 덤프 | 실행기는 uiautomator 형식 XML만 보내고 qakit(`android_convert_response`)이 덤프 텍스트로 바꾼다 → 형식 코드 한 곳 |
+| 시나리오 | `QAScenarioRunner.swift`를 Kotlin으로 옮김 (`Scenario.kt`). 단계·조건·실패 문구가 같아 실패 요약·추천을 그대로 쓴다 |
+| 다른 점 | 글자 입력은 `ACTION_SET_TEXT`(한글 가능, 누른 뒤 입력 포커스 칸에). 앱 실행은 `am start -W --activity-clear-task`(다른 앱 화면이 작업 위에 남는 경우). `pref`는 SharedPreferences(run-as, debuggable 빌드). `hide-keyboard`는 뒤로 가기. 비밀값은 시작 뒤 `/config`로 |
+| 아직 | 실패 영상, `--bench`, 라이브 세션 직접 터치, ID 정적 검사(소스 ID 목록 없음 — coverage는 저장된 덤프에서 본 ID 기준) |
+
+함정: `adb root`·`adb unroot`로 adbd가 재시작되면 실행 중인 실행기의 UiAutomation 연결이 끊긴다 (셸 명령이 빈 결과). 실행기를 다시 띄우면 된다.

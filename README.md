@@ -1328,7 +1328,7 @@ worktree:
 | `qakit sync` | 앱 변경 반영 (재빌드 + ID 재생성 + 테스트 코드 컴파일 확인) |
 | `qakit worktree-update [--check] [--from 브랜치]` | QA 워크트리를 따라갈 브랜치(기본 `develop`)의 최신 커밋으로 (merge, push 안 함. test/run 전에 자동) |
 
-**안드로이드 (미리 보기: 설치·화면 파악까지)**
+**안드로이드 (미리 보기)**
 
 | 명령 | 하는 일 |
 |---|---|
@@ -1338,7 +1338,7 @@ worktree:
 | `qakit android screen [--json]` | 지금 화면의 앱·Activity·Fragment |
 | `qakit android dump [--package P] [-o 파일] [--json]` | 지금 화면 구조를 iOS `dump-ui`와 같은 형식으로 (작업공간 없이) |
 
-`qakit.yml`에 `platform: android`를 적은 작업공간에서는 `qakit doctor`·`qakit dump-ui`가 안드로이드로 동작합니다. 시나리오 실행은 다음 단계입니다 ([설계](docs/PLAN.md#안드로이드-지원-설계-진행-중)).
+`qakit.yml`에 `platform: android`를 적은 작업공간에서는 `qakit doctor`·`dump-ui`·`run`·`do`·`serve`가 안드로이드로 동작합니다 (같은 `.qa.yml` 문법, UiAutomator2 상주 실행기). 앱 빌드·설치(`build-app`), 실패 영상, `--bench`, 라이브 세션은 아직입니다 ([설계](docs/PLAN.md#안드로이드-지원-설계-진행-중)).
 
 **실행·결과**
 
@@ -1406,7 +1406,7 @@ worktree:
 | 외부 SDK가 내부에서 만든 뷰 (예: 지도 SDK의 버튼) | 화면 글자 또는 좌표 |
 | 지도·차트·캔버스처럼 그려지는 영역 | 좌표로 조작, 결과는 그 위의 UI로 확인 |
 | SwiftUI 화면 | `qakit init --worktree`로 만든 QA 워크트리에서만 ID가 붙음 (개발 폴더 소스는 안 건드림). 시스템 기본 뒤로가기·동적 라벨 버튼은 라벨·순서 번호로 |
-| 안드로이드 | 지금은 설치·화면 파악(`qakit android …`, `dump-ui`)까지. 시나리오 실행·Compose 자동 ID는 다음 단계 ([설계](docs/PLAN.md#안드로이드-지원-설계-진행-중)) |
+| 안드로이드 | 시나리오 실행(`run`·`do`)까지 됨. 앱은 직접 설치해 두어야 함(`build-app` 아직), Compose 화면은 앱에 testTag가 있어야 ID로 찾음(없으면 글자로). 실패 영상·`--bench`·라이브 세션은 아직 ([설계](docs/PLAN.md#안드로이드-지원-설계-진행-중)) |
 | 실기기 | `--device`로 시나리오·`--bench`는 된다 ([실기기에서 실행](#실기기에서-실행---device)). 상주 실행기(`qakit serve`·`qakit do`)도 USB·Wi-Fi 모두. Swift 테스트(`qakit test`)와 권한 미리 허용은 아직 시뮬레이터만 |
 
 문제가 생기면: [troubleshooting.md](skills/qa-kit/references/troubleshooting.md)

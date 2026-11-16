@@ -711,9 +711,11 @@ def _cmd_run(ws, args, name):
              + ("CPU + 함수별 CPU (Time Profiler)" if ws.device else
                 "CPU·메모리" + (" + 함수별 CPU(sample)" if profile else "")) + " 기록")
     info(f"시나리오 실행: {scenario.get('name')} ({path.name})")
+    if ws.platform == "android" and (bench or args.no_serve):
+        fail("안드로이드는 상주 실행기로만 실행합니다 (--bench·--no-serve는 아직 iOS만).")
     if not bench and not args.no_serve:
         udid = ws.device["udid"] if ws.device else ensure_booted(ws)
-        if args.serve or serve_ready_for(ws, udid):
+        if args.serve or ws.platform == "android" or serve_ready_for(ws, udid):
             if extra.get("RESET"):
                 serve_stop(udid, quiet=True)   # 재설치로 앱 데이터 경로가 바뀌므로 실행기를 새로 띄운다
             run_via_serve(ws, udid, out, path, scenario, args.timeout)

@@ -445,6 +445,10 @@ def save_ui_dump(ws, args, text):
 
 def reset_app(ws, udid):
     """앱 재설치 + 키체인 초기화 → 처음 설치한 상태 (로그아웃)."""
+    if ws.platform == "android":
+        adb(udid, "shell", "pm", "clear", ws.package)   # 데이터·권한·로그인 상태를 지운다 (재설치와 같은 효과)
+        ok("앱 초기화 (pm clear)")
+        return
     app_path = find_built_app(ws)
     if not app_path:
         fail("재설치할 앱 빌드가 없습니다.", "qakit build-app")
