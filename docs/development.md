@@ -19,12 +19,26 @@ qa-kit/
 ├── lib/qakit/                CLI 본체, 구역별 파일 (Python 3 표준 라이브러리만): 00_base · 10_device · 20_build · 30_setup · 40_results_sync · 50_run_serve · 60_bench · 70_save_do · 80_ui_data · 85_mcp_ai · 86_ui_server · 90_update_main
 ├── AutoID/                   자동 ID 라이브러리 (시뮬레이터 주입용 dylib)
 ├── Sources/QAKit/            테스트용 Swift 라이브러리 (BasePage, QATestCase, QAWait …)
-├── Tools/gen-ids/            앱 소스 → QAID 상수 생성기
+├── ScenarioRunner/           .qa.yml을 실행하는 범용 XCUITest 실행기
+├── AndroidRunner/            안드로이드 실행기 (UiAutomator)
+├── Tools/
+│   ├── gen-ids/              앱 소스 → QAID 상수 생성기
+│   ├── scenario/             .qa.yml 파서·검사, QA 폴더 README 생성
+│   ├── swiftui-ids/          SwiftUI ID 소스 삽입 (SwiftSyntax)
+│   ├── simscreen/            실시간 화면 — CoreSimulator 화면 메모리 + 프레임 콜백 (비공개 API, docs/private-apis.md)
+│   └── simtouch/             직접 터치 — SimulatorKit HID 주입 (비공개 API)
+├── App/                      맥 앱 (Swift: 작업공간 창·서버·설정·업데이트)
+├── web/ → ui/dist/           웹 UI 소스(React) → 빌드 결과(커밋, Node 없이 서빙)
 ├── templates/workspace/      qakit init이 복사하는 작업공간 틀
-├── skills/qa-kit/        AI 스킬 (SKILL.md + references)
-├── scripts/build-autoid.sh
+├── skills/qa-kit/            AI 스킬 (SKILL.md + references)
+├── scripts/
+│   ├── build-autoid.sh       AutoID dylib 빌드
+│   ├── build-app.sh · build-dmg.sh · make-icon.swift   맥 앱·DMG·아이콘
+│   ├── release.sh            develop → main 릴리스 (+ DMG 첨부)
+│   └── sim-probe.swift       시뮬레이터 포트·비공개 프로토콜·프레임 콜백 확인 (Xcode가 바뀌었을 때)
 └── docs/
     ├── PLAN.md               설계·진행 기록
+    ├── private-apis.md       비공개 API (화면 메모리·프레임 콜백·터치 주입, 조사하는 법)
     └── gitflow.md            브랜치 규칙·기여 순서 (Git Flow)
 ```
 
