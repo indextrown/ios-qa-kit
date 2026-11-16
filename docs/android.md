@@ -56,5 +56,5 @@ qakit doctor && qakit build-app && qakit run <시나리오>
 ## 한계
 
 - Compose 화면은 앱에 testTag가 있어야 ID로 찾습니다 (없으면 글자로).
-- 실패 영상, `--bench`는 아직입니다. AI QA·AI 채팅은 됩니다 (직접 터치는 `adb input`, 화면 사진은 `screencap`). 문제 보고 영상은 아직 iOS만.
+- 실패 영상, `--bench`는 아직입니다. AI(대화·맡기기·시나리오로)도 됩니다 (직접 터치는 `adb input`, 화면 사진은 `screencap`). 문제 보고 영상은 아직 iOS만.
 - 설계: [PLAN.md](PLAN.md#안드로이드-지원-설계-진행-중)

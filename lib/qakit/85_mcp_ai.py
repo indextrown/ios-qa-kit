@@ -713,7 +713,10 @@ AI_CHAT_SYSTEM = """너는 qakit ui의 채팅창에서 QA 담당자와 대화하
 AI_MODELS = {"claude": ["opus", "sonnet", "haiku"]}   # claude --model 별칭 (계정 기본은 빈 값)
 
 
-def ai_command(engine, ws, d, prompt, turns, read_source=False, direct=False, chat=None, model=None):
+AI_EFFORTS = ("low", "medium", "high", "xhigh", "max")   # claude --effort
+
+
+def ai_command(engine, ws, d, prompt, turns, read_source=False, direct=False, chat=None, model=None, effort=None):
     """AI CLI 명령 (qakit 도구만 허용, read_source면 앱 소스 읽기(Read·Grep·Glob)도 — 셸·수정은 막음).
     chat: {"id": 세션 uuid, "resume": 이어서인가} — 채팅창 (대화를 이어 가도록 세션을 남긴다)."""
     mcp = {"command": str(KIT_DIR / "bin" / "qakit"), "args": ["-w", str(ws.root), "mcp"],
@@ -729,7 +732,8 @@ def ai_command(engine, ws, d, prompt, turns, read_source=False, direct=False, ch
         return [shutil.which("claude") or "claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
                 "--strict-mcp-config", "--mcp-config", str(cfg), *tools, *extra,
                 "--permission-mode", "dontAsk", "--max-turns", str(turns), *session,
-                *(["--model", model] if model in AI_MODELS["claude"] else [])]
+                *(["--model", model] if model in AI_MODELS["claude"] else []),
+                *(["--effort", effort] if effort in AI_EFFORTS else [])]
     # codex (이 Mac에 없어 시험하지 못함): exec + JSON 이벤트, 읽기 전용 샌드박스, MCP는 -c로
     toml = lambda v: json.dumps(v, ensure_ascii=False)
     return [shutil.which("codex") or "codex", "exec", "--json", "--skip-git-repo-check", "-s", "read-only",

@@ -9,7 +9,7 @@ type NavItem = { id: string; href: string; label: string; icon: typeof Bot };
 const GROUPS: { label: string; items: NavItem[] }[] = [
   { label: "QA", items: [
     { id: "live", href: "#/live", label: "라이브 세션", icon: MonitorSmartphone },
-    { id: "ai", href: "#/ai", label: "AI QA", icon: Bot },
+    { id: "ai", href: "#/ai", label: "AI", icon: Bot },
   ] },
   { label: "시나리오", items: [
     { id: "scenarios", href: "#/scenarios", label: "시나리오", icon: ListChecks },

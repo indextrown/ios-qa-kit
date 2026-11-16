@@ -448,6 +448,23 @@ def cmd_ui(args):
                 return None, "이미 AI QA가 돌고 있습니다"
         if job["proc"] and job["proc"].poll() is None:
             return None, "시나리오 실행 중에는 시작할 수 없습니다"
+        if body.get("inChat"):   # 대화 안에서 맡기기·시나리오로 남기기 — 결과가 대화에 붙고, 다음 말 때 AI가 그 보고서를 안다
+            if engine != "claude":
+                return None, "대화 안에서는 Claude Code만"
+            conv, new_conv = conversation(eng["name"], goal)
+            d = conv["dir"]
+            if mode == "scenario" and not context:
+                context = conversation_context(conv)
+            read_src = mode == "scenario" and body.get("readSource", True) is not False and bool(ws.app_dir)
+            direct = mode == "qa"
+            prompt = ai_scenario_prompt(goal, minutes, sc_name, sc_tags, sc_start, source=str(ws.app_dir) if read_src else None,
+                                        context=context) if mode == "scenario" else ai_prompt(goal, minutes, bool(body.get("save")), direct=direct)
+            cmd = ai_command("claude", ws, d, prompt, turns, read_source=read_src, direct=direct,
+                             model=body.get("model"), effort=body.get("effort"))
+            label = f"[{'시나리오로 남기기' if mode == 'scenario' else f'맡김 · {minutes}분'}] {goal}"
+            err = ai_spawn(cmd, d, "claude", minutes, user=label, kind=mode, goal=goal,
+                           fresh={"goal": goal, "mode": "chat", "chat": conv} if new_conv else None)
+            return (None, err) if err else ({"started": True, "dir": results_rel(ws, d)}, None)
         d = ws.results_dir / "ai" / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         d.mkdir(parents=True, exist_ok=True)
         (d / "meta.json").write_text(json.dumps({"client": eng["name"], "goal": goal, "via": "qakit ui", "minutes": minutes,
@@ -460,11 +477,39 @@ def cmd_ui(args):
         prompt = ai_scenario_prompt(goal, minutes, sc_name, sc_tags, sc_start, source=str(ws.app_dir) if read_src else None,
                                     context=context) if mode == "scenario" \
             else ai_prompt(goal, minutes, bool(body.get("save")), direct=direct)
-        cmd = ai_command(engine, ws, d, prompt, turns, read_source=read_src, direct=direct, model=body.get("model"))
-        err = ai_spawn(cmd, d, engine, minutes, fresh={"goal": goal, "mode": mode, "chat": None})
+        cmd = ai_command(engine, ws, d, prompt, turns, read_source=read_src, direct=direct, model=body.get("model"), effort=body.get("effort"))
+        err = ai_spawn(cmd, d, engine, minutes, fresh={"goal": goal, "mode": mode, "chat": None}, kind=mode, goal=goal)
         return (None, err) if err else ({"started": True, "dir": results_rel(ws, d)}, None)
 
-    def ai_spawn(cmd, d, engine, minutes, fresh=None, user=None):
+    def conversation(client, first, force_new=False):
+        """지금 대화 (없으면 새로: results/ai/<시각>/, meta mode chat). → (대화, 새로 만들었나)"""
+        with aij["lock"]:
+            c = None if force_new else aij.get("chat")
+        if c:
+            return c, False
+        d = ws.results_dir / "ai" / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        d.mkdir(parents=True, exist_ok=True)
+        c = {"id": str(uuid.uuid4()), "dir": d, "session": False}
+        (d / "meta.json").write_text(json.dumps({"client": client, "goal": first[:200], "via": "qakit ui 대화", "mode": "chat",
+                                                 "touch": "direct", "session": c["id"],
+                                                 "started": datetime.datetime.now().isoformat(timespec="seconds")},
+                                                ensure_ascii=False), encoding="utf-8")
+        return c, True
+
+    def conversation_context(conv, limit=6000):
+        """대화 → 시나리오 만들기에 넘길 바탕: 대화 기록(뒤쪽)과 지금 기록된 단계"""
+        talk = ""
+        with contextlib.suppress(OSError):
+            talk = (conv["dir"] / "chat.md").read_text(encoding="utf-8")
+        steps, from_launch = do_log_read(ws)
+        parts = []
+        if talk:
+            parts.append("- 지금까지 대화 (뒤쪽):\n" + talk[-4000:])
+        if steps:
+            parts.append(f"- 지금 기록된 통과 단계{' (마지막 launch부터)' if from_launch else ''}:\n" + "\n".join(f"  {x}" for x in steps[-60:]))
+        return masker(ws.secrets())("\n".join(parts))[:limit] or None
+
+    def ai_spawn(cmd, d, engine, minutes, fresh=None, user=None, kind="chat", goal=None):
         """AI CLI를 띄우고 출력(stream-json)을 사건으로 읽는다. fresh: 새 세션(사건을 비움), 없으면 채팅 이어 쓰기 (user: 보낸 말)"""
         try:
             proc = subprocess.Popen(cmd, cwd=str(ws.root), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
@@ -476,7 +521,7 @@ def cmd_ui(args):
                 aij.update(engine=engine, started=time.time(), events=[], dir=d, **fresh)
             if user:
                 aij["events"].append({"kind": "user", "t": round(time.time() - aij["started"], 1), "text": masker(ws.secrets())(user)})
-            aij.update(proc=proc, ended=None, code=None, result=None, limit=minutes * 60, stopped=None)
+            aij.update(proc=proc, ended=None, code=None, result=None, limit=minutes * 60, stopped=None, run=kind)
 
         def reader():
             mask = masker(ws.secrets())
@@ -502,9 +547,13 @@ def cmd_ui(args):
                     aij["events"].append({"kind": "error", "t": round(time.time() - aij["started"], 1),
                                           "text": aij["stopped"] or f"보고서 없이 끝남 (종료 코드 {proc.returncode}) {err}"})
             if result and result.get("text"):
-                if aij.get("chat"):   # 채팅: 답을 대화 기록에 이어 붙임
+                conv = aij.get("chat")
+                if conv and conv["dir"] == d:   # 대화: 답·보고서를 대화 기록에 이어 붙임
                     with open(d / "chat.md", "a", encoding="utf-8") as f:
                         f.write(f"**나**: {user}\n\n**AI**: {result['text']}\n\n")
+                    if kind != "chat":   # 맡긴 일의 보고서는 대화 세션 밖에서 나왔다 → 다음 말에 붙여 알려 준다
+                        with aij["lock"]:
+                            aij["pending"] = f"(참고: 방금 맡긴 일 \"{goal}\"의 결과 보고서)\n{result['text']}"[:5000]
                 else:
                     (d / "report.md").write_text(result["text"] + "\n", encoding="utf-8")
             with contextlib.suppress(OSError, ValueError):
@@ -534,27 +583,30 @@ def cmd_ui(args):
             return None, f"AI 채팅은 지금 Claude Code만 됩니다 — {(eng or {}).get('note', '없음')}"
         with aij["lock"]:
             if aij["proc"] and aij["proc"].poll() is None:
-                return None, "AI가 아직 답하는 중입니다 (멈춤으로 끊을 수 있음)"
-            chat = aij.get("chat") if not body.get("new") else None
+                return None, "AI가 아직 하는 중입니다 (멈춤으로 끊을 수 있음)"
         if job["proc"] and job["proc"].poll() is None:
             return None, "시나리오 실행 중에는 보낼 수 없습니다"
         minutes = max(1, min(30, int(body.get("minutes") or 10)))
         turns = max(5, min(200, int(body.get("turns") or 40)))
-        if chat:
-            d, resume = chat["dir"], True
-        else:
-            d = ws.results_dir / "ai" / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            d.mkdir(parents=True, exist_ok=True)
-            chat = {"id": str(uuid.uuid4()), "dir": d}
-            resume = False
-            (d / "meta.json").write_text(json.dumps({"client": eng["name"], "goal": message[:200], "via": "qakit ui 채팅", "mode": "chat",
-                                                     "touch": "direct", "session": chat["id"],
-                                                     "started": datetime.datetime.now().isoformat(timespec="seconds")},
-                                                    ensure_ascii=False), encoding="utf-8")
-        cmd = ai_command("claude", ws, d, message, turns, direct=True, chat={"id": chat["id"], "resume": resume}, model=body.get("model"))
+        conv, new_conv = conversation(eng["name"], message, force_new=bool(body.get("new")))
+        d, resume = conv["dir"], conv["session"]
+        with aij["lock"]:
+            pending = aij.pop("pending", None) if not new_conv else None
+        prompt = f"{pending}\n\n(사용자)\n{message}" if pending else message
+        cmd = ai_command("claude", ws, d, prompt, turns, direct=True, chat={"id": conv["id"], "resume": resume},
+                         model=body.get("model"), effort=body.get("effort"))
         err = ai_spawn(cmd, d, "claude", minutes, user=message,
-                       fresh=None if resume else {"goal": message[:200], "mode": "chat", "chat": chat})
+                       fresh={"goal": message[:200], "mode": "chat", "chat": conv} if new_conv else None)
+        if not err:
+            conv["session"] = True
         return (None, err) if err else ({"started": True, "dir": results_rel(ws, d), "resume": resume}, None)
+
+    def ai_new_chat():
+        with aij["lock"]:
+            if aij["proc"] and aij["proc"].poll() is None:
+                return None, "AI가 하는 중에는 새 대화를 열 수 없습니다"
+            aij.update(chat=None, events=[], started=None, result=None, dir=None, goal=None, pending=None)
+        return {"ok": True}, None
 
     def ai_stop(why="멈춤 (사용자)"):
         with aij["lock"]:
@@ -575,7 +627,7 @@ def cmd_ui(args):
         with aij["lock"]:
             running = bool(aij["proc"]) and aij["proc"].poll() is None
             return {"running": running, "engine": aij["engine"], "goal": aij["goal"], "started": aij["started"], "mode": aij.get("mode"),
-                    "chat": bool(aij.get("chat")),
+                    "chat": bool(aij.get("chat")), "run": aij.get("run"),
                     "ended": aij["ended"], "code": aij["code"], "limit": aij["limit"], "stopped": aij["stopped"],
                     "dir": results_rel(ws, aij["dir"]) if aij["dir"] else None, "total": len(aij["events"]),
                     "events": aij["events"][since:], "result": aij["result"]}
@@ -725,6 +777,9 @@ def cmd_ui(args):
                 fresh = Workspace(ws.root)
                 ws.worktree_base, ws.worktree_update = fresh.worktree_base, fresh.worktree_update
                 return self.send(200, worktree_info(ws))
+            if path == "/api/ai/chat/new":
+                res, err = ai_new_chat()
+                return self.send(409 if err else 200, {"error": err} if err else res)
             if path == "/api/ai/chat":
                 res, err = ai_chat(body)
                 return self.send(409 if err else 200, {"error": err} if err else res)

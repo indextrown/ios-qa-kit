@@ -49,4 +49,6 @@ export async function scenarioFromSession(dir: string, goal: string | null) {
 
 /** Claude Code 모델 (claude --model 별칭). 빈 값 = 계정 기본. AI 채팅·AI QA가 같은 선택을 쓴다 (qakit-ai-model) */
 export const AI_MODELS: [string, string][] = [["", "계정 기본"], ["opus", "Opus — 가장 꼼꼼함"], ["sonnet", "Sonnet — 빠르고 저렴"], ["haiku", "Haiku — 가장 빠름"]];
+/** 추론 정도 (claude --effort). 빈 값 = 기본 */
+export const AI_EFFORTS: [string, string][] = [["", "추론: 기본"], ["low", "추론: 낮음"], ["medium", "추론: 보통"], ["high", "추론: 높음"], ["xhigh", "추론: 매우 높음"], ["max", "추론: 최대"]];
 
