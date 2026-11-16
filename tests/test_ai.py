@@ -79,8 +79,13 @@ class ScenarioFromQa(unittest.TestCase):
             src = q.ai_command("claude", ws, d, "p", 10, read_source=True)
             self.assertEqual(src[src.index("--tools") + 1], "Read,Grep,Glob")   # 읽기 도구만 (셸·수정 없음)
             self.assertNotIn("Bash", " ".join(src))
-            self.assertEqual(src[src.index("--add-dir") + 1], str(ws.app_dir))
             self.assertEqual(src[src.index("--permission-mode") + 1], "dontAsk")
+            deny = src[src.index("--disallowedTools") + 1]              # 비밀값 파일은 읽기 거부
+            for pat in ("Read(**/secrets*)", "Read(**/keystore/**)", "Read(**/.env)", f"Read(/{ws.secrets_path})", f"Read(/{ws.root}/**)"):
+                self.assertIn(pat, deny)
+            self.assertIn("앱 소스 읽기", src[src.index("--append-system-prompt") + 1])
+            self.assertEqual(q.ai_cwd(ws, True), ws.app_dir)               # 앱 폴더에서 실행 → 작업공간은 읽기 범위 밖
+            self.assertEqual(q.ai_cwd(ws, False), ws.root)
 
     def test_prompt_and_context(self):
         p = q.ai_scenario_prompt("x", 10, source="/app", context="- 그때 목표: 검색")

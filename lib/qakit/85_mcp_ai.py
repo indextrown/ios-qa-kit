@@ -710,6 +710,19 @@ AI_CHAT_SYSTEM = """너는 qakit ui의 채팅창에서 QA 담당자와 대화하
 - 답은 한국어로 짧게: 한 일, 본 것(화면·결과), 다음에 할 수 있는 것. 긴 보고서 형식은 쓰지 않는다."""
 
 
+# 앱 소스를 읽게 할 때 (읽기 전용): 비밀값이 든 파일은 Read·Grep·Glob 모두 막는다 (Claude Code 거부 규칙 — gitignore 꼴).
+# 실행 폴더를 앱 폴더로 두므로 작업공간(secrets.txt)은 애초에 읽을 수 없는 곳이고, 그래도 경로로 한 번 더 막는다.
+AI_SOURCE_DENY = ["**/secrets*", "**/*.secret*", "**/.env", "**/.env.*", "**/local.properties", "**/keystore/**", "**/*.keystore",
+                  "**/*.jks", "**/*.p12", "**/*.pem", "**/*.key", "**/*.mobileprovision", "**/google-services.json",
+                  "**/GoogleService-Info.plist", "**/*credential*", "**/*Credential*"]
+
+AI_SOURCE_GUIDE = """앱 소스 읽기 (Read·Grep·Glob, 읽기 전용 — 지금 폴더가 앱 소스다):
+- 화면만으로 모호할 때 소스를 본다: 이 버튼·토글이 무엇을 하는지, 어떤 조건에서 화면·문구가 뜨는지, ID·문구가 어디서 정의되는지, 이 동작이 의도된 것인지.
+- 통째로 읽지 말고 Grep으로 화면에 보이는 글자·ID·화면 이름을 찾아 필요한 파일·줄만 Read한다.
+- 결론의 근거는 실제 화면이다. 소스와 화면이 다르면 화면을 따르고 그 차이를 알린다.
+- 답에 근거 소스를 '파일:줄'로 짧게 붙인다.
+- 비밀값 파일(secrets·keystore·.env 등)은 막혀 있다. 읽으려 하지 않는다."""
+
 AI_MODELS = {"claude": ["opus", "sonnet", "haiku"]}   # claude --model 별칭 (계정 기본은 빈 값)
 
 
@@ -724,13 +737,16 @@ def ai_command(engine, ws, d, prompt, turns, read_source=False, direct=False, ch
     if engine == "claude":
         cfg = d / "mcp.json"
         cfg.write_text(json.dumps({"mcpServers": {"qakit": mcp}}, ensure_ascii=False, indent=2), encoding="utf-8")
-        tools = ["--tools", "Read,Grep,Glob", "--allowedTools", "mcp__qakit,Read,Grep,Glob"] if read_source \
+        read_source = bool(read_source and ws.app_dir)
+        tools = ["--tools", "Read,Grep,Glob", "--allowedTools", "mcp__qakit,Read,Grep,Glob",
+                 "--disallowedTools", ",".join([f"Read({p})" for p in AI_SOURCE_DENY]
+                                               + [f"Read(/{ws.secrets_path})", f"Read(/{ws.root}/**)"])] if read_source \
             else ["--tools", "", "--allowedTools", "mcp__qakit"]
-        extra = ["--add-dir", str(ws.app_dir)] if read_source and ws.app_dir else []
-        session = (["--resume", chat["id"]] if chat["resume"] else ["--session-id", chat["id"]]) + \
-            ["--append-system-prompt", AI_CHAT_SYSTEM] if chat else ["--no-session-persistence"]
+        system = "\n\n".join(([AI_CHAT_SYSTEM] if chat else []) + ([AI_SOURCE_GUIDE] if read_source else []))
+        session = (["--resume", chat["id"]] if chat["resume"] else ["--session-id", chat["id"]]) if chat else ["--no-session-persistence"]
+        session += ["--append-system-prompt", system] if system else []
         return [shutil.which("claude") or "claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
-                "--strict-mcp-config", "--mcp-config", str(cfg), *tools, *extra,
+                "--strict-mcp-config", "--mcp-config", str(cfg), *tools,
                 "--permission-mode", "dontAsk", "--max-turns", str(turns), *session,
                 *(["--model", model] if model in AI_MODELS["claude"] else []),
                 *(["--effort", effort] if effort in AI_EFFORTS else [])]
@@ -739,6 +755,11 @@ def ai_command(engine, ws, d, prompt, turns, read_source=False, direct=False, ch
     return [shutil.which("codex") or "codex", "exec", "--json", "--skip-git-repo-check", "-s", "read-only",
             "-c", f"mcp_servers.qakit.command={toml(mcp['command'])}", "-c", f"mcp_servers.qakit.args={toml(mcp['args'])}",
             "-c", f"mcp_servers.qakit.env={{QAKIT_AI_DIR={toml(str(d))}}}", prompt]
+
+
+def ai_cwd(ws, read_source):
+    """AI CLI를 띄울 폴더: 소스를 읽게 하면 앱 폴더 (그 밖 — 작업공간의 secrets.txt 등 — 은 읽기 허용 범위 밖), 아니면 작업공간"""
+    return ws.app_dir if read_source and ws.app_dir else ws.root
 
 
 def ai_events(engine, obj):

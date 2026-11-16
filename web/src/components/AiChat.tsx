@@ -18,7 +18,7 @@ const MODES: [Mode, string, typeof MessageSquare, string][] = [
   ["scenario", "시나리오로", FileCheck2, "지금까지 대화에서 확인한 흐름을 시나리오로 저장합니다 (재생 통과해야 저장)."],
 ];
 const EXAMPLES: Record<Mode, string[]> = {
-  chat: ["지금 화면에 뭐가 보이는지 알려줘", "설정 화면으로 가서 어떤 항목이 있는지 정리해줘", "뒤로 가기 눌러서 어디로 가는지 봐줘"],
+  chat: ["지금 화면에 뭐가 보이는지 알려줘", "설정 화면으로 가서 어떤 항목이 있는지 정리해줘", "이 토글이 꺼지는 조건을 소스에서 찾아줘"],
   task: ["로그인 화면 QA: 빈 값, 잘못된 형식, 틀린 비밀번호, 뒤로 가기까지", "설정 화면의 모든 항목을 한 번씩 열어 보고 정상으로 열리고 돌아오는지"],
   scenario: ["지금까지 확인한 흐름", "홈에서 설정을 열고 첫 항목 화면이 열리는지"],
 };
@@ -115,8 +115,8 @@ export function AiChat() {
     if (busy || (!m && mode !== "scenario")) return;
     setSending(true); setError(null);
     try {
-      if (mode === "chat") await post("/api/ai/chat", { message: m, ...common });
-      else if (mode === "task") await post("/api/ai/start", { goal: m, mode: "qa", minutes, turns: 80, save, inChat: true, ...common });
+      if (mode === "chat") await post("/api/ai/chat", { message: m, readSource, ...common });
+      else if (mode === "task") await post("/api/ai/start", { goal: m, mode: "qa", minutes, turns: 80, save, inChat: true, readSource, ...common });
       else await post("/api/ai/start", { goal: m || "지금까지 대화에서 확인한 흐름", mode: "scenario", minutes, turns: 80, inChat: true,
         name: scName.trim() || null, start: scStart || null, readSource, ...common });
       setText(""); if (mode !== "chat") setMode("chat");
@@ -146,6 +146,8 @@ export function AiChat() {
         <select value={effort} onChange={(e) => setEffort(e.target.value)} disabled={busy} title="추론 정도 (높을수록 꼼꼼하지만 느리고 사용량이 큼)" className={field}>
           {AI_EFFORTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
+        <label className="flex items-center gap-1 text-[11.5px] text-sub" title="AI가 화면만으로 모호할 때 앱 소스를 찾아 봅니다 (읽기 전용 · 비밀값 파일은 막힘). 근거를 파일:줄로 붙입니다">
+          <input type="checkbox" checked={readSource} onChange={(e) => setReadSource(e.target.checked)} disabled={busy} />소스</label>
         {job?.dir && job.chat && <a href={fileUrl(job.dir, "chat.md")} target="_blank" rel="noreferrer" className="text-[11px] text-link hover:underline">기록</a>}
         <Button size="sm" variant="ghost" disabled={busy || !events.length} onClick={newChat} title="새 대화 (AI가 앞 대화를 잊음)">
           <MessageSquarePlus className="h-3.5 w-3.5" />새 대화</Button>
@@ -199,7 +201,6 @@ export function AiChat() {
           <select value={scStart} onChange={(e) => setScStart(e.target.value)} className={field} title="앱을 켠 뒤 먼저 밟을 공통 단계">
             <option value="">시작 단계: AI가 고름</option>
             {stepFiles.map((x) => <option key={x} value={x}>use: {x}</option>)}</select>
-          <label className="col-span-2 flex items-center gap-1.5"><input type="checkbox" checked={readSource} onChange={(e) => setReadSource(e.target.checked)} />앱 소스도 읽기 (읽기 전용)</label>
         </div>}
         {error && <div className="mb-2 text-[11.5px] text-bad">{error}</div>}
         <form className="flex items-end gap-2" onSubmit={(e) => { e.preventDefault(); send(); }}>

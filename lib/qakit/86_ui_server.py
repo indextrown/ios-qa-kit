@@ -455,14 +455,14 @@ def cmd_ui(args):
             d = conv["dir"]
             if mode == "scenario" and not context:
                 context = conversation_context(conv)
-            read_src = mode == "scenario" and body.get("readSource", True) is not False and bool(ws.app_dir)
+            read_src = body.get("readSource", True) is not False and bool(ws.app_dir)   # 대화 안에서는 맡기기도 소스 읽기 (기본 켬)
             direct = mode == "qa"
             prompt = ai_scenario_prompt(goal, minutes, sc_name, sc_tags, sc_start, source=str(ws.app_dir) if read_src else None,
                                         context=context) if mode == "scenario" else ai_prompt(goal, minutes, bool(body.get("save")), direct=direct)
             cmd = ai_command("claude", ws, d, prompt, turns, read_source=read_src, direct=direct,
                              model=body.get("model"), effort=body.get("effort"))
             label = f"[{'시나리오로 남기기' if mode == 'scenario' else f'맡김 · {minutes}분'}] {goal}"
-            err = ai_spawn(cmd, d, "claude", minutes, user=label, kind=mode, goal=goal,
+            err = ai_spawn(cmd, d, "claude", minutes, user=label, kind=mode, goal=goal, cwd=conv["cwd"],
                            fresh={"goal": goal, "mode": "chat", "chat": conv} if new_conv else None)
             return (None, err) if err else ({"started": True, "dir": results_rel(ws, d)}, None)
         d = ws.results_dir / "ai" / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -478,7 +478,8 @@ def cmd_ui(args):
                                     context=context) if mode == "scenario" \
             else ai_prompt(goal, minutes, bool(body.get("save")), direct=direct)
         cmd = ai_command(engine, ws, d, prompt, turns, read_source=read_src, direct=direct, model=body.get("model"), effort=body.get("effort"))
-        err = ai_spawn(cmd, d, engine, minutes, fresh={"goal": goal, "mode": mode, "chat": None}, kind=mode, goal=goal)
+        err = ai_spawn(cmd, d, engine, minutes, fresh={"goal": goal, "mode": mode, "chat": None}, kind=mode, goal=goal,
+                       cwd=ai_cwd(ws, read_src))
         return (None, err) if err else ({"started": True, "dir": results_rel(ws, d)}, None)
 
     def conversation(client, first, force_new=False):
@@ -489,7 +490,9 @@ def cmd_ui(args):
             return c, False
         d = ws.results_dir / "ai" / datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         d.mkdir(parents=True, exist_ok=True)
-        c = {"id": str(uuid.uuid4()), "dir": d, "session": False}
+        # 실행 폴더는 대화 내내 같아야 한다 (Claude Code는 세션을 실행 폴더별로 저장 → 폴더가 바뀌면 --resume이 못 찾음).
+        # 소스 읽기를 켜고 끄는 것은 허용 도구만 바꾼다
+        c = {"id": str(uuid.uuid4()), "dir": d, "session": False, "cwd": ai_cwd(ws, True)}
         (d / "meta.json").write_text(json.dumps({"client": client, "goal": first[:200], "via": "qakit ui 대화", "mode": "chat",
                                                  "touch": "direct", "session": c["id"],
                                                  "started": datetime.datetime.now().isoformat(timespec="seconds")},
@@ -509,10 +512,10 @@ def cmd_ui(args):
             parts.append(f"- 지금 기록된 통과 단계{' (마지막 launch부터)' if from_launch else ''}:\n" + "\n".join(f"  {x}" for x in steps[-60:]))
         return masker(ws.secrets())("\n".join(parts))[:limit] or None
 
-    def ai_spawn(cmd, d, engine, minutes, fresh=None, user=None, kind="chat", goal=None):
+    def ai_spawn(cmd, d, engine, minutes, fresh=None, user=None, kind="chat", goal=None, cwd=None):
         """AI CLI를 띄우고 출력(stream-json)을 사건으로 읽는다. fresh: 새 세션(사건을 비움), 없으면 채팅 이어 쓰기 (user: 보낸 말)"""
         try:
-            proc = subprocess.Popen(cmd, cwd=str(ws.root), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            proc = subprocess.Popen(cmd, cwd=str(cwd or ws.root), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                     stderr=open(d / "agent.err", "a"), text=True, start_new_session=True)
         except OSError as e:
             return f"실행하지 못함: {e}"
@@ -593,9 +596,10 @@ def cmd_ui(args):
         with aij["lock"]:
             pending = aij.pop("pending", None) if not new_conv else None
         prompt = f"{pending}\n\n(사용자)\n{message}" if pending else message
+        read_src = body.get("readSource", True) is not False and bool(ws.app_dir)
         cmd = ai_command("claude", ws, d, prompt, turns, direct=True, chat={"id": conv["id"], "resume": resume},
-                         model=body.get("model"), effort=body.get("effort"))
-        err = ai_spawn(cmd, d, "claude", minutes, user=message,
+                         model=body.get("model"), effort=body.get("effort"), read_source=read_src)
+        err = ai_spawn(cmd, d, "claude", minutes, user=message, cwd=conv["cwd"],
                        fresh={"goal": message[:200], "mode": "chat", "chat": conv} if new_conv else None)
         if not err:
             conv["session"] = True
