@@ -1,5 +1,8 @@
 # qakit — qakit ui 서버 (cmd_ui)
 # bin/qakit이 lib/qakit/*.py를 이름 순서대로 한 이름 공간에 읽는다 (따로 import하지 않음).
+STREAM_KEEP = 3   # 실시간 화면 스트림 동시 연결 (창·탭 몇 개). 넘으면 오래된 것부터 서버가 끊는다
+
+
 def cmd_ui(args):
     """결과 보기 + 시뮬레이터 라이브 화면 (로컬 웹, 127.0.0.1). docs/PLAN.md "UI 설계" U1."""
     import http.server
@@ -14,7 +17,8 @@ def cmd_ui(args):
     screen = {"at": 0.0, "data": None, "lock": threading.Lock()}
     # 실시간 화면: simscreen 하나를 띄워 최신 JPEG를 모든 브라우저에 나눠 준다 (보는 사람이 없으면 30초 뒤 끔)
     live = {"proc": None, "frame": None, "seq": 0, "cond": threading.Condition(), "error": None, "failed_at": 0.0,
-            "clients": 0, "idle_since": time.time(), "frames": [], "changed_at": 0.0, "base_size": 0}
+            "clients": 0, "idle_since": time.time(), "frames": [], "changed_at": 0.0, "base_size": 0,
+            "streams": [], "kicked": set(), "next_stream": 0}
     static = {".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".woff2": "font/woff2",
               ".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon"}
     if not (UI_DIR / "index.html").exists():
@@ -972,14 +976,20 @@ def cmd_ui(args):
                     self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=qakitframe")
                     self.send_header("Cache-Control", "no-store")
                     self.end_headers()
+                    # 스트림은 최근 STREAM_KEEP개만: WebKit은 화면에서 빠진 <img>의 스트림을 끊지 않아 서버당 연결 6개를 채운다
                     with live["cond"]:
                         live["clients"] += 1
+                        sid = live["next_stream"] = live["next_stream"] + 1
+                        live["streams"].append(sid)
+                        while len(live["streams"]) > STREAM_KEEP:
+                            live["kicked"].add(live["streams"].pop(0))
+                        live["cond"].notify_all()
                     seq = -1
                     try:
                         while True:
                             with live["cond"]:
-                                live["cond"].wait_for(lambda: live["seq"] != seq or live["proc"] is None, timeout=5)
-                                if live["proc"] is None:
+                                live["cond"].wait_for(lambda: live["seq"] != seq or live["proc"] is None or sid in live["kicked"], timeout=5)
+                                if live["proc"] is None or sid in live["kicked"]:
                                     break
                                 frame, seq = live["frame"], live["seq"]
                             if frame:
@@ -992,6 +1002,10 @@ def cmd_ui(args):
                         with live["cond"]:
                             live["clients"] -= 1
                             live["idle_since"] = time.time()
+                            live["kicked"].discard(sid)
+                            if sid in live["streams"]:
+                                live["streams"].remove(sid)
+                        self.close_connection = True
                     return
                 if path == "/api/screen":
                     if not udid:
@@ -1008,6 +1022,14 @@ def cmd_ui(args):
     info("실행 기록·시나리오 실행·시뮬레이터 라이브 화면. 끝내려면 Ctrl+C")
     if not args.no_open:
         run(["open", url], check=False)
+    if os.environ.get("QAKIT_UI_PARENT"):   # 맥 앱이 띄운 서버: 앱이 죽으면(강제 종료 등) 따라 끈다
+        parent = os.getppid()
+
+        def watch_parent():
+            while os.getppid() == parent:
+                time.sleep(1)
+            os.kill(os.getpid(), signal.SIGINT)
+        threading.Thread(target=watch_parent, daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

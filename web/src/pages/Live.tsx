@@ -327,7 +327,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
           <div className={cx("relative w-full bg-neutral-900 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.45)] ring-1 ring-black/50 dark:ring-white/15",
             landscape ? "max-w-[880px] rounded-[30px] p-[9px]" : "max-w-[360px] rounded-[48px] p-[11px]")}>
             <div className={cx("relative overflow-hidden bg-black", landscape ? "rounded-[22px]" : "rounded-[38px]")}>
-              {liveOn ? <img key={streamKey} src={`/api/stream?k=${streamKey}`} alt="시뮬레이터 화면 (실시간)" className="block w-full select-none" draggable={false}
+              {liveOn ? <StreamImg key={streamKey} src={`/api/stream?k=${streamKey}`} alt="시뮬레이터 화면 (실시간)" className="block w-full select-none" draggable={false}
                   onLoad={onImgLoad}
                   style={{ aspectRatio: scr ? `${scr.w} / ${scr.h}` : natural ? `${natural.w} / ${natural.h}` : "9 / 19.5" }}
                   onError={() => { setMode("shot"); setStreamNote("실시간 화면을 열지 못했습니다 — 스크린샷으로 봅니다"); }} />
@@ -385,7 +385,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
               <div className="mt-0.5 break-all font-mono text-[11.5px]">{hover.type}{hasId(hover) ? ` #${hover.id}` : ""}</div>
               {hover.label && <div className="mt-0.5 truncate">"{hover.label}"</div>}
             </div>}
-            {notice && <div className="rounded-xl bg-card p-3 text-[12px] text-sub ring-1 ring-line">{notice}</div>}
+            {notice && <div className="max-h-48 overflow-auto whitespace-pre-wrap rounded-xl bg-card p-3 text-[12px] text-sub ring-1 ring-line [overflow-wrap:anywhere]">{notice}</div>}
           </div>
         </div>
 
@@ -498,6 +498,20 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
 
 const TABS = [["act", "조작"], ["run", "시나리오 실행"], ["save", "저장"]] as const;
 type Tab = (typeof TABS)[number][0];
+
+/** 실시간 화면(MJPEG). WebKit(맥 앱 창·Safari)은 화면에서 빠진 <img>의 스트림을 끊지 않아, 라이브 세션을 오갈 때마다
+ *  연결이 쌓여 서버당 6개 한도를 채우면 화면·API가 모두 멈춘다 → 빠질 때 src를 빈 그림으로 바꿔 직접 끊는다. */
+const BLANK = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+function StreamImg(props: React.ImgHTMLAttributes<HTMLImageElement>) {
+  const ref = useRef<HTMLImageElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    const stop = () => { if (el) el.src = BLANK; };
+    window.addEventListener("pagehide", stop);
+    return () => { window.removeEventListener("pagehide", stop); stop(); };
+  }, []);
+  return <img ref={ref} {...props} />;
+}
 
 function Sep() { return <span className="mx-1.5 my-0.5 h-px bg-line" />; }
 

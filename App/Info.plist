@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key><string>QA Kit</string>
+	<key>CFBundleDisplayName</key><string>QA Kit</string>
+	<key>CFBundleIdentifier</key><string>io.github.indextrown.qakit</string>
+	<key>CFBundleExecutable</key><string>QAKit</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>__VERSION__</string>
+	<key>CFBundleVersion</key><string>__VERSION__</string>
+	<key>CFBundleDevelopmentRegion</key><string>ko</string>
+	<key>LSMinimumSystemVersion</key><string>13.0</string>
+	<key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+	<key>NSPrincipalClass</key><string>NSApplication</string>
+	<key>NSHighResolutionCapable</key><true/>
+	<key>NSSupportsAutomaticTermination</key><false/>
+	<key>NSSupportsSuddenTermination</key><false/>
+	<key>NSHumanReadableCopyright</key><string>qakit — github.com/indextrown/qa-kit</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key><true/>
+	</dict>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key><string>qakit 작업공간</string>
+			<key>CFBundleTypeRole</key><string>Viewer</string>
+			<key>LSHandlerRank</key><string>None</string>
+			<key>LSItemContentTypes</key><array><string>public.folder</string></array>
+		</dict>
+	</array>
+</dict>
+</plist>

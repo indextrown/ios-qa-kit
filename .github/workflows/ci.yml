@@ -50,3 +50,18 @@ jobs:
           for f in $(grep -o 'assets/[^"]*' ui/dist/index.html); do
             git ls-files --error-unmatch "ui/dist/$f" >/dev/null || { echo "::error::커밋 안 된 빌드 파일: ui/dist/$f"; exit 1; }
           done
+
+  mac-app:   # 맥 앱 셸(App/)이 컴파일되고 번들이 만들어지는지 (켜 보는 확인은 손으로)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 앱 만들기
+        run: scripts/build-app.sh
+      - name: 번들 확인
+        run: |
+          APP="dist/QA Kit.app"
+          lipo -archs "$APP/Contents/MacOS/QAKit"
+          plutil -lint "$APP/Contents/Info.plist"
+          test -x "$APP/Contents/Resources/kit/bin/qakit"
+          test -f "$APP/Contents/Resources/kit/ui/dist/index.html"
+          /usr/bin/python3 "$APP/Contents/Resources/kit/bin/qakit" --version
