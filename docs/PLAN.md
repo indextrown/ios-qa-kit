@@ -798,3 +798,19 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 | 아직 | 실패 영상, `--bench`, 라이브 세션 직접 터치, ID 정적 검사(소스 ID 목록 없음 — coverage는 저장된 덤프에서 본 ID 기준) |
 
 함정: `adb root`·`adb unroot`로 adbd가 재시작되면 실행 중인 실행기의 UiAutomation 연결이 끊긴다 (셸 명령이 빈 결과). 실행기를 다시 띄우면 된다.
+
+### Navigation 첫 시나리오 (2026-11-16, first-login)
+
+앱 데이터를 지우고(`pm clear` + 권한 미리 허용) 로그인 → 동시 로그인 확인창 → 안내창 3종(interrupts) → 홈. 통과 2회 (36.7초·22.3초).
+작업공간: `~/mapsea/qa-workspaces/navigation-android` (앱 레포는 읽기만). 이 과정에서 고친 실행기 문제:
+
+| 증상 | 원인 → 고침 |
+|---|---|
+| 스플래시가 끝났는데 옛 화면만 보임 | 접근성 노드 캐시가 안 갱신됨 (Compose 화면 전환) → 읽을 때마다 `clearCache()` |
+| `{ type: button, label: 개인 }`을 못 찾음 | 덤프는 버튼 라벨을 안쪽 글자에서 빌려 오는데 실행기는 아니었음 → 같은 규칙으로 |
+| `hide-keyboard` 뒤 앱이 닫힘 | 키보드 창이 숨은 뒤에도 남아 "떠 있음"으로 봄 + 이 앱은 키보드가 떠 있어도 뒤로 가기에 닫힘 → `mInputShown`으로 판단, `type`은 누르지 않고 SET_TEXT 먼저(키보드 안 띄움) |
+| 비밀번호가 이메일 칸에 들어감 | 비밀번호 칸은 읽은 글자가 •라 확인 실패 → 포커스 칸으로 넣는 대체 경로가 이전 칸(이메일)에 넣음 → 비밀번호 칸은 성공 응답을 믿고, 대체 경로는 대상과 같은 자리의 칸만 |
+| 팝업의 "로그인" 대신 아래 화면 "로그인"을 누를 수 있음 | 대상 찾기를 위 창부터 |
+| 권한 대화상자 4종 | `permissions: [location, notifications, nearby, background]` |
+
+앱 쪽 관찰 (앱 팀 공유 후보): 로그인 화면에서 키보드가 떠 있을 때 뒤로 가기를 누르면 키보드만 닫히지 않고 앱이 닫힌다. 이메일 입력칸의 contentDescription이 문자열 리소스 ID 숫자("2131886546")로 들어가 있다 (`SignInContent.kt` `R.string.feature_auth_email_input.toString()`).

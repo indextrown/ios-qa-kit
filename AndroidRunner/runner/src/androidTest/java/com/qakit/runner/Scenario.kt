@@ -316,10 +316,11 @@ class Scenario(private val screen: Screen, private val app: AppControl) {
                 note("앱 설정 $key = ${vars[name]}")
             }
             step.has("hide-keyboard") -> {
-                if (screen.tree().keyboard) {
+                // 키보드가 없을 때 뒤로 가기를 보내면 화면이 닫히거나 앱이 내려간다 → 실제로 떠 있을 때만
+                if (screen.keyboardShown()) {
                     screen.device.pressBack()
                     val end = now() + 3000
-                    while (screen.tree().keyboard && now() < end) sleep(0.2)
+                    while (screen.keyboardShown() && now() < end) sleep(0.2)
                 }
             }
             step.has("relaunch") -> app.launch()
@@ -499,7 +500,7 @@ class Scenario(private val screen: Screen, private val app: AppControl) {
 
     /** 대상 → 지금 화면의 노드 (없으면 null). 매번 새로 찾는다 (XCUIElement처럼 지연 조회). */
     fun find(raw: Any?, tree: Screen.Tree = screen.tree()): Screen.Node? {
-        val all = tree.all()
+        val all = tree.topFirst()
         if (raw is String) {
             val id = text(raw)
             return all.firstOrNull { it.id == id || it.resourceId == id }
@@ -511,9 +512,7 @@ class Scenario(private val screen: Screen, private val app: AppControl) {
         }
         if (spec.has("alert-field")) {
             // 맨 위 창(대화상자)의 첫 입력칸
-            return tree.roots.asReversed().asSequence()
-                .flatMap { sequenceOf(it) + it.descendants() }
-                .firstOrNull { it.type == "TextField" || it.type == "SecureTextField" || it.editable }
+            return all.firstOrNull { it.type == "TextField" || it.type == "SecureTextField" || it.editable }
         }
         spec.opt("segment")?.let { seg ->
             val group = all.firstOrNull { it.id == text(seg) } ?: return null

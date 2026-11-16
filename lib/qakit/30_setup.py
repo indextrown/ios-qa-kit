@@ -448,6 +448,7 @@ def reset_app(ws, udid):
     if ws.platform == "android":
         adb(udid, "shell", "pm", "clear", ws.package)   # 데이터·권한·로그인 상태를 지운다 (재설치와 같은 효과)
         ok("앱 초기화 (pm clear)")
+        android_grant_permissions(ws, udid)
         return
     app_path = find_built_app(ws)
     if not app_path:

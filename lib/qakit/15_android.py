@@ -690,3 +690,38 @@ def android_seen_ids(ws):
         except OSError:
             pass
     return ids
+
+
+# qakit.yml permissions: (iOS simctl privacy 이름과 같은 말) → 안드로이드 권한. android.permission.X를 그대로 써도 된다
+ANDROID_PERMISSIONS = {
+    "location": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"],
+    "location-always": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION"],
+    "notifications": ["POST_NOTIFICATIONS"],
+    "nearby": ["BLUETOOTH_SCAN", "BLUETOOTH_CONNECT", "NEARBY_WIFI_DEVICES"],   # 근처 기기 (블루투스·Wi-Fi)
+    "camera": ["CAMERA"],
+    "microphone": ["RECORD_AUDIO"],
+    "photos": ["READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO"],
+    "contacts": ["READ_CONTACTS"],
+    "calendar": ["READ_CALENDAR", "WRITE_CALENDAR"],
+}
+
+
+def android_grant_permissions(ws, serial):
+    """qakit.yml permissions:를 미리 허용한다 (앱 설치·pm clear 뒤 권한 대화상자가 시나리오를 막지 않게)."""
+    granted = []
+    for name in ws.permissions:
+        name = str(name)
+        if name == "background":   # 배터리 최적화 예외 → "항상 백그라운드에서 실행할까요?" 대화상자가 뜨지 않는다
+            adb(serial, "shell", "dumpsys", "deviceidle", "whitelist", "+" + ws.package, check=False)
+            granted.append("배터리 최적화 예외")
+            continue
+        perms = ANDROID_PERMISSIONS.get(name) or ([name.split(".")[-1]] if "." in name else None)
+        if not perms:
+            warn(f"알 수 없는 권한 이름: {name} (location·notifications·camera… 또는 android.permission.X)")
+            continue
+        for perm in perms:
+            r = adb(serial, "shell", "pm", "grant", ws.package, "android.permission." + perm, check=False)
+            if r.returncode == 0:
+                granted.append(perm)
+    if granted:
+        ok("권한 미리 허용: " + ", ".join(dict.fromkeys(granted)))

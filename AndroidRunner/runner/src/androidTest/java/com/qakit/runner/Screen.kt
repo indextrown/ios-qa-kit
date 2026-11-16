@@ -54,7 +54,11 @@ class Screen(val pkg: String) {
         val visibleToUser = info.isVisibleToUser
         val editable = info.isEditable
         lateinit var type: String
-        val label: String get() = (text.ifEmpty { desc }).replace("\n", " ")
+        /** 덤프에 보이는 라벨과 같게: 자기 글자, 없으면(클릭 가능한 버튼) 안쪽 첫 글자 — 15_android.py와 같은 규칙 */
+        val label: String by lazy {
+            val own = text.ifEmpty { desc }.replace("\n", " ")
+            if (own.isEmpty() && type == "Button" && clickable) firstText() else own
+        }
 
         fun descendants(): Sequence<Node> = sequence {
             for (c in children) {
@@ -72,10 +76,17 @@ class Screen(val pkg: String) {
 
     /** 지금 화면 (아래 창 → 위 창 순서의 노드 목록). 키보드·상태 표시줄·내비게이션 바는 뺀다. */
     class Tree(val roots: List<Node>, val windows: List<Win>, val keyboard: Boolean) {
+        /** 아래 창 → 위 창 (덤프 순서) */
         fun all(): Sequence<Node> = roots.asSequence().flatMap { sequenceOf(it) + it.descendants() }
+
+        /** 위 창 → 아래 창: 대상 찾기용. 팝업이 떠 있으면 같은 글자의 아래 화면 요소보다 팝업 쪽을 먼저 고른다 */
+        fun topFirst(): Sequence<Node> = roots.asReversed().asSequence().flatMap { sequenceOf(it) + it.descendants() }
     }
 
     fun tree(): Tree {
+        // 접근성 노드 캐시를 비운다: 화면이 바뀌어도 변경 알림을 늦게(또는 안) 보내는 앱(Compose 스플래시 → 로그인 등)은
+        // 캐시된 옛 화면이 계속 보인다 (Navigation 앱에서 확인, 2026-11-16). 비우면 한 번 읽는 데 조금 더 걸린다.
+        if (android.os.Build.VERSION.SDK_INT >= 34) runCatching { ua.clearCache() }
         val wins = try { ua.windows } catch (e: Exception) { emptyList() }
         val roots = mutableListOf<Node>()
         val kept = mutableListOf<Win>()
@@ -88,6 +99,7 @@ class Screen(val pkg: String) {
                 AccessibilityWindowInfo.TYPE_SPLIT_SCREEN_DIVIDER -> continue
             }
             val root = w.root ?: continue
+            if (android.os.Build.VERSION.SDK_INT < 34) root.refresh()
             val rect = Rect().also { w.getBoundsInScreen(it) }
             val win = Win(w, i, rect)
             kept += win
@@ -185,6 +197,9 @@ class Screen(val pkg: String) {
         return tree.windows.none { it.z > n.window.z && it.bounds.contains(r.centerX(), r.centerY()) }
     }
 
+    /** 키보드가 실제로 떠 있나. 키보드 창은 숨겨진 뒤에도(떠 있는 도구 막대 등) 창 목록에 남아 창으로는 판단할 수 없다 */
+    fun keyboardShown(): Boolean = shell("dumpsys input_method").contains("mInputShown=true")
+
     fun foreground(): String? {
         val wins = try { ua.windows } catch (e: Exception) { emptyList() }
         val app = wins.firstOrNull { it.type == AccessibilityWindowInfo.TYPE_APPLICATION && it.root != null }
@@ -235,15 +250,24 @@ class Screen(val pkg: String) {
         val args = Bundle().apply {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
         }
-        if (target.info.isFocused && target.info.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return true
+        // 먼저 누르지 않고 바로 넣는다 (Compose 입력칸은 포커스 없이도 된다) → 키보드가 덜 뜬다.
+        // 비밀번호 칸은 접근성 글자가 가려져(•) 돌아와 넣은 값과 비교할 수 없다 → 성공 응답을 믿는다
+        if (target.info.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
+            target.info.refresh()
+            val now = target.info.text?.toString() ?: ""
+            if (target.info.isPassword || now == value) return true
+        }
         tap(target)
-        // 누르면 포커스가 옮겨 가며 노드가 새로 만들어질 수 있다 → 지금 입력 포커스를 가진 칸에 넣는다
+        // 누르면 노드가 새로 만들어질 수 있다 → 같은 자리의 입력 포커스 칸에만 넣는다
+        // (다른 칸에 포커스가 남아 있으면 엉뚱한 칸에 들어간다 — 비밀번호가 이메일 칸에 들어간 적 있음, 2026-11-16)
         val end = android.os.SystemClock.elapsedRealtime() + 2000
         while (android.os.SystemClock.elapsedRealtime() < end) {
-            val focused = ua.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-            if (focused != null && focused.isEditable && focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return true
             target.info.refresh()
             if (target.info.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return true
+            val focused = ua.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            val fb = Rect().also { r -> focused?.getBoundsInScreen(r) }
+            if (focused != null && focused.isEditable && Rect.intersects(fb, target.bounds) &&
+                focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) return true
             android.os.SystemClock.sleep(200)
         }
         return false
