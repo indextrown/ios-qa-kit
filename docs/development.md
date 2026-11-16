@@ -35,10 +35,13 @@ qa-kit/
 │   ├── build-autoid.sh       AutoID dylib 빌드
 │   ├── build-app.sh · build-dmg.sh · make-icon.swift   맥 앱·DMG·아이콘
 │   ├── release.sh            develop → main 릴리스 (+ DMG 첨부)
-│   └── sim-probe.swift       시뮬레이터 포트·비공개 프로토콜·프레임 콜백 확인 (Xcode가 바뀌었을 때)
+│   ├── sim-probe.swift       시뮬레이터 포트·비공개 프로토콜·프레임 콜백 확인 (Xcode가 바뀌었을 때)
+│   ├── objc-dump.swift       바이너리의 ObjC 클래스·메서드·변수 (비공개 API 조사)
+│   └── macho-tools.py        Swift 심볼 풀기·필드 이름·주소로 역어셈블 (비공개 API 조사)
 └── docs/
     ├── PLAN.md               설계·진행 기록
     ├── private-apis.md       비공개 API (화면 메모리·프레임 콜백·터치 주입, 조사하는 법)
+    ├── reverse-engineering.md  비공개 API 조사 방법 (역어셈블·로그·XPC)
     └── gitflow.md            브랜치 규칙·기여 순서 (Git Flow)
 ```
 
