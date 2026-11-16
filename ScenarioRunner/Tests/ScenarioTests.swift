@@ -134,6 +134,10 @@ final class ScenarioTests: QATestCase {
             json["notes"] = notes
             json["steps"] = Array(scenarioRunner.trail.suffix(8))
             json["timings"] = scenarioRunner.timings
+        case "/touch":
+            // 좌표 터치 (AI 직접 터치·라이브 세션·qakit touch): XCTest 이벤트 합성 — 시뮬레이터 부팅 상태와 상관없이 먹힌다
+            let body = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] ?? [:]
+            do { json["touch"] = try QASynth.perform(body) } catch { ok = false; message = "\(error)" }
         case "/launch":
             launchApp()
             runner = makeServeRunner()

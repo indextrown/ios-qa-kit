@@ -92,14 +92,14 @@ class TouchCheck(unittest.TestCase):
     def touch(self, before, after, runner=None):
         class Helper:
             mode = "digitizer"
-            def __init__(self, udid): pass
+            def __init__(self, ws, udid): pass
             def start(self): return None
             def send(self, line): return True, "ok tap 90"
             def stop(self): pass
         shots = iter([before, after])
         with mock.patch.object(q, "find_workspace", return_value=mock.Mock(device=None)), \
                 mock.patch.object(q, "ensure_booted", return_value="UDID"), \
-                mock.patch.object(q, "TouchHelper", Helper), \
+                mock.patch.object(q, "DirectTouch", Helper), \
                 mock.patch.object(q, "screen_jpeg", side_effect=lambda *a, **k: next(shots)), \
                 mock.patch.object(q, "serve_load", return_value=runner), \
                 mock.patch.object(q, "serve_alive", return_value=True), \
@@ -119,6 +119,42 @@ class TouchCheck(unittest.TestCase):
         self.assertIn("serve --stop", self.touch(b"x" * 1000, b"x" * 1005, runner={"pid": 1}))
         self.assertIn("터치가 먹혔습니다", self.touch(b"x" * 1000, b"x" * 1400))
         self.assertNotIn("XCUITest가 켠 앱은", self.touch(b"x" * 1000, b"x" * 1400, runner={"pid": 1}))   # 켠 방식으로 미리 경고하지 않음
+
+
+class RunnerSynth(unittest.TestCase):
+    """좌표 터치: 상주 실행기가 같은 코드로 떠 있으면 XCTest 이벤트 합성(/touch), 아니면 simtouch"""
+
+    def test_body(self):
+        b = q.RunnerTouch.body
+        self.assertEqual(b("tap 0.5 0.4 80"), {"action": "tap", "x": 0.5, "y": 0.4, "ms": 80.0})
+        self.assertEqual(b("tap 0.5 0.4")["ms"], 60)
+        self.assertEqual(b("press 0.1 0.2 1.5"), {"action": "press", "x": 0.1, "y": 0.2, "seconds": 1.5})
+        self.assertEqual(b("swipe 0.5 0.8 0.5 0.2 0.3")["x2"], 0.5)
+        self.assertIsNone(b("down 0.5 0.5"))   # 손가락을 나눠 보내는 명령은 simtouch만
+        self.assertIsNone(b("tap x y"))
+
+    def test_choice(self):
+        class Sim:
+            mode = "digitizer"
+            def __init__(self, udid): self.sent = []
+            def send(self, cmd, timeout=None): self.sent.append(cmd); return True, "ok tap 90"
+            def stop(self): pass
+        with mock.patch.object(q, "TouchHelper", Sim):
+            t = q.DirectTouch(mock.Mock(), "UDID")
+            with mock.patch.object(t.runner, "start", return_value=None), \
+                    mock.patch.object(t.runner, "send", return_value=(True, "ok tap 120")) as rs:
+                self.assertEqual(t.tap(0.5, 0.5), (True, "ok tap 120"))
+                self.assertEqual(t.mode, "synth")
+                rs.assert_called_once()
+            with mock.patch.object(t.runner, "start", return_value="상주 실행기 없음"):
+                self.assertEqual(t.tap(0.5, 0.5), (True, "ok tap 90"))   # 실행기가 없으면 simtouch
+                self.assertEqual(t.mode, "digitizer")
+            with mock.patch.object(t.runner, "start", return_value=None), \
+                    mock.patch.object(t.runner, "send", return_value=(False, "상주 실행기 연결 실패: refused")):
+                self.assertEqual(t.tap(0.5, 0.5)[1], "ok tap 90")         # 실행기에 못 붙으면 simtouch로
+            with mock.patch.object(t.runner, "start", return_value=None), \
+                    mock.patch.object(t.runner, "send", return_value=(False, "이벤트 합성 실패: x")):
+                self.assertEqual(t.tap(0.5, 0.5), (False, "이벤트 합성 실패: x"))   # 실행기가 답한 실패는 그대로
 
 
 class Tools(unittest.TestCase):

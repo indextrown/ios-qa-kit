@@ -14,7 +14,8 @@ qakit은 시뮬레이터 화면을 실시간 영상으로 보여 주고(라이�
 | 실시간 화면 (라이브 세션·AI 탭) | `Tools/simscreen` | CoreSimulator | 화면 포트의 IOSurface + **프레임 콜백** | seed 폴링 → 스크린샷 방식 |
 | AI 문제 보고 영상 | `simscreen --encode` | (화면 읽기는 위와 같음) 인코딩은 공개 AVFoundation | `AVAssetWriter` H.264 | 영상 없이 보고 |
 | 녹화 버튼·실패 영상 | `simctl io recordVideo` | 공개 명령 (안쪽은 CoreSimulator `SimScreenCaptureService`) | — | — |
-| 직접 터치 (좌표 탭·끌기·길게 누르기) | `Tools/simtouch` | SimulatorKit + IOKit SPI | `SimDeviceLegacyHIDClient` + Indigo HID 메시지 | XCUITest 탭 |
+| 직접 터치 (좌표 탭·끌기·길게 누르기) — 상주 실행기가 있을 때 | 실행기 `/touch` (`QASynth`) | XCTest 비공개 클래스 | `XCSynthesizedEventRecord` + `XCPointerEventPath` → `_XCT_synthesizeEvent:completion:` | simtouch |
+| 직접 터치 — 상주 실행기가 없을 때 | `Tools/simtouch` | SimulatorKit + IOKit SPI | `SimDeviceLegacyHIDClient` + Indigo HID 메시지 | XCUITest 탭 |
 | 자동 ID (AutoID) | `AutoID/` dylib | 비공개 API는 아님 — **공식 지원 밖 방법** | `DYLD_INSERT_LIBRARIES` + 메서드 바꿔치기 | `autoid: embedded` |
 
 - **비공개 API**: 헤더(공개 설명서)가 없는 함수·클래스. 이름으로 찾아 부른다. Xcode가 바뀌면 이름·형식이 바뀔 수 있다.
@@ -266,6 +267,33 @@ sendWithMessage:freeWhenDone:completionQueue:completion:          (보내기)
   - AI 직접 터치: 탭 뒤 1초 안에 화면이 안 바뀌면 알림, `expect`를 주면 그 자리에서 실패, `via: xcuitest`로 XCUITest 탭.
   - `qakit touch`: 누르기 전후 화면을 비교(JPEG 크기 차이 2% 이하 = 그대로)해 그대로면 알리고, 아는 원인(멈춘 실행기 → `qakit serve --stop`, 막힌 부팅 → 시뮬레이터를 껐다 켜거나 XCUITest 탭)을 안내합니다. 2% 기준은 화면 일부가 저절로 바뀌면(예: "최적화 중" 행이 새로 생김) "바뀜"으로 볼 수 있어, 실험할 때는 화면을 직접 봅니다.
 
+## 4-1. 이벤트 합성으로 누르기 (상주 실행기, 기본)
+
+simtouch가 부팅에 따라 무시되는 문제(위)를 피하려고, **상주 실행기가 떠 있으면 실행기 안에서 XCTest의 이벤트 합성으로** 누릅니다. 오픈소스 Maestro의 iOS 드라이버와 같은 방식입니다. XCUITest 탭과 같은 테스트 데몬(testmanagerd)을 거쳐서 시뮬레이터 상태와 상관없이 먹히고, `XCUICoordinate.tap()`과 달리 앱이 한가해질 때까지 기다리지 않습니다.
+
+```text
+qakit (DirectTouch) ── POST /touch {action, x, y, …(0~1)} ──▶ 상주 실행기 (Sources/QAKit/Serve/QASynth.swift)
+  XCPointerEventPath  initForTouchAtPoint:offset:  (UIScreen 크기로 0~1 → 포인트)
+                      moveToPoint:atOffset: (끌기) · liftUpAtOffset: (뗌)
+  XCSynthesizedEventRecord  initWithName:interfaceOrientation: (1 = 세로) · addPointerEventPath:
+  XCTRunnerDaemonSession.sharedSession.daemonProxy  _XCT_synthesizeEvent:completion:   → 끝날 때까지 기다림
+```
+
+- 이름은 Xcode 27의 `XCUIAutomation`·`XCTestCore`(iOS 시뮬레이터용)에서 `strings`로 확인 ([조사 방법](reverse-engineering.md) 3).
+- **완료 콜백은 `@escaping`으로** 선언해야 한다 — 빠뜨리면 첫 요청에서 `closure argument passed as @noescape to Objective-C has escaped`로 실행기가 죽는다 (실제로 겪음).
+- `DirectTouch`는 누를 때마다 고른다: 같은 실행기 코드로 떠 있으면 이벤트 합성, 실행기가 없거나 연결이 안 되면 simtouch. `qakit touch`는 어떤 방식으로 눌렀는지 보여 준다.
+- 아직 세로 방향만 (가로 화면은 좌표가 돌아감).
+
+측정 (Xcode 27, 시험용 시뮬레이터, 설정 앱):
+
+| 항목 | 결과 |
+|---|---|
+| simtouch가 막힌 부팅(새 기기 첫 부팅, 전후 화면이 바이트까지 같음)에서 이벤트 합성 탭 | ✅ 설정 → 일반 |
+| 탭 10번 (부하가 가라앉은 뒤) | 중앙값 **350ms** (338~379) — simtouch 약 90ms, XCUITest 탭 0.8~2.2초 |
+| 끌기 0.3초 · 길게 누르기 0.8초 | ✅ 751ms · 1103ms |
+| 새 기기를 막 만들고 켠 직후 | 첫 탭 9~23초 — 부하 평균 256(`diskimagesiod` 130%)일 때. 부하가 가라앉자 0.35~0.42초 |
+| 이벤트 합성을 한 번 보낸 뒤의 simtouch | 막혔던 부팅에서도 먹히기 시작 (두 기기에서 봄 — 첫 합성 이벤트가 옛 경로의 내장 디지타이저를 깨우는 것으로 보이나 미확인) |
+
 ## 5. 자동 ID (AutoID) — 비공개 API는 아니지만 공식 지원 밖
 
 - `QAAutoID.dylib`을 앱 프로세스에 주입합니다: XCUITest는 `launchEnvironment["DYLD_INSERT_LIBRARIES"]`, `simctl launch`는 `SIMCTL_CHILD_DYLD_INSERT_LIBRARIES`.
@@ -315,7 +343,8 @@ strings -a "$SK" | grep -E "register.*Callbacks|unregister|framebufferSurface|In
 | 프레임 콜백 (없음·형식 바뀜·끊김) | 콜백 없이 화면만 바뀜 | 세 번 쌓이면 **seed 폴링**으로 (`SIMSCREEN_POLL=1`로 처음부터) |
 | 하드웨어 JPEG | 결과가 JPEG가 아님 | CoreGraphics + ImageIO로 (`SIMSCREEN_NO_HW=1`) |
 | SimulatorKit 위치·HID 함수·메시지 구조 | simtouch 시작 실패 | AI 직접 터치가 **XCUITest 탭**으로 |
-| 터치가 조용히 무시됨 | 답은 `ok`인데 화면 변화 없음 | AI 직접 터치: 1초 안에 변화가 없으면 경고, `expect`로 실패 처리, `via: xcuitest`. `qakit touch`: 전후 화면 비교 후 원인 안내 |
+| 터치가 조용히 무시됨 (simtouch) | 답은 `ok`인데 화면 변화 없음 | 상주 실행기가 있으면 처음부터 이벤트 합성을 씀. 없으면 AI 직접 터치: 1초 안에 변화가 없으면 경고, `expect`로 실패 처리, `via: xcuitest`. `qakit touch`: 전후 화면 비교 후 원인 안내 |
+| 이벤트 합성 비공개 클래스·메서드가 바뀜 | `/touch`가 "…이 없음" | DirectTouch가 simtouch로 (연결 실패와 달리 실행기가 답한 실패는 그대로 알림 — 메서드가 없으면 메시지로 드러남) |
 | AutoID 주입 | ID가 안 붙음 | `autoid: embedded`(앱에 AutoID.swift를 넣는 방식) |
 
 - CI(GitHub Actions, macOS)가 simscreen·simtouch가 **컴파일되는지** 확인합니다. 실제 동작(시뮬레이터)은 위 순서로 손으로 확인합니다.

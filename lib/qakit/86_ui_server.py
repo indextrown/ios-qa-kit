@@ -136,7 +136,7 @@ def cmd_ui(args):
                 good, line = android_touch(udid, kind, pts, secs)
             else:
                 if touch["helper"] is None:
-                    touch["helper"] = TouchHelper(udid)
+                    touch["helper"] = DirectTouch(ws, udid)   # 상주 실행기가 있으면 이벤트 합성, 없으면 simtouch
                 good, line = touch["helper"].send(cmd, timeout=secs + 10)
         finally:
             touch["lock"].release()

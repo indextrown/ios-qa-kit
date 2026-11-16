@@ -219,3 +219,4 @@ Tools/simscreen/.build/simscreen <UDID> --width 300 --once before.jpg   # 화면
 | Simulator 앱은 새 장면을 어떻게 아나 | 3 (`SimDeviceScreen` 심볼), 3 (`strings`로 안쪽 호출), 6 | CoreSimulator `SimScreen`의 프레임 콜백 → simscreen에 직접 적용 (49→60fps) |
 | Device Hub 터치는 왜 먹히고 simtouch는 안 먹히나 | 1 (`vmmap`), 5 (터치 처리 역어셈블), 7 (기기 안 로그), 8 (충돌 보고서) | 받는 곳이 둘(SimulatorHID·dtuhidd), 부팅마다 갈림 |
 | dtuhidd에 직접 넣을 수 있나 | 1 (`lsof`), 4 (필드 이름), 3 (CoreDeviceUtilities 타입), 9 (XPC 연결), 10 | 연결은 됨, Mercury 형식·본 화면 소유권에서 막힘 |
+| XCTest 이벤트 합성이 Xcode 27에도 있나 | 3 (`strings`로 `XCUIAutomation`·`XCTestCore`에서 클래스·셀렉터 이름), 7 (실행기 기록), 12 | 있음 → 상주 실행기 `/touch`로 구현, simtouch가 막힌 부팅에서도 먹힘 |

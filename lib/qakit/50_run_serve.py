@@ -182,6 +182,106 @@ def serve_alive(st):
         return False
 
 
+class RunnerTouch:
+    """좌표 터치를 상주 실행기(XCUITest)의 이벤트 합성으로 (/touch — XCSynthesizedEventRecord, docs/private-apis.md).
+    시뮬레이터 HID 주입(simtouch)과 달리 시뮬레이터 부팅 상태와 상관없이 먹힌다. TouchHelper와 같은 꼴: send("tap x y ms")·tap.
+    실행기가 없거나 옛 코드면 start()가 이유를 돌려준다 (그때는 DirectTouch가 simtouch로)."""
+    mode = "synth"
+
+    def __init__(self, ws, udid):
+        self.ws, self.udid = ws, udid
+        self.lock = threading.Lock()
+        self._hash = None
+
+    def state(self):
+        """→ (상주 실행기 상태, None) 또는 (None, 못 쓰는 이유)"""
+        st = serve_load(self.udid) if self.udid else None
+        if not st or not _pid_alive(st.get("pid")):
+            return None, "상주 실행기 없음"
+        if self._hash is None:
+            self._hash = runner_source_hash(self.ws)
+        if st.get("runnerHash") != self._hash:
+            return None, "상주 실행기가 옛 코드 (다음 qakit 명령 때 다시 띄움)"
+        return st, None
+
+    def start(self):
+        return self.state()[1]
+
+    @staticmethod
+    def body(cmd):
+        """simtouch 명령 한 줄 → /touch 요청. 모르는 명령이면 None"""
+        parts = cmd.split()
+        try:
+            nums = [float(v) for v in parts[1:]]
+        except ValueError:
+            return None
+        if parts[:1] == ["tap"] and len(nums) >= 2:
+            return {"action": "tap", "x": nums[0], "y": nums[1], "ms": nums[2] if len(nums) > 2 else 60}
+        if parts[:1] == ["press"] and len(nums) >= 3:
+            return {"action": "press", "x": nums[0], "y": nums[1], "seconds": nums[2]}
+        if parts[:1] == ["swipe"] and len(nums) >= 5:
+            return {"action": "swipe", "x": nums[0], "y": nums[1], "x2": nums[2], "y2": nums[3], "seconds": nums[4]}
+        return None
+
+    def send(self, cmd, timeout=None):
+        body = self.body(cmd)
+        if body is None:
+            return False, f"이벤트 합성은 tap·press·swipe만: {cmd}"
+        st, why = self.state()
+        if why:
+            return False, why
+        started = time.time()
+        with self.lock:
+            try:
+                res = serve_request(st, "/touch", body, timeout=timeout or 30)
+            except (ServeTimeout, ConnectionError) as e:
+                return False, f"상주 실행기 연결 실패: {e}"
+        if res.get("ok"):
+            return True, f"ok {body['action']} {int((time.time() - started) * 1000)}"
+        return False, res.get("message") or "이벤트 합성 실패"
+
+    def tap(self, x, y, hold_ms=60):
+        return self.send(f"tap {x:.4f} {y:.4f} {hold_ms}")
+
+    def stop(self):
+        pass
+
+
+class DirectTouch:
+    """좌표 터치 고르기: 상주 실행기가 같은 코드로 떠 있으면 이벤트 합성(늘 먹힘), 아니면 simtouch(빠르지만 부팅에 따라 무시될 수 있음).
+    누를 때마다 고른다 — 터치 도중에 실행기가 뜨거나 내려가도 맞는 쪽으로. mode: 마지막에 쓴 방식 (synth·digitizer·mouse)."""
+
+    def __init__(self, ws, udid):
+        self.udid = udid
+        self.runner = RunnerTouch(ws, udid)
+        self.sim = None
+        self.mode = None
+
+    def start(self):
+        if self.runner.start() is None:
+            return None
+        self.sim = self.sim or TouchHelper(self.udid)
+        return self.sim.start()
+
+    def send(self, cmd, timeout=None):
+        if self.runner.start() is None and RunnerTouch.body(cmd) is not None:
+            good, line = self.runner.send(cmd, timeout)
+            if good or not line.startswith("상주 실행기 연결 실패"):
+                self.mode = "synth"
+                return good, line
+        self.sim = self.sim or TouchHelper(self.udid)
+        good, line = self.sim.send(cmd, timeout)
+        self.mode = self.sim.mode
+        return good, line
+
+    def tap(self, x, y, hold_ms=60):
+        return self.send(f"tap {x:.4f} {y:.4f} {hold_ms}")
+
+    def stop(self):
+        if self.sim:
+            self.sim.stop()
+
+
 def serve_stop(udid, reason=None, quiet=False, force=False):
     """상주 실행기를 멈춘다. 없으면 아무것도 안 한다. force: 응답 없는 실행기 — 정상 종료를 기다리지 않고 바로 끝낸다."""
     st = serve_load(udid)
@@ -546,12 +646,13 @@ def _known_ids(ws):
 
 
 def cmd_touch(args):
-    """qakit touch tap x y — 직접 터치 확인용. 터치는 답이 "ok"여도 조용히 무시될 수 있어, 누른 뒤 화면이 바뀌었는지도 본다."""
+    """qakit touch tap x y — 직접 터치 확인용. 상주 실행기가 떠 있으면 XCTest 이벤트 합성, 아니면 simtouch.
+    답이 "ok"여도 무시될 수 있어(simtouch) 누른 뒤 화면이 바뀌었는지도 본다."""
     ws = find_workspace(args.workspace)
     if ws.device:
         fail("직접 터치는 시뮬레이터만")
     udid = ensure_booted(ws)
-    helper = TouchHelper(udid)
+    helper = DirectTouch(ws, udid)
     started = time.time()
     why = helper.start()
     if why:
@@ -560,22 +661,25 @@ def cmd_touch(args):
     before = screen_jpeg(udid, 300)
     good, line = helper.send(" ".join(args.action))
     helper.stop()
-    (ok if good else warn)(f"{line} · 도우미 준비 {ready:.1f}초 ({helper.mode})")
+    way = {"synth": "상주 실행기 이벤트 합성", "digitizer": "simtouch", "mouse": "simtouch(마우스)"}.get(helper.mode, helper.mode or "?")
+    (ok if good else warn)(f"{line} · {way} · 준비 {ready:.1f}초")
     if not good:
         sys.exit(1)
     time.sleep(1)
     after = screen_jpeg(udid, 300)
     if before and after and screens_alike(before, after):
+        if helper.mode == "synth":
+            warn("1초 뒤에도 화면이 그대로입니다 — 누른 자리가 화면을 바꾸지 않는 곳일 수 있습니다 (이벤트 합성은 앱까지 전달됨)")
+            return
         warn("1초 뒤에도 화면이 그대로입니다 — 터치가 무시됐을 수 있습니다 (누른 자리가 원래 화면을 바꾸지 않으면 괜찮음)")
         st = serve_load(udid)
         if st and serve_alive(st):
             info("   → 상주 실행기가 응답 없이 멈춰 있을 때 무시된 적이 있습니다: qakit serve --stop 뒤 다시")
         info("   → 부팅에 따라 시뮬레이터 안에서 이 터치 경로가 막힐 때가 있습니다 (Xcode 27, 같은 기기도 부팅마다 다름): "
-             "시뮬레이터를 껐다 켜면 될 때가 있고, 안 되면 XCUITest 탭(qakit do 'tap: <대상>')")
+             "qakit serve로 상주 실행기를 띄우면 이벤트 합성으로 누릅니다 (늘 먹힘). 또는 시뮬레이터를 껐다 켜기")
         info("   → 자세히: docs/private-apis.md '손가락처럼 누르기'")
     elif before and after:
         ok("화면이 바뀜 — 터치가 먹혔습니다")
-
 
 def coverage(ws):
     """앱 ID(자동 ID, 화면타입.프로퍼티) 중 시나리오가 쓰는 것. 화면 = ID 맨 앞 타입 이름.

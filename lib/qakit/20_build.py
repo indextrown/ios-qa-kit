@@ -87,7 +87,8 @@ def screens_alike(a, b, ratio=0.02):
 class TouchHelper:
     """시뮬레이터에 터치 신호를 직접 넣는 도우미(simtouch)를 계속 띄워 두고 한 줄 명령을 보낸다 (AI QA 직접 터치).
     좌표는 화면 대비 0~1. XCUITest가 켠 앱에서도 먹히지만, 부팅에 따라 시뮬레이터 안에서 이 경로가 막혀 조용히
-    무시될 때가 있어(docs/private-apis.md) 쓰는 쪽이 누른 뒤 화면 변화를 본다."""
+    무시될 때가 있어(docs/private-apis.md) 쓰는 쪽이 누른 뒤 화면 변화를 본다. 상주 실행기가 떠 있으면 DirectTouch가
+    이 대신 실행기의 XCTest 이벤트 합성(/touch)을 쓴다 (늘 먹힘)."""
 
     def __init__(self, udid, tool=None, ready_timeout=15):
         self.udid, self.tool, self.ready_timeout = udid, tool, ready_timeout
