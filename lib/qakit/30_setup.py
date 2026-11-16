@@ -244,6 +244,8 @@ def cmd_doctor(args):
             print(f"❌ {bad}" + (f"\n   → {hint}" if hint else ""))
 
     info(f"작업공간: {ws.root}")
+    if ws.platform == "android":
+        return android_doctor_ws(ws, check, lambda: problems)
     xc = run(["xcodebuild", "-version"], check=False)
     check(xc.returncode == 0, (xc.stdout or "").splitlines()[0] if xc.stdout else "", "Xcode 없음",
           "Xcode 설치 후 sudo xcode-select -s /Applications/Xcode.app")
@@ -399,6 +401,8 @@ def find_built_app(ws):
 
 def cmd_dump_ui(args):
     ws = find_workspace(args.workspace)
+    if ws.platform == "android":
+        return save_ui_dump(ws, args, android_dump_ui_ws(ws, args))
     with sim_lock(ws, "qakit dump-ui"):
         _cmd_dump_ui(ws, args)
 
@@ -417,7 +421,13 @@ def _cmd_dump_ui(ws, args):
     if not dump.exists():
         print(summarize(xcresult, masker(ws.secrets())))
         fail("화면 덤프 실패")
-    text = masker(ws.secrets())(dump.read_text(encoding="utf-8"))
+    save_ui_dump(ws, args, masker(ws.secrets())(dump.read_text(encoding="utf-8")))
+
+
+def save_ui_dump(ws, args, text):
+    """덤프 텍스트를 results/ui-dump.txt와 results/dumps/에 저장하고 요약을 보여 준다 (iOS·안드로이드 공통)."""
+    dump = ws.results_dir / "ui-dump.txt"
+    dump.parent.mkdir(parents=True, exist_ok=True)
     dump.write_text(text, encoding="utf-8")
     # gen-ids --verify가 쓰도록 덤프를 모아 둔다
     archive = ws.results_dir / "dumps"

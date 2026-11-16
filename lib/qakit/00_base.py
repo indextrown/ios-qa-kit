@@ -124,6 +124,14 @@ class Workspace:
         self.configuration = app.get("configuration", "Debug")
         self.bundle_id = app.get("bundleId", "")
         self.simulator = str(self.cfg.get("simulator", "iPhone 17"))
+        self.platform = str(self.cfg.get("platform", "ios")).lower()   # ios | android
+        if self.platform not in ("ios", "android"):
+            fail(f"qakit.yml platform은 ios 또는 android여야 합니다: {self.platform}")
+        # 안드로이드: app.project = Gradle 루트 폴더, app.module(기본 app), app.variant(기본 debug), app.packageName
+        self.module = str(app.get("module", "app"))
+        self.variant = str(app.get("variant", "debug"))
+        self.package = str(app.get("packageName", "")) if self.platform == "android" else ""
+        self.emulator = str(self.cfg.get("emulator", ANDROID_AVD))   # AVD 이름
         self.language = self.cfg.get("language")
         self.locale = self.cfg.get("locale")
         perms = self.cfg.get("permissions") or []
@@ -175,7 +183,9 @@ class Workspace:
 
     @property
     def app_dir(self):
-        return self.project.parent if self.project else None
+        if not self.project:
+            return None
+        return self.project if self.platform == "android" else self.project.parent   # 안드로이드는 Gradle 루트 폴더
 
     @property
     def app_build_dir(self):

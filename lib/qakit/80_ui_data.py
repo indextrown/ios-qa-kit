@@ -109,7 +109,7 @@ def ui_run_detail(ws, rel):
 
 DUMP_LINE_RE = re.compile(
     r'^(?P<indent> *)(?P<type>[A-Za-z0-9]+)(?: #(?P<id>\S+))?(?: "(?P<label>.*?)")?(?: value="(?P<value>.*?)")?'
-    r' @(?P<x>-?\d+),(?P<y>-?\d+) (?P<w>\d+)x(?P<h>\d+)$', re.M | re.S)
+    r'(?P<flags>(?: \((?:disabled|selected)\))*) @(?P<x>-?\d+),(?P<y>-?\d+) (?P<w>\d+)x(?P<h>\d+)$', re.M | re.S)
 
 
 def ui_parse_dump(text):
@@ -120,7 +120,8 @@ def ui_parse_dump(text):
         e = {"type": m["type"], "id": m["id"], "label": (m["label"] or "").replace("\n", " ") or None,
              "labelRaw": m["label"],
              "value": m["value"], "x": int(m["x"]), "y": int(m["y"]), "w": int(m["w"]), "h": int(m["h"]),
-             "depth": len(m["indent"]) // 2}
+             "depth": len(m["indent"]) // 2,
+             "enabled": "(disabled)" not in (m["flags"] or ""), "selected": "(selected)" in (m["flags"] or "")}
         if e["type"] == "Application" and screen is None:
             screen = {"w": e["w"], "h": e["h"]}
             continue
