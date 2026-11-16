@@ -26,12 +26,13 @@ def android_sdk_root():
     return None
 
 
-def android_java_home():
-    """JDK 17 이상 위치. JAVA_HOME → /usr/libexec/java_home → brew openjdk@17·openjdk 순. 없으면 None."""
+def android_java_home(timeout=None):
+    """JDK 17 이상 위치. JAVA_HOME → /usr/libexec/java_home → brew openjdk@17·openjdk 순. 없으면 None.
+    timeout: java_home이 그 안에 답하지 않으면 subprocess.TimeoutExpired (qakit doctor)"""
     v = os.environ.get("JAVA_HOME")
     if v and (Path(v) / "bin" / "java").exists():
         return Path(v)
-    r = run(["/usr/libexec/java_home", "-v", "17+"], check=False)
+    r = run(["/usr/libexec/java_home", "-v", "17+"], check=False, timeout=timeout)
     if r.returncode == 0 and r.stdout.strip():
         return Path(r.stdout.strip())
     for name in ("openjdk@17", "openjdk@21", "openjdk"):

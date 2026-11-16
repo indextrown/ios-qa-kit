@@ -231,65 +231,108 @@ def copy_template(src, dst, values, force):
 
 # ─────────────────────────────── 명령: doctor ───────────────────────────────
 
-def system_checks():
+DOCTOR_TIMEOUT = 20   # 초. 바깥 도구 하나가 멈춰도 qakit doctor가 이 안에 끝난다 (맥 앱 처음 점검·CI)
+
+
+def system_checks(timeout=DOCTOR_TIMEOUT):
     """작업공간 없이 이 맥에 qakit이 쓰는 도구가 있는지 (맥 앱 처음 점검·qakit doctor --system).
-    need: 필수(iOS QA) · AI · 안드로이드 — 필수만 빠져도 문제로 센다."""
+    need: 필수(iOS QA) · AI · 안드로이드 — 필수만 빠져도 문제로 센다.
+    바깥 명령(xcodebuild·simctl·java_home)은 동시에 돌리고 각각 timeout초까지만 기다린다 — 넘기면 그 항목은
+    unknown(확인 못 함)으로 없는 것과 구분한다. 시뮬레이터 서비스가 처음 뜰 때 simctl이 1분 넘게 멈추기도 한다."""
+    import concurrent.futures
     rows = []
 
     def sh(cmd):   # 도구가 아예 없으면(Xcode 없는 맥) 실패로만 본다
         try:
-            return run(cmd, check=False)
+            return run(cmd, check=False, timeout=timeout)
         except OSError:
             return subprocess.CompletedProcess(cmd, 127, "", "")
 
+    def limited(fn, *a):   # → (결과, 시간을 넘겼는지)
+        try:
+            return fn(*a), False
+        except subprocess.TimeoutExpired:
+            return None, True
+
+    def java():
+        try:
+            return android_java_home(timeout=timeout)
+        except OSError:
+            return None
+
     def add(key, name, need, ok_, detail, hint=""):
-        rows.append({"key": key, "name": name, "need": need, "ok": bool(ok_), "detail": detail, "hint": "" if ok_ else hint})
+        rows.append({"key": key, "name": name, "need": need, "ok": bool(ok_), "unknown": False,
+                     "detail": detail, "hint": "" if ok_ else hint})
+
+    def unknown(key, name, need, cmd):
+        rows.append({"key": key, "name": name, "need": need, "ok": False, "unknown": True,
+                     "detail": f"확인 못 함 — {timeout}초 안에 답이 없음 ({cmd})",
+                     "hint": f"qakit doctor --system --timeout {timeout * 3}"})
 
     v = sys.version_info
     add("python", "Python 3.9 이상", "필수", v >= (3, 9), f"{sys.executable} {v.major}.{v.minor}.{v.micro}",
         "xcode-select --install (맥 기본 python3)")
-    xc = sh(["xcodebuild", "-version"])
-    dev = sh(["xcode-select", "-p"]).stdout.strip()
-    full = xc.returncode == 0 and "CommandLineTools" not in dev
-    add("xcode", "Xcode", "필수", full, (xc.stdout or "").splitlines()[0] if full else (dev or "없음"),
-        "App Store에서 Xcode 설치 → sudo xcode-select -s /Applications/Xcode.app")
-    sims = 0
-    if full:
-        with contextlib.suppress(ValueError, TypeError):
-            devs = json.loads(sh(["xcrun", "simctl", "list", "devices", "available", "-j"]).stdout or "{}")["devices"]
-            sims = sum(len(d) for rt, d in devs.items() if "iOS" in rt)
-    add("simulator", "iOS 시뮬레이터", "필수", sims > 0, f"{sims}개" if sims else "없음",
-        "Xcode → Settings → Components에서 iOS 플랫폼 받기")
+    dev_r, dev_slow = limited(sh, ["xcode-select", "-p"])   # 링크만 읽어 바로 끝난다
+    dev = "" if dev_slow else dev_r.stdout.strip()
+    has_xcode = not dev_slow and dev_r.returncode == 0 and "CommandLineTools" not in dev
+    with concurrent.futures.ThreadPoolExecutor(3) as pool:
+        xc_f = pool.submit(limited, sh, ["xcodebuild", "-version"])
+        # simctl은 Xcode가 있을 때만 (명령줄 도구만 있으면 없는 도구라 바로 실패하지만 부를 까닭이 없다)
+        sims_f = pool.submit(limited, sh, ["xcrun", "simctl", "list", "devices", "available", "-j"]) if has_xcode else None
+        java_f = pool.submit(limited, java)
+    (xc, xc_slow), (jh, java_slow) = xc_f.result(), java_f.result()
+    sims_r, sims_slow = sims_f.result() if sims_f else (None, False)
+    if xc_slow or dev_slow:
+        unknown("xcode", "Xcode", "필수", "xcode-select -p" if dev_slow else "xcodebuild -version")
+    else:
+        full = xc.returncode == 0 and has_xcode
+        add("xcode", "Xcode", "필수", full, (xc.stdout or "").splitlines()[0] if full else (dev or "없음"),
+            "App Store에서 Xcode 설치 → sudo xcode-select -s /Applications/Xcode.app")
+    if sims_slow:
+        unknown("simulator", "iOS 시뮬레이터", "필수", "xcrun simctl list")
+    else:
+        sims = 0
+        if sims_r is not None and sims_r.returncode == 0:
+            with contextlib.suppress(ValueError, TypeError, KeyError):
+                devs = json.loads(sims_r.stdout or "{}")["devices"]
+                sims = sum(len(d) for rt, d in devs.items() if "iOS" in rt)
+        add("simulator", "iOS 시뮬레이터", "필수", sims > 0, f"{sims}개" if sims else "없음",
+            "Xcode → Settings → Components에서 iOS 플랫폼 받기")
     add("xcodegen", "xcodegen", "필수", shutil.which("xcodegen"), shutil.which("xcodegen") or "없음", "brew install xcodegen")
     add("git", "git", "필수", shutil.which("git"), shutil.which("git") or "없음", "xcode-select --install")
     for cli, label in (("claude", "Claude Code"), ("codex", "Codex")):
         add(cli, f"{label} (AI QA)", "AI", shutil.which(cli), shutil.which(cli) or "없음",
             "npm install -g @anthropic-ai/claude-code" if cli == "claude" else "npm install -g @openai/codex")
-    try:
-        jh = android_java_home()
-    except OSError:
-        jh = None
-    add("java", "JDK 17 이상", "안드로이드", jh, str(jh) if jh else "없음", "brew install openjdk@17 (또는 qakit android setup)")
+    if java_slow:
+        unknown("java", "JDK 17 이상", "안드로이드", "/usr/libexec/java_home")
+    else:
+        add("java", "JDK 17 이상", "안드로이드", jh, str(jh) if jh else "없음", "brew install openjdk@17 (또는 qakit android setup)")
     adb_ = android_tool("adb")
     add("adb", "Android SDK (adb)", "안드로이드", adb_, adb_ or "없음", "qakit android setup")
     return rows
 
 
 def cmd_doctor_system(args):
-    rows = system_checks()
+    timeout = getattr(args, "timeout", DOCTOR_TIMEOUT)
+    rows = system_checks(timeout)
+    required = [r for r in rows if r["need"] == "필수" and not r["ok"]]
+    bad = sum(1 for r in required if not r["unknown"])     # 없는 것
+    unknown = len(required) - bad                          # 시간 안에 확인하지 못한 것
     if args.json:
-        print(json.dumps({"checks": rows, "problems": sum(1 for r in rows if not r["ok"] and r["need"] == "필수")},
-                         ensure_ascii=False))
+        print(json.dumps({"checks": rows, "problems": bad, "unknown": unknown}, ensure_ascii=False))
         return
     for need in ("필수", "AI", "안드로이드"):
         print(f"\n[{need}]" if need != "필수" else "[필수]")
         for r in (x for x in rows if x["need"] == need):
-            mark = "✅" if r["ok"] else ("❌" if need == "필수" else "➖")
+            mark = "✅" if r["ok"] else "⚠️ " if r["unknown"] else ("❌" if need == "필수" else "➖")
             print(f"{mark} {r['name']}: {r['detail']}" + (f"\n   → {r['hint']}" if r["hint"] else ""))
-    bad = sum(1 for r in rows if not r["ok"] and r["need"] == "필수")
     print()
     if bad:
-        fail(f"필수 도구 {bad}개 없음", "위 → 안내대로 설치한 뒤 다시 qakit doctor --system")
+        fail(f"필수 도구 {bad}개 없음" + (f" · {unknown}개 확인 못 함" if unknown else ""),
+             "위 → 안내대로 설치한 뒤 다시 qakit doctor --system")
+    if unknown:
+        fail(f"필수 항목 {unknown}개를 {timeout}초 안에 확인하지 못함 (도구가 응답하지 않음)",
+             f"잠시 뒤 다시 qakit doctor --system — 계속 느리면 --timeout {timeout * 3}")
     ok("필수 도구 모두 있음 (AI·안드로이드는 쓸 때만)")
 
 
@@ -307,23 +350,40 @@ def cmd_doctor(args):
             problems += 1
             print(f"❌ {bad}" + (f"\n   → {hint}" if hint else ""))
 
+    timeout = getattr(args, "timeout", DOCTOR_TIMEOUT)
+
+    def slow(what, cmd):   # 바깥 도구가 timeout초 안에 답하지 않음 — 없는 것과 구분해 알린다
+        check(False, "", f"{what} 확인 못 함 — {timeout}초 안에 답이 없음 ({cmd})",
+              f"잠시 뒤 다시 qakit doctor — 계속 느리면 --timeout {timeout * 3}")
+
     info(f"작업공간: {ws.root}")
     if ws.platform == "android":
         return android_doctor_ws(ws, check, lambda: problems)
-    xc = run(["xcodebuild", "-version"], check=False)
-    check(xc.returncode == 0, (xc.stdout or "").splitlines()[0] if xc.stdout else "", "Xcode 없음",
-          "Xcode 설치 후 sudo xcode-select -s /Applications/Xcode.app")
+    try:
+        xc = run(["xcodebuild", "-version"], check=False, timeout=timeout)
+        check(xc.returncode == 0, (xc.stdout or "").splitlines()[0] if xc.stdout else "", "Xcode 없음",
+              "Xcode 설치 후 sudo xcode-select -s /Applications/Xcode.app")
+    except subprocess.TimeoutExpired:
+        slow("Xcode", "xcodebuild -version")
     check(shutil.which("xcodegen"), "xcodegen 설치됨", "xcodegen 없음", "brew install xcodegen")
     check(ws.project and ws.project.exists(), f"앱 프로젝트: {ws.project}", f"앱 프로젝트 없음: {ws.project}",
           "qakit.yml의 app.project 확인")
     check(bool(ws.scheme), f"scheme: {ws.scheme}", "app.scheme 비어 있음")
     check(ws.bundle_id and "TODO" not in ws.bundle_id, f"bundleId: {ws.bundle_id}", "app.bundleId 비어 있음")
 
-    udid, state = simulator_udid(ws.simulator)
-    check(udid, f"시뮬레이터: {ws.simulator} ({state})", f"시뮬레이터 '{ws.simulator}' 없음",
-          "xcrun simctl list devices available")
+    try:
+        udid, state = simulator_udid(ws.simulator, timeout=timeout)
+        check(udid, f"시뮬레이터: {ws.simulator} ({state})", f"시뮬레이터 '{ws.simulator}' 없음",
+              "xcrun simctl list devices available")
+    except subprocess.TimeoutExpired:
+        udid = None
+        slow("시뮬레이터", "xcrun simctl list")
     if udid:
-        check(app_installed(udid, ws.bundle_id), "대상 앱 설치됨", "대상 앱이 시뮬레이터에 없음", "qakit build-app")
+        try:
+            check(app_installed(udid, ws.bundle_id, timeout=timeout), "대상 앱 설치됨", "대상 앱이 시뮬레이터에 없음",
+                  "qakit build-app")
+        except subprocess.TimeoutExpired:
+            slow("대상 앱 설치", "xcrun simctl get_app_container")
 
     if ws.autoid == "inject":
         check(ws.autoid_dylib.exists(), "AutoID dylib 빌드됨", "AutoID dylib 없음",

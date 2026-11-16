@@ -124,6 +124,8 @@ FAIL_CODE = 1   # qakit run은 2로 바꾼다: 앱 판정 실패(1)가 아닌 �
 
 
 def fail(msg, hint=None, code=None):
+    with contextlib.suppress(OSError, ValueError):
+        sys.stdout.flush()   # 파이프로 받을 때(AI·앱) 앞서 찍은 줄보다 오류가 먼저 나오지 않게
     print(f"❌ {msg}", file=sys.stderr, flush=True)
     if hint:
         print(f"   → {hint}", file=sys.stderr, flush=True)
@@ -351,10 +353,11 @@ def _find_workspace(explicit):
 
 # ─────────────────────────────── 실행 유틸 ───────────────────────────────
 
-def run(cmd, check=True, capture=True, cwd=None, env=None):
+def run(cmd, check=True, capture=True, cwd=None, env=None, timeout=None):
+    """timeout(초)을 넘기면 그 명령을 끝내고 subprocess.TimeoutExpired (xcrun은 도구로 exec하므로 도구가 끝난다)"""
     result = subprocess.run(cmd, cwd=cwd, env=env, text=True, encoding="utf-8", errors="replace",
                             stdout=subprocess.PIPE if capture else None,
-                            stderr=subprocess.STDOUT if capture else None)
+                            stderr=subprocess.STDOUT if capture else None, timeout=timeout)
     if check and result.returncode != 0:
         out = (result.stdout or "")[-3000:]
         fail(f"명령 실패 ({result.returncode}): {' '.join(map(str, cmd[:4]))} ...\n{out}")

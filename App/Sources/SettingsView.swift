@@ -219,7 +219,11 @@ private struct CheckTab: View {
     private var summary: String {
         if state.checking { return "점검하는 중…" }
         if state.checks.isEmpty { return "아직 점검하지 않음" }
-        return state.problems == 0 ? "필수 도구가 모두 있습니다" : "필수 도구 \(state.problems)개가 없습니다"
+        if state.problems > 0 {
+            return "필수 도구 \(state.problems)개가 없습니다" + (state.unknowns > 0 ? " · \(state.unknowns)개 확인 못 함" : "")
+        }
+        if state.unknowns > 0 { return "필수 항목 \(state.unknowns)개를 확인하지 못했습니다 — 다시 점검해 보세요" }
+        return "필수 도구가 모두 있습니다"
     }
 }
 
@@ -228,8 +232,10 @@ private struct CheckRow: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            Image(systemName: row.ok ? "checkmark.circle.fill" : row.need == "필수" ? "xmark.circle.fill" : "minus.circle")
-                .foregroundColor(row.ok ? .green : row.need == "필수" ? .red : .secondary).frame(width: 18)
+            Image(systemName: row.ok ? "checkmark.circle.fill" : row.isUnknown ? "questionmark.circle.fill"
+                  : row.need == "필수" ? "xmark.circle.fill" : "minus.circle")
+                .foregroundColor(row.ok ? .green : row.isUnknown ? .orange : row.need == "필수" ? .red : .secondary)
+                .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(row.name).fontWeight(.medium)
                 Text(row.detail).font(.caption).foregroundColor(.secondary).lineLimit(1).truncationMode(.middle)
