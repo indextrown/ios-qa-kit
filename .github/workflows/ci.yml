@@ -59,6 +59,8 @@ jobs:
         run: |
           for t in simscreen simtouch; do xcrun swiftc -O "Tools/$t/$t.swift" -o "/tmp/$t"; done
           xcrun swiftc -O scripts/sim-probe.swift -o /tmp/sim-probe   # 비공개 API 조사 도구 (docs/private-apis.md)
+          xcrun swiftc -O scripts/objc-dump.swift -o /tmp/objc-dump   # (docs/reverse-engineering.md)
+          python3 -m py_compile scripts/macho-tools.py
       - name: 앱·DMG 만들기
         run: scripts/build-dmg.sh
       - name: 번들 확인

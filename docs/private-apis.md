@@ -3,7 +3,7 @@
 qakit은 시뮬레이터 화면을 실시간 영상으로 보여 주고(라이브 세션·AI 탭), 좌표로 손가락처럼 누르기(AI QA 직접 터치) 위해 Apple이 공개하지 않은 부품을 씁니다.
 이 문서는 **무엇을, 왜, 어떻게** 부르는지와, Xcode가 바뀌어 깨졌을 때 **직접 조사하는 법**을 정리합니다.
 
-[← README](../README.md) · 실시간 화면의 흐름만 짧게 보려면 [live-screen.md](live-screen.md)
+[← README](../README.md) · 실시간 화면의 흐름만 짧게 보려면 [live-screen.md](live-screen.md) · 이 내용을 **어떻게 알아냈는지**(역어셈블·로그·XPC): [reverse-engineering.md](reverse-engineering.md)
 
 > 확인한 환경: macOS 27.0.1 · Xcode 27.0 (27A266a) · iOS 27.0 시뮬레이터 (24A434) · CoreSimulator 1171.7 (2026-11-16)
 

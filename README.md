@@ -150,6 +150,7 @@ qakit ui            # 브라우저가 열립니다. 끄려면 Ctrl+C
 | [동작 원리](docs/how-it-works.md) | 작업공간 구조, 자동 ID 규칙, 요소 찾는 순서, 앱이 바뀌었을 때, 원칙과 한계 |
 | [실시간 화면](docs/live-screen.md) | 시뮬레이터 화면을 영상으로 보여 주는 원리, 측정 |
 | [비공개 API](docs/private-apis.md) | 화면 메모리·프레임 콜백·터치 주입에 쓰는 시뮬레이터 내부 API, Xcode가 바뀌면 조사하는 법 |
+| [비공개 API 조사 방법](docs/reverse-engineering.md) | 역어셈블·Swift 심볼·런타임·시뮬레이터 안 로그·충돌 보고서·XPC로 알아내는 순서와 지킬 것 |
 | [명령 요약](docs/commands.md) | 모든 명령과 전역 옵션 |
 | [개발·기여](docs/development.md) | 레포 구조, 테스트, Git Flow, 검증 현황 |
 
