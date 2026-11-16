@@ -732,7 +732,7 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 ## 안드로이드 지원 설계 (진행 중)
 
 > 상태: A0(설치)·A1(화면 파악)·A3(상주 실행기) 완료(2026-11-16, Pixel 7 AVD, Android 15 설정 앱으로 확인). `qakit run`·`qakit do`·`qakit serve`가 안드로이드에서 동작.
-> 첫 실제 앱 Navigation(mapsea-project)은 Compose만 쓰고 testTag(+testTagsAsResourceId)가 이미 있어 A2는 뒤로 미룬다. 다음은 Navigation으로 검증 → A4(build-app) → A5(logcat).
+> 안드로이드 시범 앱은 Compose만 쓰고 testTag(+testTagsAsResourceId)가 이미 있어 A2는 뒤로 미룬다. 다음은 A4(build-app) → A5(logcat).
 > 대상 앱은 XML 뷰와 Compose가 섞인 앱을 전제로 한다. 레포는 이 저장소에 통합하고(`ios-qa-kit` → `qa-kit`), 시나리오·UI·coverage·MCP는 공유, 실행기만 플랫폼별로 둔다.
 
 ### iOS와 대응
@@ -789,7 +789,7 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 
 | 부분 | 내용 |
 |---|---|
-| 위치 | `AndroidRunner/` (Gradle 9.8.2, AGP 9.5.0 — Navigation과 같은 판). 실행기 본체는 `runner/src/androidTest` |
+| 위치 | `AndroidRunner/` (Gradle 9.8.2, AGP 9.5.0 — 시범 앱과 같은 판). 실행기 본체는 `runner/src/androidTest` |
 | 구조 | 빈 앱 APK + instrumentation APK. `am instrument -w … ServeTest`가 기기 안 127.0.0.1:7912에 HTTP를 열고, qakit은 `adb forward tcp:0`으로 받은 포트로 붙는다. 상태 파일·`serve_request`·`run_via_serve`·`qakit do`는 iOS와 같다 |
 | 화면 읽기 | 접근성 API로 모든 창(`FLAG_RETRIEVE_INTERACTIVE_WINDOWS`)을 직접 읽는다 — 팝업·드롭다운·권한 대화상자 포함, 키보드·상태 표시줄 제외. 조건 한 번 확인 ≈ 20~30ms |
 | 덤프 | 실행기는 uiautomator 형식 XML만 보내고 qakit(`android_convert_response`)이 덤프 텍스트로 바꾼다 → 형식 코드 한 곳 |
@@ -799,10 +799,10 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 
 함정: `adb root`·`adb unroot`로 adbd가 재시작되면 실행 중인 실행기의 UiAutomation 연결이 끊긴다 (셸 명령이 빈 결과). 실행기를 다시 띄우면 된다.
 
-### Navigation 첫 시나리오 (2026-11-16, first-login)
+### 안드로이드 시범 앱 첫 시나리오 (2026-11-16, first-login)
 
 앱 데이터를 지우고(`pm clear` + 권한 미리 허용) 로그인 → 동시 로그인 확인창 → 안내창 3종(interrupts) → 홈. 통과 2회 (36.7초·22.3초).
-작업공간: `~/mapsea/qa-workspaces/navigation-android` (앱 레포는 읽기만). 이 과정에서 고친 실행기 문제:
+작업공간은 앱 레포 밖 별도 폴더 (앱 레포는 읽기만). 이 과정에서 고친 실행기 문제:
 
 | 증상 | 원인 → 고침 |
 |---|---|
@@ -813,7 +813,7 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 | 팝업의 "로그인" 대신 아래 화면 "로그인"을 누를 수 있음 | 대상 찾기를 위 창부터 |
 | 권한 대화상자 4종 | `permissions: [location, notifications, nearby, background]` |
 
-앱 쪽 관찰 (앱 팀 공유 후보): 로그인 화면에서 키보드가 떠 있을 때 뒤로 가기를 누르면 키보드만 닫히지 않고 앱이 닫힌다. 이메일 입력칸의 contentDescription이 문자열 리소스 ID 숫자("2131886546")로 들어가 있다 (`SignInContent.kt` `R.string.feature_auth_email_input.toString()`).
+앱 쪽 관찰(앱 버그 후보)은 앱별 기록(작업공간 NOTES.md)에 둔다. 도구 쪽 교훈: 키보드가 떠 있어도 뒤로 가기에 화면을 닫는 앱이 있다 → hide-keyboard에 기대지 않는다.
 
 ### A6 라이브 세션 (2026-11-16)
 
@@ -829,7 +829,7 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 
 ### 가로 화면·태블릿 (2026-11-16)
 
-- 태블릿 AVD `qakit-tablet` (pixel_tablet 2560x1600, Navigation e2e 기준 기기와 같음). Navigation 작업공간은 태블릿 + `orientation: landscape`로 바꿈, first-login 통과 (31.5초·29.7초).
+- 태블릿 AVD `qakit-tablet` (pixel_tablet 2560x1600). 시범 앱 작업공간은 태블릿 + `orientation: landscape`로 바꿈, first-login 통과 (31.5초·29.7초).
 - 방향: `qakit android boot --landscape`, `qakit android rotate`, qakit.yml `orientation:`. 자동 회전 끄고 `user_rotation` — 기본 방향(휴대폰 세로, 태블릿 가로)은 `wm size` Physical로 판단.
 - 웹: 안드로이드 덤프에 iOS처럼 `Application` 줄(화면 크기 dp)을 둔다 → UI가 화면 크기·방향을 읽는다 (이전에는 없어서 라이브 화면의 요소 상자·클릭이 안드로이드에서 동작하지 않았음). 라이브 세션·AI QA 기기 틀이 가로 화면이면 넓게.
 - 키보드: 태블릿에서 scroll-to 쓸기가 화면 키보드에 닿아 글라이드 입력("see see …")이 이메일 칸에 들어감. `show_ime_with_hard_keyboard=0` + `hw.keyboard=yes`는 이 이미지(Gboard)에서 듣지 않음, `ime disable`은 하나뿐인 키보드라 다시 켜짐 → 에뮬레이터에서 Gboard 앱을 `pm disable-user`(qakit.yml `keyboard: show`면 다시 켬). 실행기도 키보드 내용 영역을 피해 탭·쓸기, 가려진 요소는 hittable 아님.

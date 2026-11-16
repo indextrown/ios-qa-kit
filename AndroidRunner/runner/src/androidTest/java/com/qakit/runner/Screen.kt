@@ -89,7 +89,7 @@ class Screen(val pkg: String) {
 
     fun tree(): Tree {
         // 접근성 노드 캐시를 비운다: 화면이 바뀌어도 변경 알림을 늦게(또는 안) 보내는 앱(Compose 스플래시 → 로그인 등)은
-        // 캐시된 옛 화면이 계속 보인다 (Navigation 앱에서 확인, 2026-11-16). 비우면 한 번 읽는 데 조금 더 걸린다.
+        // 캐시된 옛 화면이 계속 보인다 (시범 앱에서 확인, 2026-11-16). 비우면 한 번 읽는 데 조금 더 걸린다.
         if (android.os.Build.VERSION.SDK_INT >= 34) runCatching { ua.clearCache() }
         val wins = try { ua.windows } catch (e: Exception) { emptyList() }
         val roots = mutableListOf<Node>()

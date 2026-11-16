@@ -53,11 +53,11 @@
 - 상주 실행기(UiAutomator2)로만 돈다: 첫 실행 때 실행기를 빌드(Gradle, 몇 분)·설치하고 띄운다. `--no-serve`·`--bench`·실패 영상은 아직 없음.
 - 앱은 미리 기기에 설치해 둔다 (`build-app` 아직). `--reset`·`reset: true`는 `pm clear`.
 - ID 정적 검사(`check`의 앱에 없는 ID)는 하지 않는다. coverage는 저장된 덤프(`results/ui-dump.txt`, `results/dumps/`)에서 본 ID 기준.
-- 글자 입력은 한글도 된다. 칸을 누르지 않고 바로 넣으므로(접근성 SET_TEXT) 대개 키보드가 뜨지 않는다 → `hide-keyboard`는 꼭 필요할 때만. `hide-keyboard`는 키보드가 실제로 떠 있을 때만 뒤로 가기를 보내는데, 앱에 따라 그 뒤로 가기에 화면·앱이 닫힐 수 있다(Navigation 로그인 화면).
+- 글자 입력은 한글도 된다. 칸을 누르지 않고 바로 넣으므로(접근성 SET_TEXT) 대개 키보드가 뜨지 않는다 → `hide-keyboard`는 꼭 필요할 때만. `hide-keyboard`는 키보드가 실제로 떠 있을 때만 뒤로 가기를 보내는데, 앱에 따라 그 뒤로 가기에 화면·앱이 닫힐 수 있다 (시범 앱 로그인 화면에서 확인).
 - qakit.yml `orientation: landscape|portrait|auto` — 실행기를 띄울 때 화면 방향 고정. `keyboard: hide`(기본)|`show` — 에뮬레이터 화면 키보드 앱(Gboard)을 꺼 두어 버튼을 가리지 않게 한다 (실기기는 그대로, Mac 키보드 입력은 됨). 키보드에 가려진 요소는 hittable이 아니고, 탭·쓸기는 키보드 영역을 피한다.
 - `pref`·`read-pref`는 SharedPreferences(debuggable 빌드).
 - `permissions:`(qakit.yml)는 reset(`pm clear`) 뒤 미리 허용한다: `location`, `location-always`, `notifications`, `nearby`(블루투스·Wi-Fi 근처 기기), `camera`, `microphone`, `photos`, `contacts`, `calendar`, `background`(배터리 최적화 예외 — "항상 백그라운드에서 실행" 대화상자), 또는 `android.permission.X`.
-- Compose `contentDescription`은 ID가 아니라 라벨이다: `{ label: locationFocusIcon }`. 팝업이 떠 있으면 대상은 위 창(팝업)에서 먼저 찾는다.
+- Compose `contentDescription`은 ID가 아니라 라벨이다: `{ label: currentLocationButton }`. 팝업이 떠 있으면 대상은 위 창(팝업)에서 먼저 찾는다.
 - `input:`(입력 알림)은 맨 위 대화상자의 첫 입력칸, `alert-button`은 버튼 글자(대소문자 무시).
 
 | 명령 | 설명 |
