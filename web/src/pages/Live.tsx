@@ -16,10 +16,24 @@ const hasId = (e: El) => !!e.id && !e.id.startsWith("_Tt");
 const yq = (v: string) => (/^[^\s"'{}[\],:#&*!|>%@`-][^{}[\],:#"]*$/.test(v) && !/\s$/.test(v) && !/: /.test(v) ? v : JSON.stringify(v));
 
 /** 고른 요소 → 시나리오 대상: ID 우선, 없으면 종류+라벨 (같은 것이 여럿이면 index, 줄바꿈 라벨은 첫 줄 contains) */
-function selectorFor(e: El, all: El[]) {
+/** 같은 줄(세로 가운데가 겹침)의 왼쪽에 있는 글자 — 안드로이드 row: 대상용 ("거리 측정" 줄의 스위치) */
+function rowLabel(e: El, all: El[]) {
+  const cy = e.y + e.h / 2;
+  const cands = all.filter((x) => x !== e && x.type === "StaticText" && x.label && x.x + x.w <= e.x + 1
+    && Math.abs(x.y + x.h / 2 - cy) <= Math.max(x.h, e.h) / 2);
+  cands.sort((a, b) => (b.x + b.w) - (a.x + a.w));   // 가장 가까운 왼쪽 글자
+  const label = cands[0]?.label;
+  // 그 글자가 화면에 하나뿐일 때만 (row: 는 첫 번째 같은 글자를 기준으로 줄을 잡는다)
+  return label && all.filter((x) => x.label === label).length === 1 ? label : null;
+}
+
+function selectorFor(e: El, all: El[], android = false) {
   if (hasId(e)) {
     const dup = all.filter((x) => x.id === e.id);
-    return dup.length > 1 ? `{ id: ${yq(e.id!)}, index: ${dup.indexOf(e)} }` : yq(e.id!);
+    if (dup.length <= 1) return yq(e.id!);
+    // 안드로이드: ID가 여럿이면(Compose 토글 목록 등) 순서 번호보다 줄 이름이 덜 깨진다 → { id, row: 줄 글자 }
+    const row = android ? rowLabel(e, all) : null;
+    return row ? `{ id: ${yq(e.id!)}, row: ${yq(row)} }` : `{ id: ${yq(e.id!)}, index: ${dup.indexOf(e)} }`;
   }
   const type = TYPE[e.type] ?? "any";
   const raw = e.labelRaw ?? "";
@@ -211,7 +225,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     const q = frac(ev), held = (Date.now() - p.t) / 1000;
     const moved = Math.hypot(q.x - p.x, (q.y - p.y) * ((scr?.h ?? 2) / (scr?.w ?? 1))) > 0.03;
     const h = hit(ev);
-    const step = !moved && held < 0.5 && h && els && elsFresh.current ? `tap: ${selectorFor(h, els.elements)}` : null;
+    const step = !moved && held < 0.5 && h && els && elsFresh.current ? `tap: ${selectorFor(h, els.elements, els.platform === "android")}` : null;
     elsSeq.current++; elsFresh.current = false;
     const body = moved ? { kind: "swipe", x: p.x, y: p.y, x2: q.x, y2: q.y, seconds: Math.min(Math.max(held, 0.15), 2) }
       : held >= 0.5 ? { kind: "press", x: p.x, y: p.y, seconds: Math.min(held, 5) } : { kind: "tap", x: p.x, y: p.y, step };
@@ -233,7 +247,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     const { naturalWidth: w, naturalHeight: h } = e.currentTarget;
     if (w && h && (!natural || (natural.w > natural.h) !== (w > h))) setNatural({ w, h });
   };
-  const selector = sel && els ? selectorFor(sel, els.elements) : null;
+  const selector = sel && els ? selectorFor(sel, els.elements, els.platform === "android") : null;
   const working = !!result?.running || busy;
   canAuto.current = !working && !dumping && !ai.active;
   const isInput = !!sel && ["TextField", "SecureTextField", "SearchField", "TextView"].includes(sel.type);
@@ -294,7 +308,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                     const h = hit(e);
                     if (!h) return;
                     setSel(h); setTab("act");
-                    if (clickTap && !working && els) doStep(`tap: ${selectorFor(h, els.elements)}`);
+                    if (clickTap && !working && els) doStep(`tap: ${selectorFor(h, els.elements, els.platform === "android")}`);
                   }}>
                   {(ai.active ? [] : els?.elements ?? []).filter((e) => boxes || e === sel || e === hover).map((e, i) => (
                     <div key={i} className={cx("pointer-events-none absolute rounded-[3px] border",

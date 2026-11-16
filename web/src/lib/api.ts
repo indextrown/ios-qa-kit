@@ -13,7 +13,7 @@ export interface Job { running: boolean; args: string[] | null; started: number 
   total: number; lines: string[]; draft?: string | null }
 export interface El { type: string; id: string | null; label: string | null; labelRaw: string | null; value: string | null;
   x: number; y: number; w: number; h: number; depth: number }
-export interface Elements { screen: { w: number; h: number } | null; elements: El[] }
+export interface Elements { screen: { w: number; h: number } | null; elements: El[]; platform?: "ios" | "android" }
 export interface AiSession { dir: string; name: string; goal: string | null; client: string | null; via: string; started: string | null; mode?: "qa" | "scenario";
   ended: string | null; seconds: number | null; cost: number | null; turns: number | null; code: number | null; calls: number; failed: number;
   issues: number; report: boolean; steps: number; saved: string[] }
