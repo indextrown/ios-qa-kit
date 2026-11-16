@@ -327,6 +327,63 @@ def cmd_ui(args):
                         live["failed_at"] = time.time()
                 live["cond"].notify_all()
 
+    # 안드로이드 라이브 화면 H.264 (screenrecord → Annex-B). 새로 붙는 쪽이 바로 풀 수 있게 SPS·PPS와 마지막 IDR부터를 들고 있다
+    h264 = {"proc": None, "cond": threading.Condition(), "sps": None, "pps": None, "gop": [], "seq": 0, "clients": 0,
+            "idle_since": 0.0, "error": None}
+
+    def h264_reader(proc):
+        buf = b""
+        try:
+            while True:
+                chunk = proc.stdout.read1(1 << 16)
+                if not chunk:
+                    break
+                buf += chunk
+                nals, buf = h264_nals(buf)
+                if not nals:
+                    continue
+                with h264["cond"]:
+                    for nal in nals:
+                        t = nal[0] & 31
+                        if t == 7:
+                            h264["sps"] = nal
+                        elif t == 8:
+                            h264["pps"] = nal
+                        elif t in (1, 5):
+                            if t == 5:
+                                h264["gop"] = []
+                            h264["seq"] += 1
+                            h264["gop"].append((h264["seq"], nal))
+                            if len(h264["gop"]) > 1500:   # 키 프레임 없이 너무 길면 버린다 (새로 붙는 쪽은 다음 IDR부터)
+                                h264["gop"] = h264["gop"][-1:]
+                    h264["cond"].notify_all()
+                    idle = h264["clients"] == 0 and time.time() - h264["idle_since"] > 30
+                if idle:
+                    break
+        finally:   # 기기 쪽 screenrecord를 먼저 끝낸다 (그 뒤에 새로 띄운 것을 죽이지 않게)
+            subprocess.run([require_tool("adb"), "-s", udid, "shell", "pkill", "-f", "output-format=h264"], capture_output=True)
+            with contextlib.suppress(OSError):
+                proc.kill()
+            proc.wait()
+            with h264["cond"]:
+                if h264["proc"] is proc:
+                    h264.update(proc=None, sps=None, pps=None, gop=[])
+                h264["cond"].notify_all()
+
+    def h264_start():
+        with h264["cond"]:
+            if h264["proc"] and h264["proc"].poll() is None:
+                return True
+        try:
+            proc = subprocess.Popen(android_h264_cmd(udid), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        except OSError as e:
+            h264["error"] = str(e)
+            return False
+        with h264["cond"]:
+            h264.update(proc=proc, sps=None, pps=None, gop=[], idle_since=time.time(), error=None)
+        threading.Thread(target=h264_reader, args=(proc,), daemon=True).start()
+        return True
+
     def live_start():
         """실시간 화면 도구를 띄운다. 안 되면 (False, 이유) — 30초 동안은 다시 시도하지 않는다."""
         with live["cond"]:
@@ -960,6 +1017,47 @@ def cmd_ui(args):
                         return self.send(200, {"running": running, "error": None if running else live["error"],
                                                "fps": round(len(live["frames"]) / 2, 1) if running else 0,
                                                "changedAt": live["changed_at"] if running else None, "now": time.time()})
+                if path == "/api/stream.h264":   # 안드로이드: H.264 Annex-B 그대로 (브라우저 WebCodecs가 풀어 그린다)
+                    if not (android and udid):
+                        return self.send(404, {"error": "H.264 화면은 안드로이드만"})
+                    live_start()   # 화면 바뀜 감지·스크린샷은 기존 JPEG 줄기로 (요소 자동 갱신)
+                    if not h264_start():
+                        return self.send(503, {"error": h264["error"] or "screenrecord를 띄우지 못함"})
+                    with h264["cond"]:
+                        h264["cond"].wait_for(lambda: h264["gop"] or h264["proc"] is None, timeout=10)
+                        if not (h264["sps"] and h264["pps"] and h264["gop"]):
+                            return self.send(503, {"error": "H.264 첫 프레임이 오지 않음"})
+                        h264["clients"] += 1
+                    with live["cond"]:
+                        live["clients"] += 1
+                    self.send_response(200)
+                    self.send_header("Content-Type", "video/h264")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    sc = b"\x00\x00\x00\x01"
+                    last = -1
+                    try:
+                        while True:
+                            with h264["cond"]:
+                                h264["cond"].wait_for(lambda: (h264["gop"] and h264["gop"][-1][0] > last) or h264["proc"] is None, timeout=5)
+                                if h264["proc"] is None:
+                                    break
+                                todo = [(q, n) for q, n in h264["gop"] if q > last]
+                                head = sc + h264["sps"] + sc + h264["pps"] if last < 0 else b""
+                            if todo:
+                                self.wfile.write(head + b"".join(sc + n for _, n in todo))
+                                self.wfile.flush()
+                                last = todo[-1][0]
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+                    finally:
+                        with h264["cond"]:
+                            h264["clients"] -= 1
+                            h264["idle_since"] = time.time()
+                        with live["cond"]:
+                            live["clients"] -= 1
+                            live["idle_since"] = time.time()
+                    return
                 if path == "/api/stream":   # MJPEG (multipart/x-mixed-replace) — <img>가 그대로 보여 준다
                     if not udid:
                         return self.send(404, {"error": "실시간 화면은 시뮬레이터만"})

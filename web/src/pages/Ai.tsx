@@ -6,6 +6,7 @@ import { cx, store, stored } from "../lib/util";
 import { AiActivity } from "../components/AiActivity";
 import { AiChat } from "../components/AiChat";
 import { RobotCursor } from "../components/RobotCursor";
+import { LiveScreen } from "../components/LiveScreen";
 import { Badge, Button, Card, Empty, PageHeader } from "../components/ui";
 
 const noop = () => {};
@@ -31,8 +32,8 @@ export function Ai() {
           </div>
           <div className={cx("mx-auto w-full bg-neutral-900 shadow-e3 ring-1 ring-black/40", wide ? "max-w-[880px] rounded-[30px] p-[9px]" : "max-w-[360px] rounded-[44px] p-[11px]")}>
             <div className={cx("relative overflow-hidden bg-black", wide ? "rounded-[22px]" : "rounded-[34px]")}>
-              <img src="/api/stream?k=ai" alt="기기 화면 (실시간)" className="block w-full" style={{ aspectRatio: wide ? undefined : "9 / 19.5" }}
-                onLoad={(e) => { const { naturalWidth: w, naturalHeight: h } = e.currentTarget; if (w && h && (w > h) !== wide) setWide(w > h); }} />
+              <LiveScreen streamKey="ai" alt="기기 화면 (실시간)" className="block w-full" style={{ aspectRatio: wide ? undefined : "9 / 19.5" }}
+                onSize={(w, h) => { if ((w > h) !== wide) setWide(w > h); }} />
               <RobotCursor enabled={cursor} />
             </div>
           </div>
