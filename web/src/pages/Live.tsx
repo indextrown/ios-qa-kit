@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Eye, EyeOff, Hand, Camera, Circle, Square as StopIcon, Keyboard, Radio, Image as ImageIcon, MousePointer2, MousePointerClick, Pause, Play, RotateCcw, ScanLine, TerminalSquare, Timer, CheckCircle2, ArrowUp, ArrowDown, Loader2, Zap } from "lucide-react";
 import { fileUrl, get, post, screenUrl, type DoResult, type El, type Elements, type Job } from "../lib/api";
 import { SaveScenario } from "../components/SaveScenario";
+import { StepList } from "../components/StepList";
 import { RunScenario } from "../components/RunScenario";
 import { AiActivity } from "../components/AiActivity";
 import { RobotCursor } from "../components/RobotCursor";
@@ -25,6 +26,31 @@ function rowLabel(e: El, all: El[]) {
   const label = cands[0]?.label;
   // 그 글자가 화면에 하나뿐일 때만 (row: 는 첫 번째 같은 글자를 기준으로 줄을 잡는다)
   return label && all.filter((x) => x.label === label).length === 1 ? label : null;
+}
+
+/** 단계 대상이 무엇에 기대는가 — 순서 번호(index)는 화면이 조금만 바뀌어도 다른 요소를 고른다 */
+function selectorBasis(sel: string): [string, boolean] {
+  if (!sel.startsWith("{")) return ["ID", false];
+  const idx = /\bindex: /.test(sel);
+  if (/^\{ id: /.test(sel)) return /\brow: /.test(sel) ? ["ID + 줄 글자", false] : ["ID + 순서", idx];
+  if (/\bcontains: /.test(sel)) return ["포함 글자", false];
+  return [idx ? "라벨 + 순서" : "라벨", idx];
+}
+
+const SCROLLERS = new Set(["ScrollView", "CollectionView", "Table", "WebView"]);
+/** 끌기 → swipe: 단계. 시작점을 품은 가장 작은 목록·스크롤 영역, 없으면 시작점을 품은 가장 큰 요소(지도 등) 위에서.
+ *  dir은 손가락이 움직인 방향 (시나리오 swipe와 같음) */
+function swipeStep(x: number, y: number, dx: number, dy: number, els: Elements) {
+  const scr = els.screen;
+  if (!scr) return null;
+  const px = x * scr.w, py = y * scr.h;
+  const inside = els.elements.filter((e) => px >= e.x && px <= e.x + e.w && py >= e.y && py <= e.y + e.h
+    && e.w * e.h < scr.w * scr.h * 0.98);
+  const scroll = inside.filter((e) => SCROLLERS.has(e.type)).sort((a, b) => a.w * a.h - b.w * b.h)[0];
+  const target = scroll ?? [...inside].sort((a, b) => b.w * b.h - a.w * a.h)[0];
+  if (!target) return null;
+  const dir = Math.abs(dx * scr.w) > Math.abs(dy * scr.h) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up");
+  return `swipe: { on: ${selectorFor(target, els.elements, els.platform === "android")}, dir: ${dir} }`;
 }
 
 function selectorFor(e: El, all: El[], android = false) {
@@ -163,10 +189,10 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     wasBusy.current = jobBusy;
   }, [jobBusy, loadEls, loadSteps]);
 
-  const doStep = async (step: string) => {
+  const doStep = async (step: string, record = true) => {
     if (!step) return;
-    setResult({ step, running: true });
-    try { setResult({ step, res: await post<DoResult>("/api/do", { step }) }); }
+    setResult({ step: record ? step : `${step}  (기록 안 함)`, running: true });
+    try { setResult({ step, res: await post<DoResult>("/api/do", { step, record }) }); }
     catch (e) { setResult({ step, error: (e as Error).message }); }
     if (!liveOn) await shot();
     await loadEls(); loadSteps();
@@ -225,16 +251,18 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     const q = frac(ev), held = (Date.now() - p.t) / 1000;
     const moved = Math.hypot(q.x - p.x, (q.y - p.y) * ((scr?.h ?? 2) / (scr?.w ?? 1))) > 0.03;
     const h = hit(ev);
-    const step = !moved && held < 0.5 && h && els && elsFresh.current ? `tap: ${selectorFor(h, els.elements, els.platform === "android")}` : null;
+    const fresh = !!els && elsFresh.current;
+    const step = !moved && held < 0.5 && h && fresh ? `tap: ${selectorFor(h, els!.elements, els!.platform === "android")}`
+      : moved && fresh && clickTap ? swipeStep(p.x, p.y, q.x - p.x, q.y - p.y, els!) : null;   // 끌기는 기록 모드일 때만 단계로
     elsSeq.current++; elsFresh.current = false;
-    const body = moved ? { kind: "swipe", x: p.x, y: p.y, x2: q.x, y2: q.y, seconds: Math.min(Math.max(held, 0.15), 2) }
+    const body = moved ? { kind: "swipe", x: p.x, y: p.y, x2: q.x, y2: q.y, seconds: Math.min(Math.max(held, 0.15), 2), step }
       : held >= 0.5 ? { kind: "press", x: p.x, y: p.y, seconds: Math.min(held, 5) } : { kind: "tap", x: p.x, y: p.y, step };
     const label = `직접 터치 · ${moved ? "끌기" : held >= 0.5 ? `길게 누르기 ${held.toFixed(1)}초` : "탭"} @${(p.x * 100).toFixed(0)}%,${(p.y * 100).toFixed(0)}%${step ? ` → ${step}` : ""}`;
     if (h && !moved) setSel(h);
     setResult({ step: label, running: true });
     try {
       const r = await post<{ ms: number; reply: string; recorded: boolean }>("/api/touch", body);
-      setResult({ step: label, res: { code: 0, output: `✅ ${r.ms}ms${r.recorded ? " · 단계 기록" : moved || held >= 0.5 ? " · 기록 안 함 (시나리오 단계 없음)" : " · 기록 안 함 (요소 위가 아니거나 화면 구조를 다시 읽기 전)"}` } });
+      setResult({ step: label, res: { code: 0, output: `✅ ${r.ms}ms${r.recorded ? " · 단계 기록" : moved && !clickTap ? " · 기록 안 함 (끌기는 기록 모드에서 swipe로)" : held >= 0.5 ? " · 기록 안 함 (시나리오 단계 없음)" : " · 기록 안 함 (요소 위가 아니거나 화면 구조를 다시 읽기 전)"}` } });
     } catch (e) { setResult({ step: label, error: (e as Error).message }); }
     if (!liveOn) await shot();
     loadSteps();
@@ -248,6 +276,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     if (w && h && (!natural || (natural.w > natural.h) !== (w > h))) setNatural({ w, h });
   };
   const selector = sel && els ? selectorFor(sel, els.elements, els.platform === "android") : null;
+  const basis = selector ? selectorBasis(selector) : null;
   const working = !!result?.running || busy;
   canAuto.current = !working && !dumping && !ai.active;
   const isInput = !!sel && ["TextField", "SecureTextField", "SearchField", "TextView"].includes(sel.type);
@@ -262,7 +291,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
 
   return (
     <>
-      <PageHeader title="라이브 세션" description="화면을 눌러 요소를 고르고 실행합니다 (ID 우선, 없으면 라벨). 통과한 단계는 기록돼 시나리오로 저장할 수 있습니다." />
+      <PageHeader title="라이브 세션" description="화면을 눌러 요소를 고르고 실행합니다 (ID 우선, 없으면 라벨). 통과한 단계는 기록돼 시나리오로 저장할 수 있습니다. 기록 모드(도구 막대)를 켜면 누르는 대로 바로 탭·기록됩니다." />
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="flex items-start justify-center gap-4">
           {/* 세로 도구 막대 */}
@@ -280,7 +309,8 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
               {boxes ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}</ToolBtn>
             <Sep />
             <ToolBtn label={`커서 ${cursor ? "끄기" : "켜기"} — 누르는 자리 보기`} active={cursor} onClick={() => setCursor(!cursor)}><MousePointer2 className="h-4 w-4" /></ToolBtn>
-            <ToolBtn label={`누르면 탭 ${clickTap ? "끄기" : "켜기"} — 화면을 누르면 바로 탭`} active={clickTap} onClick={() => setClickTap(!clickTap)}><MousePointerClick className="h-4 w-4" /></ToolBtn>
+            <ToolBtn label={`기록 모드 ${clickTap ? "끄기" : "켜기"} — 누르면 바로 탭하고 단계로 기록 (직접 터치면 끌기도 swipe로)`} active={clickTap} danger={clickTap}
+              onClick={() => setClickTap(!clickTap)}><MousePointerClick className="h-4 w-4" /></ToolBtn>
             <ToolBtn label={`직접 터치 ${direct ? "끄기" : "켜기"} (실험) — 손가락처럼 바로: 클릭=탭, 꾹=길게, 끌기=끌기`} active={direct} onClick={() => setDirect(!direct)}><Zap className="h-4 w-4" /></ToolBtn>
             <Sep />
             <ToolBtn label="사진 내려받기" onClick={saveShot}><Camera className="h-4 w-4" /></ToolBtn>
@@ -339,7 +369,8 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                   </select>)}
               </div>
               <div className="text-sub">{els ? `요소 ${els.elements.length}개` : "화면 구조 없음"}{boxes ? "" : " · 상자 숨김"}</div>
-              {cursor && <div className="text-sub">커서 켬{clickTap && !direct ? " · 누르면 탭" : ""}</div>}
+              {cursor && <div className="text-sub">커서 켬</div>}
+              {clickTap && <div className="flex items-center gap-1.5 font-medium text-bad"><span className="h-2 w-2 rounded-full bg-bad" />기록 모드 — 누르면 탭·기록</div>}
               {direct && <div className="text-warn">직접 터치 (실험) — 클릭=탭 · 꾹=길게 · 끌기</div>}
               {rec && <div className="flex items-center gap-1.5 font-medium text-bad"><span className="h-2 w-2 animate-pulse rounded-full bg-bad" />녹화 {recSecs}s</div>}
             </div>
@@ -377,7 +408,10 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                   </div>
                   {sel.label && <div className="text-[13px]">"{sel.label}"</div>}
                   <div className="font-mono text-[11px] text-sub">@{sel.x},{sel.y} {sel.w}×{sel.h}</div>
-                  <div className="rounded-md bg-muted px-2.5 py-2"><div className="mb-0.5 text-[11px] text-sub">단계 대상</div><Mono className="break-all">{selector}</Mono></div>
+                  <div className="rounded-md bg-muted px-2.5 py-2">
+                    <div className="mb-0.5 flex items-center justify-between text-[11px] text-sub">단계 대상
+                      {basis && <Badge tone={basis[1] ? "warn" : "muted"}>{basis[0]}{basis[1] ? " — 화면이 바뀌면 깨지기 쉬움" : ""}</Badge>}</div>
+                    <Mono className="break-all">{selector}</Mono></div>
                   {isInput && (
                     <form className="space-y-1.5" onSubmit={(e) => { e.preventDefault(); if (typed) doStep(`type: { into: ${selector}, text: ${JSON.stringify(typed)} }`); }}>
                       <div className="flex gap-1.5">
@@ -399,6 +433,13 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                 </div>
               )}
             </Card>
+            {clickTap && (
+              <Card title={<span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full bg-bad" />기록 중인 단계</span>}
+                actions={<button className="text-[11px] text-link hover:underline" onClick={() => setTab("save")}>저장하러 가기</button>}>
+                <StepList compact steps={steps?.steps ?? []} disabled={working}
+                  onChange={(s) => setSteps((p) => ({ steps: s, fromLaunch: p?.fromLaunch ?? false }))} onRun={(s) => doStep(s, false)} />
+              </Card>
+            )}
             <Card title={<span className="flex items-center gap-1.5"><TerminalSquare className="h-3.5 w-3.5" />단계 직접 실행</span>}>
               <form className="flex gap-2 p-4" onSubmit={(e) => { e.preventDefault(); doStep(input.trim()); }}>
                 <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="tap: home_search_button"
@@ -417,11 +458,8 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
           <div className={cx(tab !== "run" && "hidden")}><RunScenario job={job} refreshJob={refreshJob} /></div>
           <div className={cx("space-y-3", tab !== "save" && "hidden")}>
             <Card title="기록된 단계" actions={steps && <span className="text-[11px] text-sub">{steps.fromLaunch ? "앱을 다시 켠 뒤부터" : steps.steps.length ? "다시 켜기 전 것 포함" : ""}</span>}>
-              {!steps?.steps.length ? <Empty>통과한 단계가 여기에 쌓입니다</Empty> : (
-                <ol className="max-h-64 space-y-1 overflow-auto p-4 pl-9 text-[12px] [list-style:decimal]">
-                  {steps.steps.map((s, i) => <li key={i}><Mono className="break-all">{s}</Mono></li>)}
-                </ol>
-              )}
+              <StepList steps={steps?.steps ?? []} disabled={working}
+                onChange={(s) => setSteps((p) => ({ steps: s, fromLaunch: p?.fromLaunch ?? false }))} onRun={(s) => doStep(s, false)} />
             </Card>
             <SaveScenario job={job} refreshJob={refreshJob} stepsCount={steps?.steps.length ?? 0} />
           </div>

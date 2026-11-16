@@ -150,6 +150,8 @@ class Workspace:
         ids = self.cfg.get("ids") or {}
         srcs = ids.get("sources") if isinstance(ids, dict) else None
         self.id_sources = [expand(x, self.root) for x in (srcs if isinstance(srcs, list) else [srcs] if srcs else [])]
+        allow = ids.get("allow") if isinstance(ids, dict) else None   # 검사하지 않을 ID 접두어 (외부 SDK 화면 등)
+        self.id_allow = tuple(str(x) for x in (allow if isinstance(allow, list) else [allow] if allow else []))
         self.app_override = False
         self.device = None   # --device로 고른 실기기 (None = 시뮬레이터)
         # 빌드 종류: debug(기본) = app.configuration / release = app.release.configuration (기본 Release)

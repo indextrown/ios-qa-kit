@@ -98,6 +98,7 @@ worktree:                        # QA 워크트리(init --worktree)일 때
   update: auto                   # auto(test/run 전 자동으로 가져옴) | warn | off
 # ids:
 #   sources: [~/path/App/Sources]
+#   allow: [ThirdPartySDK]       # 이 접두어로 시작하는 ID는 알 수 없는 ID 검사에서 통과 (외부 SDK 화면)
 ```
 
 ## 결과 파일 (results/, git 제외)

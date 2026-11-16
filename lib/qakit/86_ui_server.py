@@ -143,9 +143,10 @@ def cmd_ui(args):
         if not good:
             return None, f"직접 터치 실패: {line}"
         step = str(body.get("step") or "").strip()
-        if step and kind == "tap" and len(step) < 500:
+        recorded = bool(step) and kind in ("tap", "swipe") and len(step) < 500   # 끌기는 화면 쪽에서 swipe: 단계로 바꿔 보낸다
+        if recorded:
             do_log_write(ws, {"step": step})
-        return {"ok": True, "ms": int((time.time() - t0) * 1000), "reply": line, "recorded": bool(step and kind == "tap")}, None
+        return {"ok": True, "ms": int((time.time() - t0) * 1000), "reply": line, "recorded": recorded}, None
 
     def job_state(since):
         with job["lock"]:
@@ -178,18 +179,54 @@ def cmd_ui(args):
                 description=body.get("description") or None, tags=tags, start=start, recorded=recorded)
         except ValueError as e:
             return None, str(e)
+        return draft_result(name, text, merged, nsteps, from_launch), None
+
+    def draft_result(name, text, merged, nsteps, from_launch):
+        """초안 파일을 쓰고 형식·ID 검사 결과와 함께 돌려준다"""
         f = draft_path(name)
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(text, encoding="utf-8")
         try:
             scenario = scenario_tools.load_scenario(f, ws.root)
-            unknown = scenario_tools.check_ids(scenario, known_ids(ws), extra_ok=("Mapbox",))
+            unknown = scenario_tools.check_ids(scenario, known_ids(ws), extra_ok=ws.id_allow)
             problem = None
         except Exception as e:  # noqa: BLE001 — 형식 오류를 그대로 보여 준다
             unknown, problem = [], str(e)
         return {"name": name, "text": text, "merged": merged, "steps": nsteps, "fromLaunch": from_launch,
                 "unknownIds": unknown, "problem": problem,
-                "exists": (ws.root / "scenarios" / f"{name}.qa.yml").exists()}, None
+                "exists": (ws.root / "scenarios" / f"{name}.qa.yml").exists()}
+
+    def save_draft(body):
+        """화면에서 고친 초안 글을 그대로 저장하고 다시 검사 (재생 실패 → 고쳐서 다시 재생)"""
+        name, text = str(body.get("name") or ""), body.get("text")
+        if not SCENARIO_NAME_RE.fullmatch(name) or not draft_path(name).exists():
+            return None, "초안이 없습니다 — 먼저 초안을 만드세요"
+        if not isinstance(text, str) or len(text) > 200_000:
+            return None, "초안 글이 없거나 너무 깁니다"
+        text = text if text.endswith("\n") else text + "\n"
+        yaml_error = None
+        try:
+            data = scenario_tools.parse_yaml(text)
+            nsteps = count_steps(data.get("steps") or []) if isinstance(data, dict) else 0
+        except Exception as e:  # noqa: BLE001
+            nsteps, yaml_error = 0, f"YAML 형식 오류 — 괄호·따옴표·들여쓰기를 확인하세요 ({e})"
+        res = draft_result(name, text, int(body.get("merged") or 0), nsteps, bool(body.get("fromLaunch", True)))
+        if yaml_error:
+            res["problem"] = yaml_error
+        return res, None
+
+    def edit_do_steps(body):
+        """기록된 단계 고치기 (지우기·순서·글자). 앱을 다시 켠 뒤부터인지는 그대로 둔다."""
+        steps = body.get("steps")
+        if not isinstance(steps, list) or len(steps) > 500 or not all(isinstance(x, str) and 0 < len(x.strip()) <= 2000 for x in steps):
+            return None, "단계 목록이 이상합니다 (글자 목록, 빈 단계 없이)"
+        _, from_launch = do_log_read(ws)
+        rows = ([{"event": "launch"}] if from_launch else []) + [{"step": x.strip()} for x in steps]
+        f = do_log_path(ws)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        at = datetime.datetime.now().isoformat(timespec="seconds")
+        f.write_text("".join(json.dumps(dict(r, at=at), ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        return {"steps": [x.strip() for x in steps], "fromLaunch": from_launch}, None
 
     def src_path(kind, name):
         """편집할 파일: scenarios/<이름>.qa.yml 또는 steps/<이름>.qa.yml"""
@@ -210,7 +247,7 @@ def cmd_ui(args):
             scenario = dict(data, steps=steps)
             if data.get("interrupts"):
                 scenario["interrupts"] = scenario_tools._expand(data["interrupts"], ws.root, [f"{name}.qa.yml"])
-            unknown = scenario_tools.check_ids(scenario, _known_ids(ws), extra_ok=("Mapbox",))
+            unknown = scenario_tools.check_ids(scenario, _known_ids(ws), extra_ok=ws.id_allow)
         except Exception as e:  # noqa: BLE001 — 없는 공통 단계 등
             return {"ok": False, "problem": str(e), "unknownIds": [], "steps": 0}
         return {"ok": not unknown, "problem": None, "unknownIds": unknown, "steps": count_steps(steps),
@@ -606,6 +643,12 @@ def cmd_ui(args):
             if path == "/api/draft":
                 res, err = make_draft(body)
                 return self.send(400 if err else 200, {"error": err} if err else res)
+            if path == "/api/draft/save":
+                res, err = save_draft(body)
+                return self.send(400 if err else 200, {"error": err} if err else res)
+            if path == "/api/do-steps":
+                res, err = edit_do_steps(body)
+                return self.send(400 if err else 200, {"error": err} if err else res)
             if path == "/api/draft/verify":
                 name = str(body.get("name") or "")
                 if not SCENARIO_NAME_RE.fullmatch(name) or not draft_path(name).exists():
@@ -652,7 +695,7 @@ def cmd_ui(args):
                 step = str(body.get("step") or "").strip()
                 if not step or len(step) > 2000:
                     return self.send(400, {"error": "단계가 비었거나 너무 김"})
-                res, err = run_do([step] if step not in ("launch", "reset") else [step])
+                res, err = run_do([step] + (["--no-record"] if body.get("record") is False else []))
                 return self.send(409 if err else 200, {"error": err} if err else res)
             return self.send(404, {"error": "없는 주소"})
 
