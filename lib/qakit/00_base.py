@@ -34,8 +34,68 @@ import scenario_tools  # noqa: E402
 import qa_readme  # noqa: E402
 
 ARCHIVE_DIR = Path.home() / ".qakit" / "archive"
-SCENARIO_PROJECT = KIT_DIR / "ScenarioRunner" / "QAScenarioRunner.xcodeproj"
-SCENARIO_BUILD = KIT_DIR / ".build" / "scenario-runner"
+
+
+def _work_dir():
+    """qakit이 빌드 결과를 쓰는 곳. 도구 폴더(KIT_DIR)는 읽기만 해도 되게 (맥 앱 번들 안에 넣으면 고칠 수 없음 — PLAN "맥 앱(DMG) 설계" D1).
+    QAKIT_HOME이 있으면 거기, 도구 폴더에 쓸 수 있으면(git 설치) 지금처럼 도구 폴더, 아니면 ~/Library/Application Support/qakit."""
+    env = os.environ.get("QAKIT_HOME")
+    if env:
+        return Path(env).expanduser().resolve()
+    if os.access(KIT_DIR, os.W_OK):
+        return KIT_DIR
+    return Path.home() / "Library" / "Application Support" / "qakit"
+
+
+WORK_DIR = _work_dir()
+BUILD_DIR = WORK_DIR / ".build"
+SCENARIO_BUILD = BUILD_DIR / "scenario-runner"
+_SRC_SKIP = {".build", "build", ".gradle", ".swiftpm", "__pycache__", ".DS_Store", ".idea", "local.properties"}
+
+
+def _mirror(src, dst):
+    """src 폴더를 dst로 맞춘다 (바뀐 파일만 복사, 원본에 없는 파일은 지움). 빌드 결과 폴더는 건드리지 않는다."""
+    dst.mkdir(parents=True, exist_ok=True)
+    names = {n for n in os.listdir(src) if n not in _SRC_SKIP and not n.endswith(".xcodeproj")}
+    for n in os.listdir(dst):
+        if n not in names and n not in _SRC_SKIP and not n.endswith(".xcodeproj"):
+            p = dst / n
+            shutil.rmtree(p) if p.is_dir() and not p.is_symlink() else p.unlink()
+    for n in names:
+        s, d = src / n, dst / n
+        if s.is_dir():
+            if d.exists() and not d.is_dir():
+                d.unlink()
+            _mirror(s, d)
+        else:
+            st = s.stat()
+            if d.is_dir():
+                shutil.rmtree(d)
+            if not d.exists() or d.stat().st_size != st.st_size or int(d.stat().st_mtime) != int(st.st_mtime):
+                shutil.copy2(s, d)
+
+
+def writable_src(*names):
+    """빌드 도구가 소스 폴더 안에 쓰는 것(xcodegen 프로젝트·SwiftPM·Gradle)을 위해 쓸 수 있는 소스 위치.
+    도구 폴더에 쓸 수 있으면 그대로, 아니면 WORK_DIR/src에 그 부분만 복사해 둔다. → 루트 경로"""
+    if WORK_DIR == KIT_DIR:
+        return KIT_DIR
+    root = WORK_DIR / "src"
+    for n in names:
+        s = KIT_DIR / n
+        if s.is_dir():
+            _mirror(s, root / n)
+        elif s.exists():
+            root.mkdir(parents=True, exist_ok=True)
+            d = root / n
+            if not d.exists() or d.read_bytes() != s.read_bytes():
+                shutil.copy2(s, d)
+    return root
+
+
+def scenario_runner_src():
+    """xcodegen·xcodebuild를 돌릴 시나리오 실행기 폴더 (패키지 QAKit = 그 위 폴더의 Package.swift·Sources)"""
+    return writable_src("Package.swift", "Sources", "ScenarioRunner") / "ScenarioRunner"
 # 사람/AI가 만든 결과물 (save·restore 대상). 나머지는 qakit이 다시 만든다.
 USER_FILES = ["README.md", "qakit.yml", "NOTES.md", "AGENTS.md", "CLAUDE.md", "secrets.example.txt", ".gitignore",
               "history.jsonl", "scenarios", "steps", "Runner/UITests/Pages", "Runner/UITests/Flows"]
@@ -221,7 +281,7 @@ class Workspace:
 
     @property
     def autoid_dylib(self):
-        return KIT_DIR / ".build" / ("autoid-device" if self.device else "autoid") / "QAAutoID.dylib"
+        return BUILD_DIR / ("autoid-device" if self.device else "autoid") / "QAAutoID.dylib"
 
     @property
     def swiftui_manifest(self):

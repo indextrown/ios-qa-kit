@@ -26,9 +26,9 @@ def ensure_scenario_runner(udid):
     if xctestruns and stamp.exists() and stamp.read_text() == h.hexdigest():
         return xctestruns[0]
     info("시나리오 실행기 빌드 중 (도구가 바뀌었을 때 한 번)...")
-    run(["xcodegen", "generate", "--quiet", "--spec", str(KIT_DIR / "ScenarioRunner" / "project.yml"),
-         "--project", str(KIT_DIR / "ScenarioRunner")])
-    r = run(["xcodebuild", "build-for-testing", "-project", str(SCENARIO_PROJECT), "-scheme", "ScenarioTests",
+    runner = scenario_runner_src()
+    run(["xcodegen", "generate", "--quiet", "--spec", str(runner / "project.yml"), "--project", str(runner)])
+    r = run(["xcodebuild", "build-for-testing", "-project", str(runner / "QAScenarioRunner.xcodeproj"), "-scheme", "ScenarioTests",
              "-destination", f"id={udid}", "-derivedDataPath", str(SCENARIO_BUILD)], check=False)
     if r.returncode != 0:
         errors = [l for l in (r.stdout or "").splitlines() if "error:" in l]

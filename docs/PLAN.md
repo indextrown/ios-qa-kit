@@ -701,7 +701,7 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 
 ## 맥 앱(DMG) 설계 — 다음 단계
 
-> 상태: 계획 (2026-11-16). 아직 만들지 않음.
+> 상태: D1 ✅ 쓰는 곳 분리 (2026-11-16). 다음 D2 앱 셸.
 
 ### 왜
 
@@ -760,7 +760,7 @@ QA Kit.app
 
 | 단계 | 내용 |
 |---|---|
-| **D1. 쓰는 곳 분리** | `QAKIT_HOME` 도입, 빌드 결과·xcodegen·Gradle 출력을 그쪽으로. git 설치는 그대로 동작 (테스트: 도구 폴더를 읽기 전용으로 두고 `build-app`·`run`·`ui`) |
+| **D1. 쓰는 곳 분리** ✅ | `WORK_DIR` = `QAKIT_HOME` → 도구 폴더에 쓸 수 있으면(git 설치) 도구 폴더 그대로 → 아니면 `~/Library/Application Support/qakit`. 빌드 결과(`.build/`: 시나리오 실행기·실기기 실행기·AutoID·안드로이드 실행기·simscreen·simtouch·swiftui-ids)는 `WORK_DIR/.build`, 소스 폴더 안에 쓰는 빌드(xcodegen 프로젝트·SwiftPM·Gradle)는 그 부분만 `WORK_DIR/src`에 복사(`writable_src`, 바뀐 파일만·지운 파일은 지움)해 빌드. git 설치는 경로가 그대로라 다시 빌드하지 않음. **확인**: 도구 사본을 `chmod -R a-w`로 읽기 전용으로 두고 맥 기본 Python 3.9.6으로 — AutoID·시나리오 실행기 빌드 → `do launch`·`dump`·`run`(실패 사진·영상까지) ✅, simscreen 10초·simtouch 2초·안드로이드 실행기 47초·swiftui-ids 4분 44초 빌드 ✅, 도구 폴더에 쓴 파일 0 |
 | **D2. 앱 셸** | Swift 앱: 작업공간 고르기·최근 목록, 서버 띄우기·끄기, WKWebView (내려받기 `WKDownload`, `confirm`·`alert` 처리, 바깥 링크는 브라우저로, MJPEG 실시간 화면 확인) |
 | **D3. 맥 기능** | 메뉴 막대 아이콘·실행 중 표시, 처음 점검(`qakit doctor`), 명령줄·스킬 설치 메뉴 |
 | **D4. 패키징** | release.sh에 앱·DMG·(서명·공증) 추가, 릴리스에 첨부 |
@@ -770,7 +770,7 @@ QA Kit.app
 
 | 항목 | 내용 |
 |---|---|
-| Python 버전 | 맥 기본 `/usr/bin/python3`는 3.9.6 (Xcode 명령줄 도구). 지금 qakit은 Homebrew 3.14에서만 써 봄 → 3.9에서 도는지 확인하고, 안 되면 최소 버전을 정해 점검 화면에서 안내 |
+| Python 버전 | 맥 기본 `/usr/bin/python3`는 3.9.6 (Xcode 명령줄 도구) → **D1에서 확인 ✅**: 단위 테스트 전부·빌드·실행이 3.9.6에서 동작. 최소 3.9로 두고, 3.10 이상 문법을 쓰지 않게 (CI에 3.9 추가 고려) |
 | WKWebView 차이 | 실시간 화면(MJPEG `<img>`), 녹화·사진 내려받기, `window.confirm` — Safari 엔진에서 확인 필요 |
 | git 설치와 둘 다 있을 때 | MCP·스킬이 가리키는 `qakit`이 어느 쪽인지 섞일 수 있음 → 앱이 지금 연결된 쪽을 보여 주고 바꾸게 |
 | 여러 창 | 같은 작업공간을 두 창에서 열면 서버 둘 → 이미 열려 있으면 그 창으로 |
@@ -798,7 +798,7 @@ QA Kit.app
 | 9. UI | `qakit ui` ([설계](#ui-설계-다음-단계)) | U1~U5 ✅, 실시간 화면·커서·캡처 ✅ |
 | 10. AI QA | AI가 MCP로 앱을 직접 QA ([설계](#ai-qa-설계-다음-단계)) | A1 ✅ (`qakit mcp`, 실제 Claude Code에서 확인) · A2 ✅ (라이브 세션 AI 활동) · A3 ✅ (UI에서 AI QA 시작, 실제 Claude Code로 끝까지) · A4 ✅ (지난 세션·통과 단계 → 시나리오) |
 | 11. AI QA 직접 터치 | tapflow 방식 — 앱은 simctl, 실행기는 읽기만, 누르기는 터치 신호 ([설계](#ai-qa-직접-터치-설계--tapflow-방식-다음-단계)) | 시험 ✅ · AutoID ✅ · H1 ✅ · H3 ✅ · H4 ✅ |
-| 12. 맥 앱(DMG) | 더블클릭으로 여는 앱, 웹 UI를 창으로 ([설계](#맥-앱dmg-설계--다음-단계)) | 계획. 다음 D1 |
+| 12. 맥 앱(DMG) | 더블클릭으로 여는 앱, 웹 UI를 창으로 ([설계](#맥-앱dmg-설계--다음-단계)) | D1 ✅ (읽기 전용 도구 폴더 + Python 3.9). 다음 D2 |
 
 ## 주요 결정과 배운 것
 

@@ -9,11 +9,14 @@ on:
 jobs:
   python:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.9", "3.12"]   # 3.9 = 맥 기본 /usr/bin/python3 (맥 앱이 이걸로 돈다 — 3.10 이상 문법 금지)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - name: 컴파일
         run: python -m py_compile bin/qakit lib/qakit/*.py Tools/gen-ids/gen_ids.py Tools/scenario/scenario_tools.py
       - name: 단위 테스트

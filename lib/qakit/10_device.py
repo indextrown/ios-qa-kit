@@ -359,7 +359,7 @@ def device_app_pid(ws):
 
 def ensure_device_runner(team):
     """시나리오 실행기를 실기기용으로 서명해서 빌드한다 (도구·팀이 바뀌었을 때만)."""
-    build = KIT_DIR / ".build" / f"scenario-runner-device-{team}"
+    build = BUILD_DIR / f"scenario-runner-device-{team}"
     h = hashlib.sha1(team.encode())
     for base in (KIT_DIR / "Sources" / "QAKit", KIT_DIR / "ScenarioRunner"):
         for f in sorted(base.rglob("*")):
@@ -372,9 +372,9 @@ def ensure_device_runner(team):
     if found and stamp.exists() and stamp.read_text() == h.hexdigest():
         return found[0]
     info("시나리오 실행기 빌드 중 (실기기용, 도구가 바뀌었을 때 한 번)...")
-    run(["xcodegen", "generate", "--quiet", "--spec", str(KIT_DIR / "ScenarioRunner" / "project.yml"),
-         "--project", str(KIT_DIR / "ScenarioRunner")])
-    r = run(["xcodebuild", "build-for-testing", "-project", str(SCENARIO_PROJECT), "-scheme", "ScenarioTests",
+    runner = scenario_runner_src()
+    run(["xcodegen", "generate", "--quiet", "--spec", str(runner / "project.yml"), "--project", str(runner)])
+    r = run(["xcodebuild", "build-for-testing", "-project", str(runner / "QAScenarioRunner.xcodeproj"), "-scheme", "ScenarioTests",
              "-destination", "generic/platform=iOS", "-derivedDataPath", str(build),
              "CODE_SIGNING_ALLOWED=YES", "CODE_SIGN_STYLE=Automatic", f"DEVELOPMENT_TEAM={team}",
              "-allowProvisioningUpdates"], check=False)
