@@ -630,7 +630,7 @@ def load_checked_scenario(ws, name, strict=True):
     except scenario_tools.YamlError as e:
         fail(f"시나리오 형식 오류: {e}")
     # 안드로이드는 앱 소스에서 ID 목록을 만들지 않으므로(덤프로 본 ID뿐) 검사하지 않는다
-    unknown = [] if ws.platform == "android" else scenario_tools.check_ids(scenario, known_ids(ws), extra_ok=("Mapbox",))
+    unknown = [] if ws.platform == "android" else scenario_tools.check_ids(scenario, known_ids(ws), extra_ok=ws.id_allow)
     if unknown:
         import difflib
         ids = known_ids(ws)

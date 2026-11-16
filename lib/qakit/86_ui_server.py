@@ -183,7 +183,7 @@ def cmd_ui(args):
         f.write_text(text, encoding="utf-8")
         try:
             scenario = scenario_tools.load_scenario(f, ws.root)
-            unknown = scenario_tools.check_ids(scenario, known_ids(ws), extra_ok=("Mapbox",))
+            unknown = scenario_tools.check_ids(scenario, known_ids(ws), extra_ok=ws.id_allow)
             problem = None
         except Exception as e:  # noqa: BLE001 — 형식 오류를 그대로 보여 준다
             unknown, problem = [], str(e)
@@ -210,7 +210,7 @@ def cmd_ui(args):
             scenario = dict(data, steps=steps)
             if data.get("interrupts"):
                 scenario["interrupts"] = scenario_tools._expand(data["interrupts"], ws.root, [f"{name}.qa.yml"])
-            unknown = scenario_tools.check_ids(scenario, _known_ids(ws), extra_ok=("Mapbox",))
+            unknown = scenario_tools.check_ids(scenario, _known_ids(ws), extra_ok=ws.id_allow)
         except Exception as e:  # noqa: BLE001 — 없는 공통 단계 등
             return {"ok": False, "problem": str(e), "unknownIds": [], "steps": 0}
         return {"ok": not unknown, "problem": None, "unknownIds": unknown, "steps": count_steps(steps),
