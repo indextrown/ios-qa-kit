@@ -19,6 +19,9 @@ export function SaveScenario({ job, refreshJob, stepsCount, aiSession, hint }:
   const [start, setStart] = useState("");
   const [stepFiles, setStepFiles] = useState<string[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [text, setText] = useState("");   // 초안 글 (화면에서 고칠 수 있음)
+  useEffect(() => { setText(draft?.text ?? ""); }, [draft]);
+  const dirty = !!draft && text !== draft.text;
   const [overwrite, setOverwrite] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -26,7 +29,8 @@ export function SaveScenario({ job, refreshJob, stepsCount, aiSession, hint }:
 
   useEffect(() => { get<string[]>("/api/steps-files").then(setStepFiles).catch(() => {}); }, []);
   const verifying = !!draft && job?.draft === draft.name;
-  const verified = verifying && !job?.running && job?.code === 0;
+  const [playedText, setPlayedText] = useState<string | null>(null);   // 재생한 초안 글 — 그 뒤 고쳤으면 다시 재생해야 저장
+  const verified = verifying && !job?.running && job?.code === 0 && playedText === draft?.text;
   useEffect(() => { logRef.current?.scrollTo(0, logRef.current.scrollHeight); }, [job?.lines.length]);
 
   const act = async (label: string, fn: () => Promise<void>) => {
@@ -39,7 +43,17 @@ export function SaveScenario({ job, refreshJob, stepsCount, aiSession, hint }:
       tags: tags.split(",").map((t) => t.trim()).filter(Boolean) });
     setDraft(d); setOverwrite(false);
   });
-  const verify = () => act("verify", async () => { await post("/api/draft/verify", { name: draft!.name }); refreshJob(); });
+  const saveText = async () => {   // 고친 초안을 저장하고 다시 검사 → 문제가 있으면 재생하지 않는다
+    const d = await post<Draft>("/api/draft/save", { name: draft!.name, text, merged: draft!.merged, fromLaunch: draft!.fromLaunch });
+    setDraft(d);
+    return d;
+  };
+  const verify = () => act("verify", async () => {
+    const d = dirty ? await saveText() : draft!;
+    if (d.problem || d.unknownIds.length) return;
+    setPlayedText(d.text);
+    await post("/api/draft/verify", { name: d.name }); refreshJob();
+  });
   const publish = () => act("publish", async () => {
     const r = await post<{ saved: string }>("/api/draft/publish", { name: draft!.name, force: overwrite });
     setMsg({ ok: true, text: `${r.saved} 에 저장했습니다` }); setDraft(null);
@@ -75,10 +89,18 @@ export function SaveScenario({ job, refreshJob, stepsCount, aiSession, hint }:
               <span>단계 {draft.steps}개{draft.merged ? ` · 탭+기다림 ${draft.merged}곳 합침` : ""}</span>
               <Mono className="text-[11px]">.qakit/drafts/{draft.name}.qa.yml</Mono>
             </div>
-            <pre className="max-h-56 overflow-auto rounded-md bg-muted p-3 font-mono text-[11.5px] leading-relaxed">{draft.text}</pre>
+            <textarea value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
+              disabled={verifying && !!job?.running}
+              className="h-56 w-full resize-y rounded-md bg-muted p-3 font-mono text-[11.5px] leading-relaxed outline-none focus:ring-1 focus:ring-line" />
+            {dirty && <div className="flex items-center justify-between text-[11.5px] text-sub">
+              <span>고친 초안 — 재생할 때 저장·검사합니다</span>
+              <span className="flex gap-1.5">
+                <Button size="sm" variant="ghost" onClick={() => setText(draft.text)}>되돌리기</Button>
+                <Button size="sm" onClick={() => act("save", async () => { await saveText(); })} loading={busy === "save"}>저장·검사</Button>
+              </span></div>}
             {warnings.map((w) => <div key={w} className="flex items-start gap-1.5 text-[12px] text-warn"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />{w}</div>)}
             <Button className="w-full" onClick={verify} loading={busy === "verify" || (verifying && !!job?.running)}
-              disabled={!!job?.running || !!draft.problem || draft.unknownIds.length > 0}>
+              disabled={!!job?.running || (!dirty && (!!draft.problem || draft.unknownIds.length > 0))}>
               <PlayCircle className="h-3.5 w-3.5" />2. 재생해서 확인 (앱을 새로 켜고)</Button>
             {verifying && (
               <div className="rounded-md bg-muted">
@@ -86,13 +108,13 @@ export function SaveScenario({ job, refreshJob, stepsCount, aiSession, hint }:
                   job?.running ? "text-sub" : job?.code === 0 ? "text-ok" : "text-bad")}>
                   {job?.running ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />재생 중…</>
                     : job?.code === 0 ? <><CheckCircle2 className="h-3.5 w-3.5" />통과 — 저장할 수 있습니다</>
-                      : <><XCircle className="h-3.5 w-3.5" />실패 (종료 코드 {job?.code}) — 고친 뒤 다시 기록·초안</>}
+                      : <><XCircle className="h-3.5 w-3.5" />실패 (종료 코드 {job?.code}) — 위 초안을 고쳐 다시 재생하세요</>}
                 </div>
                 <pre ref={logRef} className="max-h-40 overflow-auto whitespace-pre-wrap p-3 font-mono text-[11px] leading-relaxed text-sub">{job?.lines.slice(-60).join("\n")}</pre>
               </div>
             )}
             {draft.exists && <label className="flex items-center gap-2 text-[12px]"><input type="checkbox" checked={overwrite} onChange={(e) => setOverwrite(e.target.checked)} />같은 이름 덮어쓰기</label>}
-            <Button variant="primary" className="w-full" onClick={publish} loading={busy === "publish"} disabled={!verified || (draft.exists && !overwrite)}>
+            <Button variant="primary" className="w-full" onClick={publish} loading={busy === "publish"} disabled={!verified || dirty || (draft.exists && !overwrite)}>
               <Save className="h-3.5 w-3.5" />3. scenarios/에 저장</Button>
           </>
         )}

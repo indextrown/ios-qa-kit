@@ -4,3 +4,4 @@
 __pycache__/
 ScenarioRunner/*.xcodeproj/
 .swiftpm/
+.claude/worktrees/
