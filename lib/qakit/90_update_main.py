@@ -316,6 +316,8 @@ def main():
     a.add_argument("--device-profile", default="pixel_7", help="기기 모양 (기본 pixel_7, avdmanager list device)")
     a.set_defaults(func=cmd_android_setup)
     a = asub.add_parser("doctor", help="안드로이드 도구·AVD·연결된 기기 점검")
+    a.add_argument("--timeout", type=int, default=DOCTOR_TIMEOUT,
+                   help=f"바깥 도구(adb·emulator 등) 하나를 기다리는 최대 초 (기본 {DOCTOR_TIMEOUT}) — 넘기면 그 항목만 '확인 못 함'")
     a.set_defaults(func=cmd_android_doctor)
     a = asub.add_parser("boot", help="에뮬레이터 띄우기 (부팅 완료까지 기다림)")
     a.add_argument("--avd", help=f"AVD 이름 (기본 {ANDROID_AVD})")

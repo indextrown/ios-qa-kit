@@ -63,7 +63,7 @@
 | 명령 | 설명 |
 |---|---|
 | `qakit android setup [--avd 이름] [--image 시스템이미지] [--device-profile pixel_tablet]` | JDK 17(brew openjdk@17)·cmdline-tools·platform-tools·emulator·시스템 이미지·AVD(기본 `qakit`, pixel_7) 설치. Android Studio 불필요. 이미 있으면 건너뜀. AVD는 GPU 가속·하드웨어 키보드를 켠다 (기존 AVD도 맞춤, 에뮬레이터 재시작 필요). 태블릿: `--avd qakit-tablet --device-profile pixel_tablet` (2560x1600) |
-| `qakit android doctor` | JDK·SDK·adb·emulator·AVD·연결된 기기 점검 |
+| `qakit android doctor` | JDK·SDK·adb·emulator·AVD·연결된 기기 점검 (`--timeout 초`: 도구 하나를 기다리는 최대 시간(기본 20) — 넘기면 그 항목만 "확인 못 함") |
 | `qakit android boot [--avd 이름] [--headless] [--landscape \| --orientation landscape\|portrait\|auto]` | 에뮬레이터 실행 후 부팅 완료까지 대기 (이미 떠 있으면 그대로). `--landscape`: 부팅 뒤 가로로 고정. 로그 `~/.qakit/emulator-<AVD>.log` |
 | `qakit android rotate landscape\|portrait\|auto [--avd 이름]` | 실행 중인 에뮬레이터 화면 방향 바꾸기 (자동 회전 끄고 고정, auto는 다시 켬). 휴대폰·태블릿의 기본 방향 차이를 알아서 맞춘다 |
 | `qakit android screen [--json]` | 지금 앞의 앱 패키지·Activity·Fragment(바깥 → 안쪽). 덤프보다 빠름 |

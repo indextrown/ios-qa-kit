@@ -364,6 +364,14 @@ def run(cmd, check=True, capture=True, cwd=None, env=None, timeout=None):
     return result
 
 
+def limited(fn, *args):
+    """fn(*args) → (결과, 시간을 넘겼는지). 안에서 run(..., timeout=)이 시간을 넘기면 (None, True) — doctor가 그 항목만 "확인 못 함"으로"""
+    try:
+        return fn(*args), False
+    except subprocess.TimeoutExpired:
+        return None, True
+
+
 def masker(secrets):
     values = sorted({v for v in secrets.values() if v and len(v) >= 3}, key=len, reverse=True)
 
