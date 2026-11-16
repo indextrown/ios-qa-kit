@@ -224,22 +224,38 @@ sendWithMessage:freeWhenDone:completionQueue:completion:          (보내기)
 - 디지타이저 함수가 없으면 `IndigoHIDMessageForMouseNSEvent`(마우스 방식)로.
 - 연결 직후 첫 입력은 버려질 수 있어 0.25초 기다립니다.
 - 상주(`TouchHelper`가 계속 띄워 둠)로 한 번에 약 90ms. 매번 새로 띄우면 부품 로딩 때문에 약 0.85초.
-- **답이 `ok`여도 조용히 무시될 수 있습니다.** 지금까지 본 것 (Xcode 27.0):
+- **답이 `ok`여도 조용히 무시될 수 있습니다 — 부팅에 따라 다릅니다** (Xcode 27, 2026-11-16 조사):
 
-  | 상황 | 결과 |
+  시뮬레이터 안에는 터치를 받는 곳이 둘 있습니다.
+
+  | 받는 곳 | 누가 씀 | 기록에 남는 모습 |
+  |---|---|---|
+  | backboardd 안 **SimulatorHID** (옛 Indigo 경로) | simtouch | 내장 디지타이저 서비스 `eventSource: builtin; builtIn`이 생기고 터치 전달 ✅ |
+  | **dtuhidd** (CoreDevice, Xcode 27의 새 경로) | Device Hub — 부팅 때 `mainTouchscreen(0x101)`·`touchscreen(0x104)`·`touchscreenGesture(0x501)` 서비스를 만들고 HID 보고서로 넣음 | `service mainTouchscreen(0x101), report type identifier 9` |
+
+  simtouch의 메시지를 SimulatorHID가 직접 받으면 먹히고, dtuhidd로 넘기면 CoreDevice 트랙패드류 서비스(`eventSource: trackpad / externalAccessory`)에서 온 것이 되어 backboardd가 `ignoring digitizer event for display <main> from unsupported service`로 버립니다. **어느 쪽이 되는지가 부팅마다 달랐습니다:**
+
+  | 기기 · 부팅 | simtouch |
   |---|---|
-  | 공용 시뮬레이터(Device Hub에 띄워 둠), 상주 실행기(XCUITest)가 켠 앱 — AI 직접 터치 H3·H4 검증 | ✅ 탭·끌기·길게 누르기 |
-  | 같은 기기, 실행기가 켜고 XCUITest로 누른 뒤 | ✅ |
-  | 같은 기기, 오래 떠 있던 실행기 (화면 구조 읽기가 60초 넘게 멈춘 상태) | ❌ 모두 무시 |
-  | **새로 만든 시뮬레이터** — 실행기가 켠 앱 / `simctl`로 켠 앱 / 실행기 없음 | ❌ 모두 무시 (탭·끌기·150ms 탭, 전후 화면이 바이트까지 같음) |
-  | 새 시뮬레이터 + 실시간 화면 도구(프레임 콜백) 연결 | ❌ |
-  | 새 시뮬레이터를 **Device Hub에 띄움** | ❌ |
-  | 새 시뮬레이터를 Device Hub에 띄우고 **마우스로 한 번 누른 뒤** | ❌ — 그런데 Device Hub의 마우스 클릭은 같은 기기에서 ✅ (설정 → 일반으로 넘어감) |
+  | 시험용 기기 1차 부팅 (`simctl`, 만든 직후) — 실시간 화면 연결·Device Hub 표시·Device Hub 마우스 클릭 뒤에도 | ❌ |
+  | 같은 기기 2차 부팅 (Device Hub Start) | ✅ 설정 → 일반 |
+  | 같은 기기 3차 부팅 (`simctl boot`) | ✅ |
+  | 공용 기기 11-15 20:41 부팅 / **11-16 00:49 부팅(그날 내내, AI 직접 터치 H3·H4)** / 23:19 부팅 | ❌ / ✅ / ❌ |
 
-  즉 **"XCUITest가 켠 앱이라서" 무시되는 것도, "Device Hub에 띄운 적이 없어서" 무시되는 것도 아닙니다.** 새 기기는 Device Hub의 입력은 받는데 simtouch의 경로(`SimDeviceLegacyHIDClient` + Indigo 메시지, 경로 표시 0x32)는 받지 않습니다. 두 기기의 화면 속성(`screenProperties`: 화면 전원 1, 백라이트 상태 2, 60Hz)과 기기 설정(`device.plist`)은 같았습니다. 원인은 조사 중입니다 — Device Hub가 보내는 메시지(경로 표시·화면 번호)와의 차이가 다음 후보.
+  그래서 원인은 "XCUITest가 켠 앱", "새 기기", "Device Hub에 안 띄움", "`simctl boot`"가 **아닙니다.** 부팅 때 SimulatorHID와 dtuhidd 중 어느 쪽이 디지타이저를 맡느냐가 갈리는 것으로 보입니다(무엇이 가르는지는 미확인). 다시 켜서 된 적이 여러 번 있습니다.
+
+  확인한 메시지 형식 (`IndigoHIDMessageForMouseNSEvent`·`…TrackpadEventFromHIDEventRef` 역어셈블): 목적지(target)는 메시지 0x6c(두 번째 묶음 0x10c), 이벤트 종류는 NSEvent 값(누름 1·뗌 2·끌기 6), 가장자리 0~4. Device Hub의 입력 뷰 처리(`SimDeviceLegacyHIDClient.simDigitizerInputView(_:touchEvent:)`)도 같은 함수를 부르고, 목적지는 화면 뷰가 정한다. **모르는 목적지(예: 0x101)를 보내면 SimulatorHID가 assert로 죽어 backboardd가 다시 시작한다** — 공용 기기에서는 절대 시험하지 말 것.
+
+  보는 법 (시뮬레이터 안 로그, zsh에선 `log`가 내장 명령이라 `/usr/bin/log` 또는 `simctl spawn … log`):
+
+  ```bash
+  xcrun simctl spawn <udid> log stream --level debug --predicate '(process == "backboardd" AND (category == "TouchEvents" OR category == "HID")) OR process == "dtuhidd"'
+  ```
+
+  다음 단계 후보: Device Hub처럼 dtuhidd의 새 경로(CoreDevice universal HID → `mainTouchscreen`)로 넣으면 부팅과 상관없이 될 것으로 보인다.
 - 그래서 qakit은 **누른 뒤 화면이 바뀌었는지**로 판단합니다:
   - AI 직접 터치: 탭 뒤 1초 안에 화면이 안 바뀌면 알림, `expect`를 주면 그 자리에서 실패, `via: xcuitest`로 XCUITest 탭.
-  - `qakit touch`: 누르기 전후 화면을 비교(JPEG 크기 차이 2% 이하 = 그대로)해 그대로면 알리고, 아는 원인(멈춘 실행기 → `qakit serve --stop`, 새로 만든 기기 → XCUITest 탭)을 안내합니다. 2% 기준은 화면 일부가 저절로 바뀌면(예: "최적화 중" 행이 새로 생김) "바뀜"으로 볼 수 있어, 실험할 때는 화면을 직접 봅니다.
+  - `qakit touch`: 누르기 전후 화면을 비교(JPEG 크기 차이 2% 이하 = 그대로)해 그대로면 알리고, 아는 원인(멈춘 실행기 → `qakit serve --stop`, 막힌 부팅 → 시뮬레이터를 껐다 켜거나 XCUITest 탭)을 안내합니다. 2% 기준은 화면 일부가 저절로 바뀌면(예: "최적화 중" 행이 새로 생김) "바뀜"으로 볼 수 있어, 실험할 때는 화면을 직접 봅니다.
 
 ## 5. 자동 ID (AutoID) — 비공개 API는 아니지만 공식 지원 밖
 

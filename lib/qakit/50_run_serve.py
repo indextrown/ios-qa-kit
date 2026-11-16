@@ -570,8 +570,8 @@ def cmd_touch(args):
         st = serve_load(udid)
         if st and serve_alive(st):
             info("   → 상주 실행기가 응답 없이 멈춰 있을 때 무시된 적이 있습니다: qakit serve --stop 뒤 다시")
-        info("   → 새로 만든 시뮬레이터에서는 모두 무시됐습니다 (Device Hub에 띄워도 마찬가지, 원인 조사 중): "
-             "그 기기에선 XCUITest 탭(qakit do 'tap: <대상>')을 쓰세요")
+        info("   → 부팅에 따라 시뮬레이터 안에서 이 터치 경로가 막힐 때가 있습니다 (Xcode 27, 같은 기기도 부팅마다 다름): "
+             "시뮬레이터를 껐다 켜면 될 때가 있고, 안 되면 XCUITest 탭(qakit do 'tap: <대상>')")
         info("   → 자세히: docs/private-apis.md '손가락처럼 누르기'")
     elif before and after:
         ok("화면이 바뀜 — 터치가 먹혔습니다")
