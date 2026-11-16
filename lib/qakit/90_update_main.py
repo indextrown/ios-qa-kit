@@ -290,7 +290,7 @@ def main():
     p.add_argument("xcresult", nargs="?", help="xcresult 또는 실행 폴더 (기본: 마지막 실행)")
     p.set_defaults(func=cmd_summarize)
 
-    p = sub.add_parser("android", help="안드로이드: SDK·에뮬레이터 설치(setup), 점검, 부팅, 지금 화면 파악(screen·dump)")
+    p = sub.add_parser("android", help="안드로이드: SDK·에뮬레이터 설치(setup), 점검, 부팅, 지금 화면 파악(screen·dump), 로그(logs)")
     asub = p.add_subparsers(dest="android_command", required=True)
     a = asub.add_parser("setup", help="JDK 17·SDK·에뮬레이터·AVD 설치 (Android Studio 불필요)")
     a.add_argument("--avd", help=f"만들 AVD 이름 (기본 {ANDROID_AVD})")
@@ -322,6 +322,18 @@ def main():
     a.add_argument("--print", action="store_true", help="--out과 함께 화면에도 출력")
     a.add_argument("--json", action="store_true", help="요소 목록을 JSON으로")
     a.set_defaults(func=cmd_android_dump)
+    a = asub.add_parser("logs", help="앱 로그 (uid로 거름) · 크래시·ANR · 네트워크(OkHttp) 요약")
+    a.add_argument("--avd", help="여러 기기 중 이 AVD의 에뮬레이터")
+    a.add_argument("--package", help="이 앱 (기본: 작업공간 packageName, 없으면 앞에 있는 앱)")
+    a.add_argument("--since", help="최근 이만큼 (30s, 10m, 2h)")
+    a.add_argument("-n", "--lines", type=int, default=300, help="--since 없을 때 마지막 몇 줄 (기본 300)")
+    a.add_argument("-f", "--follow", action="store_true", help="실시간으로 계속 보기")
+    a.add_argument("--level", choices=list("VDIWEF"), help="이 수준 이상만 (W: 경고·오류)")
+    a.add_argument("--grep", help="이 글자(정규식)가 들어간 줄만")
+    a.add_argument("--crash", action="store_true", help="크래시·ANR만 (난독화 빌드는 mapping.txt로 복원)")
+    a.add_argument("--net", action="store_true", help="네트워크(OkHttp 로그) 줄만 + 실패한 요청")
+    a.add_argument("--json", action="store_true", help="요약을 JSON으로")
+    a.set_defaults(func=cmd_android_logs)
     a = asub.add_parser("frames", help="(qakit ui 내부용) 실행기 화면 프레임 받기")
     a.add_argument("--port", type=int, required=True)
     a.set_defaults(func=cmd_android_frames)
@@ -332,6 +344,8 @@ def main():
                         help="빌드 종류 (기본 debug)")
         sp.add_argument("--device", nargs="?", const="select", default=argparse.SUPPRESS, metavar="기기",
                         help=device_help)
+    asub.choices["logs"].add_argument("--build", choices=["debug", "release"], default=argparse.SUPPRESS,
+                                      help="빌드 종류 (기본 debug) — 어느 packageName의 로그인지")
 
     args = parser.parse_args()
     args.workspace = getattr(args, "workspace", None)

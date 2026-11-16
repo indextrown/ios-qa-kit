@@ -341,6 +341,7 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
     rd = new_run_dir(ws, "run", name)
     info("상주 실행기로 실행 (xcodebuild 준비 생략)")
     video = RunVideo(ws, None if ws.device else udid)
+    log_since = android_device_time(udid) if ws.platform == "android" else None
     started = time.time()
     try:
         res = serve_request(st, "/run", json.loads(scenario_json.read_text(encoding="utf-8")), timeout=timeout)
@@ -354,6 +355,8 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
     success = bool(res.get("ok"))
     video_path = video.finish(success, rd)
     save_serve_files(ws, res, rd)
+    logs = android_collect_run_logs(ws, udid, log_since, rd, mask) if log_since else None
+    crashed = bool(logs and (logs["crashes"] or logs["anrs"]))
 
     log = [f"[qakit-note] 시나리오: {scenario.get('name')}"] + [f"[qakit-note] {n}" for n in res.get("notes") or []]
     for line in log[1:]:
@@ -381,16 +384,26 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
             "at": datetime.datetime.now().isoformat(timespec="seconds"), "kind": "run", "test": name,
             "result": "Passed" if success else "Failed", "seconds": seconds, "via": "serve", "dir": results_rel(ws, rd),
             **({"failure": "env"} if not success and res.get("env") else {}),
+            **({"crash": True} if crashed else {}),
             "app": {k: state.get(k) for k in ("branch", "commit", "dirtyFiles") if k in state},
             "kit": kit_version(),
         }, ensure_ascii=False) + "\n")
 
     print()
     if success:
-        (rd / SERVE_SUMMARY).write_text(f"── 결과: 통과 1 / 실패 0 / 전체 1 (상주 실행기, {seconds}초)\n", encoding="utf-8")
+        text = f"── 결과: 통과 1 / 실패 0 / 전체 1 (상주 실행기, {seconds}초)"
+        if crashed:   # 판정은 통과했지만 도중에 앱이 죽었다 (재실행으로 넘어간 경우 등)
+            text += "\n⚠️  통과했지만 실행 중 앱 크래시·ANR이 있었습니다\n" + "\n".join(
+                android_report_lines(logs, max_errors=0, mapping=logs.get("mapping")))
+            print(mask(text))
+        (rd / SERVE_SUMMARY).write_text(mask(text) + "\n", encoding="utf-8")
         ok(f"통과 ({seconds}초, 상주 실행기) — 결과: {rd}")
         return
     out = ["── 결과: 통과 0 / 실패 1 / 전체 1", f"\n❌ {name}", f"   원인: {res.get('message', '')}"]
+    if crashed:
+        out.append("   ↳ 실행 중 앱이 죽었습니다 (아래 크래시·ANR 참고)")
+    if logs:   # 크래시·ANR·실패한 요청은 원인 바로 아래, 오류 로그는 화면 구조 뒤에
+        out += android_report_lines({**logs, "errors": []}, mapping=logs.get("mapping"))
     if res.get("steps"):
         out.append("   마지막 단계:")
         out += [f"     - {x}" for x in res["steps"]]
@@ -401,6 +414,10 @@ def run_via_serve(ws, udid, scenario_json, path, scenario, timeout):
             lines = ["...(앞 %d줄 생략)" % (len(lines) - 60)] + lines[-60:]
         out.append("   실패 시점 화면 구조 (ID/라벨 있는 요소):")
         out += ["     " + l for l in lines]
+    if logs:
+        out += android_report_lines({**logs, "crashes": [], "anrs": [], "http": {**logs["http"], "failed": []}})
+        out.append(f"   앱 로그: {rd / 'logcat.txt'} ({logs['lines']}줄)"
+                   + ("" if logs["http"]["logged"] else " — 네트워크 로그 없음 (OkHttp 로그는 보통 debug 빌드만)"))
     if shot_path:
         out.append(f"   스크린샷: {shot_path}")
     if video_path:
