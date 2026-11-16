@@ -90,10 +90,12 @@ class Tools(unittest.TestCase):
             p = subprocess.run([sys.executable, str(QAKIT), "-w", str(root), "mcp"], text=True, capture_output=True, timeout=30,
                                env={**os.environ, **env}, input="\n".join(json.dumps(m) for m in [
                                    {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
-                                   {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-                                   {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "tap_point", "arguments": {"x": 1, "y": 1}}}]) + "\n")
+                                   {"jsonrpc": "2.0", "id": 2, "method": "tools/list"}]
+                                   # 직접 터치 모드에선 조작 도구를 부르지 않는다 (진짜 시뮬레이터를 찾아 누름)
+                                   + ([] if env.get("QAKIT_TOUCH") == "direct" else [
+                                       {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "tap_point", "arguments": {"x": 1, "y": 1}}}])) + "\n")
             out = [json.loads(x) for x in p.stdout.splitlines()]
-            return {t["name"]: t for t in out[1]["result"]["tools"]}, out[2]["result"]
+            return {t["name"]: t for t in out[1]["result"]["tools"]}, (out[2]["result"] if len(out) > 2 else None)
         finally:
             tmp.cleanup()
 

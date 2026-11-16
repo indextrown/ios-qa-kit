@@ -18,7 +18,9 @@ def ensure_autoid(ws):
 
 
 SWIFTUI_IDS_DIR = KIT_DIR / "Tools" / "swiftui-ids"
-SWIFTUI_IDS_BIN = SWIFTUI_IDS_DIR / ".build" / "release" / "swiftui-ids"
+# git 설치는 지금처럼 패키지 안 .build (옮기면 SwiftSyntax를 다시 몇 분 빌드), 아니면 WORK_DIR
+SWIFTUI_IDS_SCRATCH = SWIFTUI_IDS_DIR / ".build" if WORK_DIR == KIT_DIR else BUILD_DIR / "swiftui-ids"
+SWIFTUI_IDS_BIN = SWIFTUI_IDS_SCRATCH / "release" / "swiftui-ids"
 
 
 def ensure_swiftui_ids():
@@ -32,7 +34,8 @@ def ensure_swiftui_ids():
     stamp = SWIFTUI_IDS_BIN.with_suffix(".stamp")
     if not SWIFTUI_IDS_BIN.exists() or not stamp.exists() or stamp.read_text().strip() != digest:
         info("swiftui-ids 도구 빌드 중... (처음엔 SwiftSyntax 컴파일로 몇 분 걸립니다)")
-        r = run(["swift", "build", "-c", "release", "--package-path", str(SWIFTUI_IDS_DIR)], check=False)
+        pkg = writable_src("Tools/swiftui-ids") / "Tools" / "swiftui-ids"   # Package.resolved를 고칠 수 있게
+        r = run(["swift", "build", "-c", "release", "--package-path", str(pkg), "--scratch-path", str(SWIFTUI_IDS_SCRATCH)], check=False)
         if r.returncode != 0 or not SWIFTUI_IDS_BIN.exists():
             fail("swiftui-ids 빌드 실패", (r.stdout or "")[-800:])
         stamp.write_text(digest)
@@ -42,7 +45,7 @@ def ensure_swiftui_ids():
 def ensure_swift_tool(name):
     """Tools/<name>/<name>.swift 한 파일짜리 도구를 소스가 바뀌었을 때만 swiftc로 빌드 (몇 초). 안 되면 None."""
     src = KIT_DIR / "Tools" / name / f"{name}.swift"
-    out = KIT_DIR / "Tools" / name / ".build" / name
+    out = (KIT_DIR / "Tools" / name / ".build" / name) if WORK_DIR == KIT_DIR else BUILD_DIR / "tools" / name / name
     if not src.exists():
         return None
     digest = hashlib.sha1(src.read_bytes()).hexdigest()

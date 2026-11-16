@@ -591,7 +591,7 @@ def android_doctor_ws(ws, check, problem_count):
 # adb forward로 붙는다. 그래서 serve_request·run_via_serve·qakit do는 그대로 쓴다.
 
 ANDROID_RUNNER_DIR = KIT_DIR / "AndroidRunner"
-ANDROID_RUNNER_BUILD = KIT_DIR / ".build" / "android-runner"
+ANDROID_RUNNER_BUILD = BUILD_DIR / "android-runner"
 ANDROID_RUNNER_DEVICE_PORT = 7912
 ANDROID_FRAME_DEVICE_PORT = 7913   # 라이브 화면 (FrameServer)
 ANDROID_RUNNER_TEST = "com.qakit.runner.test/androidx.test.runner.AndroidJUnitRunner"
@@ -618,11 +618,12 @@ def ensure_android_runner_built():
     if not android_java_home() or not android_sdk_root():
         fail("안드로이드 실행기를 빌드할 JDK·SDK가 없습니다.", "qakit android setup")
     info("안드로이드 실행기 빌드 중 (처음에는 Gradle을 받느라 몇 분 걸립니다)…")
+    gradle_dir = writable_src("AndroidRunner") / "AndroidRunner"   # Gradle은 프로젝트 안에 build·.gradle을 쓴다
     r = subprocess.run(["./gradlew", "-q", "--console=plain", ":runner:assembleDebug", ":runner:assembleDebugAndroidTest"],
-                       cwd=ANDROID_RUNNER_DIR, env=android_env(), capture_output=True, text=True)
+                       cwd=gradle_dir, env=android_env(), capture_output=True, text=True)
     if r.returncode != 0:
         fail("안드로이드 실행기 빌드 실패", ((r.stdout or "") + (r.stderr or ""))[-1500:])
-    out = ANDROID_RUNNER_DIR / "runner" / "build" / "outputs" / "apk"
+    out = gradle_dir / "runner" / "build" / "outputs" / "apk"
     ANDROID_RUNNER_BUILD.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(out / "debug" / "runner-debug.apk", app_apk)
     shutil.copyfile(out / "androidTest" / "debug" / "runner-debug-androidTest.apk", test_apk)

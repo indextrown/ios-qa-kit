@@ -562,6 +562,8 @@ class McpSession:
 
     def call(self, name, a):
         """→ (content 목록, 오류인가)"""
+        if name == "tap_point" and not self.direct:   # 시뮬레이터를 찾기 전에 거절 (장면 보관 시작은 기기 찾기로 느릴 수 있음)
+            return [{"type": "text", "text": "tap_point는 직접 터치 모드(AI QA)에서만"}], True
         if self.ring is None and name in MCP_ACTIONS and os.environ.get("QAKIT_AI_VIDEO", "1") != "0" \
                 and self.ws.platform != "android":   # 장면 보관은 simscreen (iOS)
             self.ring = FrameRing(self.udid)
@@ -580,8 +582,6 @@ class McpSession:
             if not data:
                 return text("사진을 찍지 못함 (시뮬레이터만, 켜져 있어야 함)"), True
             return [{"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/jpeg"}], False
-        if name == "tap_point" and not self.direct:
-            return [{"type": "text", "text": "tap_point는 직접 터치 모드(AI QA)에서만"}], True
         if name in ("long_press", "drag", "tap_point") and self.direct:
             return self.direct_gesture(name, a)
         if name in ("long_press", "drag"):   # XCUITest로 (시나리오 단계 그대로)
