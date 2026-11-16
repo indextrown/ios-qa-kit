@@ -252,7 +252,16 @@ sendWithMessage:freeWhenDone:completionQueue:completion:          (보내기)
   xcrun simctl spawn <udid> log stream --level debug --predicate '(process == "backboardd" AND (category == "TouchEvents" OR category == "HID")) OR process == "dtuhidd"'
   ```
 
-  다음 단계 후보: Device Hub처럼 dtuhidd의 새 경로(CoreDevice universal HID → `mainTouchscreen`)로 넣으면 부팅과 상관없이 될 것으로 보인다.
+- **dtuhidd 새 경로로 직접 넣기 — 시도했으나 보류** (2026-11-17):
+
+  | 단계 | 결과 |
+  |---|---|
+  | 연결 | ✅ `-[SimDevice lookup:error:]`("com.apple.coredevice.feature.remote.hid.digitizer") → mach 포트 → `xpc_endpoint_create_mach_port_4sim` → `xpc_connection_create_from_endpoint`. dtuhidd의 IndigoHIDServer가 상대로 받아들이고, **연결마다 따로** 가상 서비스(`mainTouchscreen(0x101)`·`touchscreen(0x104)`·`touchscreenGesture(0x501)`·`mainKeyboard(0x200)`·`mainScreenButtons(0x402)`)를 만든다 |
+  | 메시지 타입 | CoreDeviceUtilities의 `IndigoDigitizerEvent(pointOne:pointTwo:eventType:edge:target:)` — 키 `pointOne`·`pointTwo`·`eventType`·`edge`·`target`, `DigitizerPoint(x:y:)`, 원시값은 모두 `UInt`: `DigitizerEventType` 0~2(start·position·end), `DigitizerEdge` 0~4(none…), `DigitizerTarget` 0~10(mainScreen, display1~10). Mercury(Swift XPC 메시징)가 `mangledTypeName`(`19CoreDeviceUtilities20IndigoDigitizerEventV`)으로 처리기를 고른다 |
+  | 봉투 | ❌ `{mangledTypeName, value}`에 값을 XPC 사전·JSON·plist로, 타입 이름 3가지로 보내 봤으나 오류 기록도 처리 기록도 없이 버려짐. dtuhidd는 hardened가 아니지만 SIP 때문에 디버거로 붙을 수 없어 받는 쪽을 볼 수 없음 |
+  | 본 화면 | ⚠️ 우리 연결의 터치스크린이 붙을 때 backboardd가 `*** already have a main display digitizer` — 본 화면 터치스크린은 먼저 붙은 Device Hub 몫이라, 형식을 맞혀도 Device Hub가 떠 있으면 본 화면에 안 들어갈 가능성이 큼 |
+
+  그래서 보류. 대안 후보: 상주 실행기(XCUITest) 안에서 XCTest의 이벤트 합성(`XCSynthesizedEventRecord`, Maestro가 쓰는 방식)으로 좌표 탭·끌기 — 부팅과 상관없이 되고, `XCUICoordinate.tap()`보다 빠를 것으로 보임.
 - 그래서 qakit은 **누른 뒤 화면이 바뀌었는지**로 판단합니다:
   - AI 직접 터치: 탭 뒤 1초 안에 화면이 안 바뀌면 알림, `expect`를 주면 그 자리에서 실패, `via: xcuitest`로 XCUITest 탭.
   - `qakit touch`: 누르기 전후 화면을 비교(JPEG 크기 차이 2% 이하 = 그대로)해 그대로면 알리고, 아는 원인(멈춘 실행기 → `qakit serve --stop`, 막힌 부팅 → 시뮬레이터를 껐다 켜거나 XCUITest 탭)을 안내합니다. 2% 기준은 화면 일부가 저절로 바뀌면(예: "최적화 중" 행이 새로 생김) "바뀜"으로 볼 수 있어, 실험할 때는 화면을 직접 봅니다.
