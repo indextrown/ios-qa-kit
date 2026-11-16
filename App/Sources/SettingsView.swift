@@ -41,6 +41,7 @@ private struct GeneralTab: View {
                 Text("모든 작업공간 창의 웹 화면 크기입니다. 시뮬레이터 화면·글자가 작거나 크면 바꾸세요.")
                     .font(.caption).foregroundColor(.secondary)
             }
+            UpdateSection()
             Section {
                 Toggle("메뉴 막대에 아이콘 보이기 (열린 작업공간·실행 중 표시)", isOn: $state.showStatusItem)
                 Toggle("시나리오·AI·녹화가 도는 중이면 창을 닫거나 끄기 전에 묻기", isOn: $state.confirmWhenBusy)
@@ -57,6 +58,54 @@ private struct GeneralTab: View {
     private var nearestIndex: Double {
         let i = AppState.zoomSteps.enumerated().min { abs($0.element - state.zoom) < abs($1.element - state.zoom) }?.offset ?? 5
         return Double(i)
+    }
+}
+
+private struct UpdateSection: View {
+    @ObservedObject var up = Updater.shared
+
+    var body: some View {
+        Section("업데이트") {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(status).fontWeight(.medium)
+                    if let d = up.lastChecked {
+                        Text("마지막 확인 \(d.formatted(date: .abbreviated, time: .shortened))").font(.caption).foregroundColor(.secondary)
+                    }
+                }
+                Spacer()
+                switch up.phase {
+                case .checking, .installing: ProgressView().controlSize(.small)
+                case .downloading(let f): ProgressView(value: f).frame(width: 120)
+                default:
+                    if up.hasUpdate {
+                        if up.canInstall {
+                            Button("업데이트하고 다시 켜기") { up.install() }.keyboardShortcut(.defaultAction)
+                        } else {
+                            Button("릴리스 페이지") { up.openReleasePage() }
+                        }
+                    }
+                    Button("새 버전 확인") { up.check() }
+                }
+            }
+            if up.hasUpdate, !up.canInstall {
+                Text("이 앱은 저장소에서 만든 개발용이라 자동으로 바꾸지 않습니다. 릴리스의 DMG로 설치한 앱만 바꿉니다.")
+                    .font(.caption).foregroundColor(.secondary)
+            }
+            Toggle("켤 때 새 버전 확인 (하루 한 번)", isOn: $up.autoCheck)
+        }
+    }
+
+    private var status: String {
+        switch up.phase {
+        case .idle: return "qakit \(up.current)"
+        case .checking: return "확인하는 중…"
+        case .upToDate: return "최신입니다 (\(up.current))"
+        case .available: return "새 버전 \(up.latest?.version ?? "") — 지금 \(up.current)"
+        case .downloading(let f): return "내려받는 중… \(Int(f * 100))%"
+        case .installing: return "바꾸는 중… 앱이 다시 켜집니다"
+        case .failed(let e): return e
+        }
     }
 }
 

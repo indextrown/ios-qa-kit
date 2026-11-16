@@ -26,8 +26,9 @@ struct LauncherView: View {
     @ObservedObject var recents: Recents
     let open: (String) -> Void
     let openFolder: () -> Void
-    var settings: (() -> Void)? = nil
+    var settings: ((SettingsTab) -> Void)? = nil
     @ObservedObject var state = AppState.shared
+    @ObservedObject var up = Updater.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -38,8 +39,15 @@ struct LauncherView: View {
             }
             .padding(.horizontal, 28).padding(.top, 36).padding(.bottom, 18)
 
+            if up.hasUpdate, let v = up.latest?.version {
+                Button { settings?(.general) } label: {
+                    Label("새 버전 \(v)이 있습니다 — 설정에서 업데이트", systemImage: "arrow.down.circle.fill")
+                        .font(.callout).foregroundColor(.accentColor)
+                }
+                .buttonStyle(.plain).padding(.horizontal, 28).padding(.bottom, 12)
+            }
             if state.problems > 0 {
-                Button { settings?() } label: {
+                Button { settings?(.check) } label: {
                     Label("필수 도구 \(state.problems)개가 없습니다 — 환경 점검 보기", systemImage: "exclamationmark.triangle.fill")
                         .font(.callout).foregroundColor(.orange)
                 }
