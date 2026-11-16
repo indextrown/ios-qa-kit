@@ -1,7 +1,7 @@
 # Git Flow
 
 이 저장소는 Git Flow 브랜치 모델을 쓴다. 명령은 `git-flow-next`(git-flow의 현재 관리판)로 실행한다.
-문서 구성과 설명은 marine-algorithms 저장소의 `docs/gitflow.md`를 따랐고, 이 저장소에 맞게 **CI 대신 직접 돌리는 머지 전 확인 목록**을 더했다.
+문서 구성과 설명은 다른 사내 저장소의 `docs/gitflow.md`를 따랐고, 이 저장소에 맞게 **CI 대신 직접 돌리는 머지 전 확인 목록**을 더했다.
 
 - 저장소: https://github.com/indextrown/qa-kit (공개, 기본 브랜치 `develop`)
 
@@ -45,7 +45,7 @@ Git Flow는 **"배포된 코드"와 "개발 중인 코드"를 다른 브랜치�
 
 ## 연습해 보기
 
-처음이라면 실제 저장소 대신 빈 연습 저장소에서 `init → feature → release → hotfix`를 한 번 따라 해 본다. 순서와 실제 출력은 marine-algorithms `docs/gitflow.md`의 "처음부터 따라 하기"와 같다 (같은 git-flow-next 2.1.0).
+처음이라면 실제 저장소 대신 빈 연습 저장소에서 `init → feature → release → hotfix`를 한 번 따라 해 본다. (git-flow-next 2.1.0 기준)
 
 ```sh
 mkdir ~/gitflow-practice && cd ~/gitflow-practice
