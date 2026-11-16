@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AppState.shared.runChecks { [weak self] in
             if AppState.shared.problems > 0 { self?.showSettings(tab: .check) }
         }
+        Updater.shared.checkIfDue()   // 새 버전 확인 (하루 한 번, 설정에서 끔)
         // `open -a "QA Kit" --args -workspace <경로>`나 Finder로 폴더를 끌어 놓은 경우는 application(_:open:)
         if let ws = UserDefaults.standard.string(forKey: "workspace") {
             open(path: ws)
@@ -41,6 +42,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        Updater.shared.launchPendingSwap()   // 받아 둔 새 버전이 있으면 끝난 뒤 바꾸고 다시 켠다
+    }
+
+    @objc func checkForUpdates(_ sender: Any?) {
+        showSettings(tab: .general)
+        Updater.shared.check()
+    }
 
     /// 끌 때 서버를 모두 SIGINT로 멈추고(실행·AI·녹화 정리) 끝난 뒤에 앱을 닫는다
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -109,7 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             w.contentView = NSHostingView(rootView: LauncherView(recents: recents,
                                                                  open: { [weak self] in self?.open(path: $0) },
                                                                  openFolder: { [weak self] in self?.openFolder(nil) },
-                                                                 settings: { [weak self] in self?.showSettings(tab: .check) }))
+                                                                 settings: { [weak self] in self?.showSettings(tab: $0) }))
             w.center()
             launcher = w
         }
@@ -181,6 +191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item("QA Kit 정보", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
             .separator(),
             item("설정…", #selector(showSettingsMenu(_:)), ","),
+            item("업데이트 확인…", #selector(checkForUpdates(_:))),
             .separator(),
             item("QA Kit 가리기", #selector(NSApplication.hide(_:)), "h"),
             item("기타 가리기", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),

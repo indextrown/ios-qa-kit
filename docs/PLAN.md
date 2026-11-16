@@ -701,7 +701,7 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 
 ## 맥 앱(DMG) 설계 — 다음 단계
 
-> 상태: D1 ✅ 쓰는 곳 분리, D2 ✅ 앱 셸, D3 ✅ 맥 기능·설정 창, D4 ✅ DMG (2026-11-16). 다음 D5 업데이트.
+> 상태: D1 ✅ 쓰는 곳 분리, D2 ✅ 앱 셸, D3 ✅ 맥 기능·설정 창, D4 ✅ DMG, D5 ✅ 앱 안 업데이트 (2026-11-16). 남은 것: Developer ID 서명·공증(자격이 생기면), 앱 이름.
 
 ### 왜
 
@@ -765,7 +765,7 @@ QA Kit.app
 | **D3. 맥 기능 · 설정 창** ✅ | **메뉴 막대 아이콘**: 열린 작업공간, 도는 것(시나리오 실행·AI·녹화)이 있으면 채운 아이콘 + "실행 중" — 서버의 `GET /api/busy`를 3초마다 (토큰은 `X-Qakit-Token` 헤더). 도는 중에 창 닫기·앱 종료는 먼저 묻기(설정에서 끔). **처음 점검**: `qakit doctor --system [--json]`(작업공간 없이 Python·Xcode·시뮬레이터·xcodegen·git / AI: claude·codex / 안드로이드: JDK·adb) — 필수가 빠지면 켤 때 설정의 환경 점검을 열고 처음 화면에도 경고, 설치 명령 복사. **명령줄·스킬**: `~/.local/bin/qakit`·Claude Code·Codex 스킬 링크가 이 앱 / 다른 곳(git 설치) / 없음인지 보여 주고, "이 앱으로 연결"(다른 곳이면 확인 후 `install-skill`)·"이 앱 연결 풀기"(앱을 가리키는 링크만). **설정 창(⌘,)**: 화면 크기 50~200%(슬라이더·버튼, 보기 메뉴 ⌘− ⌘0 ⌘+·⌘=, 모든 창 `pageZoom`), 메뉴 막대 아이콘 켜기·끄기, 실행 중 확인, 버전·도구 폴더·빌드 결과 위치. 앱 안 qakit에서 `qakit update`는 막고 릴리스 안내 |
 | **실시간 화면 속도** ✅ | simscreen을 하드웨어 JPEG(VideoToolbox, GPU 축소)로: 한 장 24ms → 7ms, CPU 약 1/7. 상한 24 → 60fps. 화면 포트 재확인이 3초 중 1초 동안 매 장 돌던 것(장마다 6~10ms)을 3초에 한 번으로. AI 탭 실시간 화면도 화면에서 빠질 때 스트림을 끊게 (WebKit 연결 누수). 다음 후보: SimulatorKit 프레임 콜백(폴링 없이 새 프레임마다), H.264 + WebCodecs(대역폭·지연↓) |
 | **D4. 패키징** ✅ | 앱 아이콘(`scripts/make-icon.swift` → `App/AppIcon.icns`), `scripts/build-dmg.sh`(QA Kit.app + Applications 바로가기, UDZO, `hdiutil verify`), `QAKIT_SIGN_ID`가 있으면 Developer ID + hardened runtime 서명, `QAKIT_NOTARY_PROFILE`이 있으면 notarytool 공증 + staple, 없으면 ad-hoc. `release.sh`가 릴리스 뒤 DMG를 만들어 붙이고 노트에 설치·허용 안내 (`--no-dmg`로 끔, 실패해도 릴리스는 그대로·다시 붙이는 명령 안내). CI가 DMG까지 만들어 확인. **확인**: DMG 1.3MB, 붙여서 꺼낸 앱이 저장소 밖에서 켜지고 서버·실시간 화면 정상(버전 0.48.0), ad-hoc + 격리 속성이면 Gatekeeper `rejected` → 처음 열 때 허용 안내. Developer ID가 생기면 환경 변수만 넣으면 된다 |
-| **D5. 업데이트** | 최신 릴리스 확인 → 이후 Sparkle |
+| **D5. 업데이트** ✅ | `App/Sources/Updater.swift`: GitHub `releases/latest`를 켤 때 하루 한 번(설정에서 끔)·메뉴 "업데이트 확인…" → 새 버전이면 처음 화면·메뉴 막대·설정에 표시. "업데이트하고 다시 켜기" = DMG 받기(진행 표시) → `hdiutil attach` → 임시 폴더로 꺼내기 → 번들 ID·버전·`codesign --verify`(지금 앱이 Developer ID면 같은 팀인지도) 확인 → 앱을 끄고(도는 작업이 있으면 평소처럼 묻기) 끝난 뒤 셸이 옛 앱을 옆으로 옮기고 새 앱을 넣고 다시 켬(실패하면 되돌림). 앱이 직접 받은 파일이라 격리 속성이 없어 다시 허용할 필요 없음. 저장소 안·`QAKIT_KIT` 개발용 앱은 바꾸지 않고 릴리스 페이지만. Sparkle은 서명·appcast가 필요해 Developer ID가 생기면 다시 본다. **확인**: 0.48.0으로 만든 앱이 실제 v0.49.0 릴리스를 찾아 8초 만에 바꾸고 다시 켜짐, 격리 속성 0, 옛 앱·임시 폴더·DMG 정리 |
 
 ### 확인할 것 · 위험
 
@@ -799,7 +799,7 @@ QA Kit.app
 | 9. UI | `qakit ui` ([설계](#ui-설계-다음-단계)) | U1~U5 ✅, 실시간 화면·커서·캡처 ✅ |
 | 10. AI QA | AI가 MCP로 앱을 직접 QA ([설계](#ai-qa-설계-다음-단계)) | A1 ✅ (`qakit mcp`, 실제 Claude Code에서 확인) · A2 ✅ (라이브 세션 AI 활동) · A3 ✅ (UI에서 AI QA 시작, 실제 Claude Code로 끝까지) · A4 ✅ (지난 세션·통과 단계 → 시나리오) |
 | 11. AI QA 직접 터치 | tapflow 방식 — 앱은 simctl, 실행기는 읽기만, 누르기는 터치 신호 ([설계](#ai-qa-직접-터치-설계--tapflow-방식-다음-단계)) | 시험 ✅ · AutoID ✅ · H1 ✅ · H3 ✅ · H4 ✅ |
-| 12. 맥 앱(DMG) | 더블클릭으로 여는 앱, 웹 UI를 창으로 ([설계](#맥-앱dmg-설계--다음-단계)) | D1 ✅ (읽기 전용 도구 폴더 + Python 3.9), D2 ✅ (앱 셸 `scripts/build-app.sh`), D3 ✅ (메뉴 막대·처음 점검·명령줄·스킬·설정 창), D4 ✅ (DMG·릴리스 첨부). 다음 D5 |
+| 12. 맥 앱(DMG) | 더블클릭으로 여는 앱, 웹 UI를 창으로 ([설계](#맥-앱dmg-설계--다음-단계)) | D1 ✅ (읽기 전용 도구 폴더 + Python 3.9), D2 ✅ (앱 셸 `scripts/build-app.sh`), D3 ✅ (메뉴 막대·처음 점검·명령줄·스킬·설정 창), D4 ✅ (DMG·릴리스 첨부), D5 ✅ (앱 안 업데이트). 남은 것: Developer ID 서명·공증 |
 
 ## 주요 결정과 배운 것
 

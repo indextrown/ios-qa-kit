@@ -59,6 +59,9 @@ final class StatusBar: NSObject, NSMenuDelegate {
             }
         }
         menu.addItem(.separator())
+        if Updater.shared.hasUpdate, let v = Updater.shared.latest?.version {
+            menu.addItem(action("새 버전 \(v) 업데이트…", #selector(AppDelegate.checkForUpdates(_:))))
+        }
         menu.addItem(action("작업공간 열기…", #selector(AppDelegate.openFolder(_:))))
         menu.addItem(action("작업공간 목록", #selector(AppDelegate.showLauncher(_:))))
         menu.addItem(action("설정…", #selector(AppDelegate.showSettingsMenu(_:))))
