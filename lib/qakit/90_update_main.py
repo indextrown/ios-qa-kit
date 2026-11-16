@@ -156,7 +156,7 @@ def main():
 
     p = sub.add_parser("do", help="시나리오 단계 하나를 바로 실행 (상주 실행기, 없으면 띄움). 예) qakit do 'tap: X' / dump / launch / reset")
     p.add_argument("step", nargs="+",
-                   help="단계(시나리오 문법) 또는 dump · launch · ping · reset · steps(기록 보기) · save <이름>(기록으로 시나리오 초안)")
+                   help="단계(시나리오 문법) 또는 dump · launch · ping · reset · steps(기록 보기) · save <이름>(기록으로 시나리오 초안) · restore [이름](launch로 비운 이전 기록 되살리기)")
     p.add_argument("--force", action="store_true", help="save: 같은 이름의 시나리오가 있어도 덮어씀")
     p.add_argument("--no-record", action="store_true", help="통과해도 기록하지 않음 (확인용 — AI QA 직접 터치가 씀)")
     p.add_argument("--title", help="save: 시나리오 제목 (name:)")

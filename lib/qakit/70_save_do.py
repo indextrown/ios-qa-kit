@@ -269,9 +269,65 @@ def touch_mark(ws, kind, x, y):
             f.write(json.dumps(row) + "\n")
 
 
+DO_LOG_KEEP = 10   # launch로 비우기 전 기록을 몇 개까지 남기나
+
+
+def do_log_prev_dir(ws):
+    return ws.root / ".qakit" / "do-steps-prev"
+
+
+def do_log_backup(ws):
+    """지금 기록에 단계가 있으면 .qakit/do-steps-prev/<시각>.jsonl로 남긴다 (오래된 것부터 지워 DO_LOG_KEEP개). → 이름 또는 None"""
+    steps, _ = do_log_read(ws)
+    if not steps:
+        return None
+    d = do_log_prev_dir(ws)
+    d.mkdir(parents=True, exist_ok=True)
+    name = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    n = 1
+    while (d / f"{name}.jsonl").exists():
+        n += 1
+        name = f"{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}-{n}"
+    shutil.copyfile(do_log_path(ws), d / f"{name}.jsonl")
+    for old in sorted(d.glob("*.jsonl"))[:-DO_LOG_KEEP]:
+        old.unlink(missing_ok=True)
+    return name
+
+
+def do_log_prev(ws):
+    """남겨 둔 이전 기록 (새 것부터): [{name, steps: [단계], count}]"""
+    out = []
+    for f in sorted(do_log_prev_dir(ws).glob("*.jsonl"), reverse=True):
+        steps = []
+        with contextlib.suppress(OSError):
+            for line in f.read_text(encoding="utf-8").splitlines():
+                with contextlib.suppress(ValueError):
+                    row = json.loads(line)
+                    if row.get("event") == "launch":
+                        steps = []
+                    elif row.get("step"):
+                        steps.append(row["step"])
+        out.append({"name": f.stem, "steps": steps, "count": len(steps)})
+    return out
+
+
+def do_log_restore(ws, name):
+    """이전 기록 하나를 지금 기록으로 (지금 기록에 단계가 있으면 그것도 이전 기록으로 남김). → (단계 목록, 오류)"""
+    src = do_log_prev_dir(ws) / f"{name}.jsonl"
+    if not re.fullmatch(r"[0-9_-]+", name or "") or not src.is_file():
+        return None, f"이전 기록이 없습니다: {name}"
+    data = src.read_bytes()
+    src.unlink()
+    do_log_backup(ws)
+    do_log_path(ws).write_bytes(data)
+    return do_log_read(ws)[0], None
+
+
 def do_log_write(ws, row, reset=False):
     f = do_log_path(ws)
     f.parent.mkdir(parents=True, exist_ok=True)
+    if reset:
+        do_log_backup(ws)   # 앱 다시 켜기(launch)가 기록을 비우기 전에 남긴다
     with open(f, "w" if reset else "a", encoding="utf-8") as out:
         out.write(json.dumps(dict(row, at=datetime.datetime.now().isoformat(timespec="seconds")), ensure_ascii=False) + "\n")
 
@@ -326,6 +382,23 @@ def flow_text(value):
             or any(c in text for c in ",{}[]#") or ": " in text):
         return '"' + text.replace('"', '\\"') + '"'
     return text
+
+
+def do_restore(ws, name=None):
+    """qakit do restore [이름]: 앱을 다시 켜며(launch) 비운 이전 기록 보기·되살리기"""
+    prev = do_log_prev(ws)
+    if not name:
+        if not prev:
+            info("남겨 둔 이전 기록이 없습니다 (launch가 단계가 있는 기록을 비울 때 남깁니다).")
+            return
+        info(f"이전 기록 {len(prev)}개 (새 것부터) — 되살리기: qakit do restore <이름>")
+        for p in prev:
+            print(f"  {p['name']}  단계 {p['count']}개" + (f"  · {p['steps'][0][:60]}" if p["steps"] else ""))
+        return
+    steps, err = do_log_restore(ws, name)
+    if err:
+        fail(err, "qakit do restore 로 목록 보기")
+    ok(f"이전 기록을 되살렸습니다: 단계 {len(steps)}개 (원래 기록은 이전 기록으로 남김)")
 
 
 def do_steps(ws):

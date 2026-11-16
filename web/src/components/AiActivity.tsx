@@ -13,6 +13,7 @@ export interface AiState {
 const TOOL: Record<string, string> = {
   get_testing_guide: "지침 읽기", launch: "앱 새로 켜기", screen: "화면 읽기", screenshot: "사진 보기", tap: "탭",
   type_text: "입력", swipe: "쓸기", wait_for: "기다림", expect: "확인", step: "단계", recorded_steps: "기록 보기",
+  long_press: "길게 누르기", drag: "끌기", tap_point: "좌표 탭",
   list_scenarios: "시나리오 목록", run_scenario: "시나리오 실행", save_scenario: "시나리오 저장", report_issue: "문제 보고",
 };
 

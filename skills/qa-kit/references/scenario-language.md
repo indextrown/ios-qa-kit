@@ -28,6 +28,8 @@ steps:
 | read | `read: { from: <대상>, pattern: '정규식', as: 변수 }` | 라벨에서 값 추출 (첫 그룹) |
 | scroll-to | `scroll-to: { target: <대상>, in: <대상>, max: 8, dir: up, required: false }` | 화면에 보일 때까지 스크롤 |
 | swipe | `swipe: { on: <대상>, dir: up }` | |
+| long-press | `long-press: <대상>` 또는 `{ on: <대상>, seconds: 1 }`, `expect: <조건>`, `expect-timeout: 초` | 길게 누르기 (기본 1초). 나타날 때까지 기다리고 위치가 멈추면 누른다. `expect`는 tap과 같은 규칙 (누르기 전에 이미 맞으면 실패) |
+| drag | `drag: { from: <대상>, to?: <대상>, dir?: up, distance?: 0.3, seconds?: 0.5 }` | 끌기 — `from` 가운데에서 `to` 가운데로, 또는 `dir` 방향으로 화면의 `distance` 비율만큼, `seconds` 동안. 끌어서 옮기기·페이지 넘기기·당겨서 새로고침·슬라이더에. 목록 스크롤은 `swipe`/`scroll-to` |
 | pinch | `pinch: { on: <대상>, scale: 2.5, velocity?, settle?: 0.5 }` | 1보다 크면 확대, 작으면 축소. 속도 부호 자동, 기본 속도 `max(4, scale 또는 1/scale)` (동작 1초 안팎). settle: 끝난 뒤 쉬는 초 |
 | two-finger-tap | `two-finger-tap: <대상>` 또는 `{ on: <대상>, count?: 1, settle?: 0.6 }` | 대상 **가운데**를 두 손가락으로 탭. 지도는 1단계 축소. 축소 핀치는 손가락이 대상 가장자리에서 시작해 가장자리 패널(아이패드 가로 화면의 오른쪽 패널 등)을 끌 수 있으므로, 지도 축소는 이쪽을 쓴다 |
 | snapshot | `snapshot: { of: <대상>, as: 이름 }` | 스크린샷 저장·첨부 (changed 조건용) |
