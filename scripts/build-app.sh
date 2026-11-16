@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 맥 앱(QA Kit.app) 만들기: Swift 셸(App/) + 도구 폴더(Contents/Resources/kit). DMG·서명·공증은 D4.
+# 맥 앱(QA Kit.app) 만들기: Swift 셸(App/) + 도구 폴더(Contents/Resources/kit). DMG는 scripts/build-dmg.sh.
 #
 #   scripts/build-app.sh            # dist/QA Kit.app
 #   scripts/build-app.sh --open     # 만든 뒤 켜기
@@ -26,6 +26,7 @@ done
 lipo -create -output "$BIN" dist/obj/QAKit-arm64 dist/obj/QAKit-x86_64
 
 sed "s/__VERSION__/$VERSION/g" App/Info.plist > "$APP/Contents/Info.plist"
+cp App/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
 # git에 있거나 새로 만든(무시되지 않는) 파일 중 지금 있는 것 (UI를 다시 빌드하면 ui/dist 파일 이름이 바뀐다)
@@ -33,7 +34,14 @@ git ls-files -z -co --exclude-standard -- bin lib Tools Sources ScenarioRunner A
   | while IFS= read -r -d '' f; do [ -f "$f" ] && printf '%s\0' "$f"; done \
   | rsync -a --from0 --files-from=- . "$APP/Contents/Resources/kit/"
 
-codesign --force --sign - "$APP" >/dev/null   # ad-hoc (Developer ID 서명·공증은 D4)
+# 서명: QAKIT_SIGN_ID(예: "Developer ID Application: 이름 (팀ID)")가 있으면 그것으로 + hardened runtime(공증 조건),
+# 없으면 ad-hoc (받은 사람이 처음 열 때 한 번 허용해야 함 — docs/web-ui.md "맥 앱")
+if [ -n "${QAKIT_SIGN_ID:-}" ]; then
+  codesign --force --options runtime --timestamp --sign "$QAKIT_SIGN_ID" "$APP"
+else
+  codesign --force --sign - "$APP" 2>/dev/null
+fi
+codesign --verify --strict "$APP"
 echo "✅ $APP ($VERSION, $(du -sh "$APP" | cut -f1))"
 [ "$OPEN" = 1 ] && open "$APP"
 exit 0
