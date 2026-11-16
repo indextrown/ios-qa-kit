@@ -8,7 +8,9 @@ def cmd_ui(args):
     import urllib.parse
     ws = find_workspace(args.workspace)
     token = pysecrets.token_urlsafe(18)
-    udid = None if ws.device else simulator_udid(ws.simulator)[0]
+    android = ws.platform == "android"
+    # 안드로이드: 에뮬레이터 serial (꺼져 있으면 띄움). 라이브 화면·터치·녹화는 adb + 상주 실행기 화면 서버
+    udid = None if ws.device else (android_serial(ws.emulator) if android else simulator_udid(ws.simulator)[0])
     screen = {"at": 0.0, "data": None, "lock": threading.Lock()}
     # 실시간 화면: simscreen 하나를 띄워 최신 JPEG를 모든 브라우저에 나눠 준다 (보는 사람이 없으면 30초 뒤 끔)
     live = {"proc": None, "frame": None, "seq": 0, "cond": threading.Condition(), "error": None, "failed_at": 0.0,
@@ -122,10 +124,13 @@ def cmd_ui(args):
         if not touch["lock"].acquire(timeout=10):
             return None, "앞선 터치가 끝나지 않았습니다"
         try:
-            if touch["helper"] is None:
-                touch["helper"] = TouchHelper(udid)
             t0 = time.time()
-            good, line = touch["helper"].send(cmd, timeout=secs + 10)
+            if android:
+                good, line = android_touch(udid, kind, pts, secs)
+            else:
+                if touch["helper"] is None:
+                    touch["helper"] = TouchHelper(udid)
+                good, line = touch["helper"].send(cmd, timeout=secs + 10)
         finally:
             touch["lock"].release()
         if kind == "swipe":
@@ -277,7 +282,8 @@ def cmd_ui(args):
                 if live["proc"] is proc:
                     live["proc"] = None
                     if proc.returncode not in (0, -15):   # 스스로 멈춤 = 실패 (비공개 API가 바뀌었거나 시뮬레이터 꺼짐)
-                        live["error"] = next((l for l in err if l.startswith("simscreen:")), None) or f"종료 코드 {proc.returncode}"
+                        live["error"] = next((l for l in err if l.startswith(("simscreen:", "androidframes:"))), None) \
+                            or f"종료 코드 {proc.returncode}"
                         live["failed_at"] = time.time()
                 live["cond"].notify_all()
 
@@ -288,6 +294,19 @@ def cmd_ui(args):
                 return True, None
             if live["error"] and time.time() - live["failed_at"] < 30:
                 return False, live["error"]
+        if android:
+            try:
+                st = android_live_runner(ws, udid)
+            except SystemExit:
+                with live["cond"]:
+                    live.update(error="상주 실행기를 띄우지 못함 (터미널 출력 확인)", failed_at=time.time())
+                return False, live["error"]
+            proc = subprocess.Popen([sys.executable, str(KIT_DIR / "bin" / "qakit"), "android", "frames",
+                                     "--port", str(st["framePort"])], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            with live["cond"]:
+                live.update(proc=proc, error=None, frame=None, idle_since=time.time())
+            threading.Thread(target=live_reader, args=(proc,), daemon=True).start()
+            return True, None
         tool = ensure_simscreen()
         if not tool:
             with live["cond"]:
@@ -309,6 +328,13 @@ def cmd_ui(args):
                 return None, "이미 녹화 중"
             out = ws.results_dir / "recordings" / (datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S") + ".mp4")
             out.parent.mkdir(parents=True, exist_ok=True)
+            if android:
+                proc = android_record_start(udid)
+                time.sleep(1)
+                if proc.poll() is not None:
+                    return None, (proc.stderr.read().decode("utf-8", "replace").strip().splitlines() or ["녹화 시작 실패"])[-1]
+                rec.update(proc=proc, file=out, started=time.time())
+                return {"recording": True, "started": rec["started"]}, None
             proc = subprocess.Popen(["xcrun", "simctl", "io", udid, "recordVideo", "--codec=h264", "--force", str(out)],
                                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
             err = b""
@@ -330,11 +356,14 @@ def cmd_ui(args):
             rec.update(proc=None, started=None)
         if not proc:
             return None, "녹화 중이 아님"
-        proc.send_signal(signal.SIGINT)   # simctl은 SIGINT를 받아야 파일을 마무리한다
-        try:
-            proc.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+        if android:
+            android_record_stop(udid, proc, out)   # 기기 안 파일을 마무리하고 가져온다 (최대 3분)
+        else:
+            proc.send_signal(signal.SIGINT)   # simctl은 SIGINT를 받아야 파일을 마무리한다
+            try:
+                proc.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                proc.kill()
         if not out.exists() or out.stat().st_size == 0:
             return None, "녹화 파일이 비었습니다"
         return {"dir": "recordings", "name": out.name, "bytes": out.stat().st_size}, None
@@ -367,6 +396,8 @@ def cmd_ui(args):
             return None, f"공통 단계가 없습니다: steps/{sc_start}.qa.yml"
         if not udid:
             return None, "AI QA는 지금 시뮬레이터만"
+        if android:
+            return None, "AI QA는 아직 iOS만 (안드로이드는 다음 단계)"
         eng = next((e for e in ai_engines() if e["id"] == engine), None)
         if not eng or not eng["ready"]:
             return None, f"{engine}: {(eng or {}).get('note', '없음')}"
@@ -470,6 +501,14 @@ def cmd_ui(args):
         with screen["lock"]:
             if time.time() - screen["at"] < 0.4 and screen["data"]:
                 return screen["data"]
+            if android:   # 라이브 화면 프레임을 쓴다 (adb screencap은 한 장에 몇 초)
+                started, _ = live_start()
+                with live["cond"]:
+                    if started and not live["frame"]:
+                        live["cond"].wait_for(lambda: live["frame"] is not None, timeout=10)
+                    data = live["frame"]
+                screen.update(at=time.time(), data=data)
+                return data
             tmp = Path(tempfile.mkstemp(suffix=".jpg")[1])
             try:
                 r = run(["xcrun", "simctl", "io", udid, "screenshot", "--type=jpeg", str(tmp)], check=False)
@@ -630,9 +669,10 @@ def cmd_ui(args):
                     return self.send(404, {"error": "없는 파일"})
                 if path == "/api/info":
                     state = app_state(ws)
-                    return self.send(200, {"name": ws.name, "simulator": None if ws.device else ws.simulator,
+                    sim = None if ws.device else (f"Android 에뮬레이터 {ws.emulator}" if android else ws.simulator)
+                    return self.send(200, {"name": ws.name, "simulator": sim, "platform": ws.platform,
                                            "device": ws.device["name"] if ws.device else None,
-                                           "bundleId": ws.bundle_id, "kit": kit_version(), "precheck": ws.precheck,
+                                           "bundleId": ws.package if android else ws.bundle_id, "kit": kit_version(), "precheck": ws.precheck,
                                            "app": {k: state.get(k) for k in ("branch", "commit", "dirtyFiles")}})
                 if path == "/api/runs":
                     return self.send(200, ui_runs(ws, int(q.get("limit", 300))))

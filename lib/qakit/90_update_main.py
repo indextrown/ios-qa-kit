@@ -315,6 +315,9 @@ def main():
     a.add_argument("--print", action="store_true", help="--out과 함께 화면에도 출력")
     a.add_argument("--json", action="store_true", help="요소 목록을 JSON으로")
     a.set_defaults(func=cmd_android_dump)
+    a = asub.add_parser("frames", help="(qakit ui 내부용) 실행기 화면 프레임 받기")
+    a.add_argument("--port", type=int, required=True)
+    a.set_defaults(func=cmd_android_frames)
 
     # --build는 명령 앞뒤 어디에 써도 되게 (qakit run x --build release)
     for sp in sub.choices.values():

@@ -207,18 +207,42 @@ def cmd_android_setup(args):
     avd = args.avd or ANDROID_AVD
     if avd in android_avds():
         ok(f"AVD 있음: {avd}")
+        if android_avd_gpu_on(avd) is False:
+            android_avd_enable_gpu(avd)
+            ok(f"AVD GPU 가속을 켰습니다 ({avd}) — 실행 중인 에뮬레이터는 다시 켜야 반영됩니다 (adb emu kill → qakit android boot)")
     else:
         avdm = require_tool("avdmanager")
         r = subprocess.run([avdm, "create", "avd", "-n", avd, "-k", image, "-d", args.device_profile],
                            input="no\n", text=True, env=env, capture_output=True)
         if r.returncode != 0:
             fail(f"AVD 생성 실패: {avd}", (r.stderr or r.stdout or "")[-600:])
-        ok(f"AVD 만듦: {avd} ({args.device_profile}, {image})")
+        android_avd_enable_gpu(avd)   # 기본값(auto)은 화면 캡처가 느려 라이브 화면이 1fps 안팎이 될 수 있다
+        ok(f"AVD 만듦: {avd} ({args.device_profile}, {image}, GPU 가속)")
     print()
     ok("안드로이드 준비 완료. 다음: qakit android boot  →  qakit android screen")
     if not os.environ.get("ANDROID_HOME"):
         info(f"(선택) 셸 설정에 추가하면 adb를 바로 쓸 수 있습니다: export ANDROID_HOME={sdk}; "
              'export PATH="$ANDROID_HOME/platform-tools:$PATH"')
+
+
+def android_avd_config(avd):
+    return Path(os.environ.get("ANDROID_AVD_HOME") or Path.home() / ".android" / "avd") / f"{avd}.avd" / "config.ini"
+
+
+def android_avd_gpu_on(avd):
+    """AVD GPU 가속이 켜져 있나. 꺼져 있으면 화면 캡처가 한 장에 2~3초라 라이브 화면이 1fps 안팎 (켜면 12fps)."""
+    try:
+        text = android_avd_config(avd).read_text()
+    except OSError:
+        return None
+    return "hw.gpu.enabled=no" not in text and "hw.gpu.mode=off" not in text
+
+
+def android_avd_enable_gpu(avd):
+    """AVD 설정에서 GPU 가속을 켠다 (hw.gpu.enabled=yes, mode=host). 에뮬레이터를 다시 켜야 반영된다."""
+    f = android_avd_config(avd)
+    lines = [l for l in f.read_text().splitlines() if not l.startswith(("hw.gpu.enabled=", "hw.gpu.mode="))]
+    f.write_text("\n".join(lines + ["hw.gpu.enabled=yes", "hw.gpu.mode=host"]) + "\n")
 
 
 def android_doctor_lines():
@@ -232,6 +256,9 @@ def android_doctor_lines():
     ]
     avds = android_avds()
     rows.append((bool(avds), f"AVD: {', '.join(avds)}", "AVD 없음", "qakit android setup"))
+    slow = [a for a in avds if android_avd_gpu_on(a) is False]
+    rows.append((not slow, "AVD GPU 가속 켜짐", f"AVD GPU 가속 꺼짐: {', '.join(slow)} (라이브 화면이 1fps 안팎)",
+                 "qakit android setup --avd <이름> 으로 켠 뒤 에뮬레이터 다시 켜기"))
     devs = adb_devices()
     ready = [f"{s}{' ' + d if d else ''}" for s, st, d in devs if st == "device"]
     bad = [f"{s}({st})" for s, st, _ in devs if st != "device"]
@@ -549,6 +576,7 @@ def android_doctor_ws(ws, check, problem_count):
 ANDROID_RUNNER_DIR = KIT_DIR / "AndroidRunner"
 ANDROID_RUNNER_BUILD = KIT_DIR / ".build" / "android-runner"
 ANDROID_RUNNER_DEVICE_PORT = 7912
+ANDROID_FRAME_DEVICE_PORT = 7913   # 라이브 화면 (FrameServer)
 ANDROID_RUNNER_TEST = "com.qakit.runner.test/androidx.test.runner.AndroidJUnitRunner"
 
 
@@ -617,10 +645,12 @@ def android_serve_start(ws, serial, idle=1800, launch=True):
     token = hashlib.sha1(os.urandom(32)).hexdigest()
     r = adb(serial, "forward", "tcp:0", f"tcp:{ANDROID_RUNNER_DEVICE_PORT}")
     port = int(r.stdout.strip())
+    frame_port = int(adb(serial, "forward", "tcp:0", f"tcp:{ANDROID_FRAME_DEVICE_PORT}").stdout.strip())   # 라이브 화면
     log = SERVE_DIR / f"{serial}.log"
     cmd = [require_tool("adb"), "-s", serial, "shell", "am", "instrument", "-w",
            "-e", "port", str(ANDROID_RUNNER_DEVICE_PORT), "-e", "token", token, "-e", "package", ws.package,
            "-e", "idle", str(int(idle)), "-e", "launch", "1" if launch else "0",
+           "-e", "framePort", str(ANDROID_FRAME_DEVICE_PORT),
            "-e", "class", "com.qakit.runner.ServeTest", ANDROID_RUNNER_TEST]
     info("상주 실행기 시작 중 (안드로이드)…")
     started_at = time.time()
@@ -644,7 +674,7 @@ def android_serve_start(ws, serial, idle=1800, launch=True):
         os.killpg(proc.pid, 15)
         fail("상주 실행기가 120초 안에 준비되지 않았습니다.", f"로그: {log}")
     serve_request(probe, "/config", {"secrets": ws.secrets()}, timeout=10)   # 비밀값은 명령줄 대신 요청 본문으로
-    st = {"udid": serial, "platform": "android", "pid": proc.pid, "port": port, "token": token,
+    st = {"udid": serial, "platform": "android", "pid": proc.pid, "port": port, "framePort": frame_port, "token": token,
           "workspace": str(ws.root), "bundleId": ws.package, "runnerHash": android_runner_hash(),
           "attachOnly": not launch, "started": datetime.datetime.now().isoformat(timespec="seconds"), "log": str(log)}
     serve_state_file(serial).write_text(json.dumps(st, ensure_ascii=False, indent=2))
@@ -725,3 +755,93 @@ def android_grant_permissions(ws, serial):
                 granted.append(perm)
     if granted:
         ok("권한 미리 허용: " + ", ".join(dict.fromkeys(granted)))
+
+
+
+# ─────────────────────────────── A6: 라이브 세션 (qakit ui) ───────────────────────────────
+
+def android_live_runner(ws, serial):
+    """라이브 화면용 상주 실행기. 이미 떠 있으면 그대로, 없으면 앱을 다시 켜지 않고(launch=False) 띄운다."""
+    st = serve_load(serial)
+    if st and st.get("workspace") == str(ws.root) and st.get("runnerHash") == android_runner_hash() \
+            and st.get("framePort") and serve_alive(st):
+        return st
+    serve_stop(serial, quiet=True)
+    return android_serve_start(ws, serial, launch=False)
+
+
+def cmd_android_frames(args):
+    """(qakit ui 내부용) 실행기 화면 서버에서 받은 JPEG 프레임을 그대로 표준 출력으로 — simscreen과 같은 형식."""
+    import socket
+    try:
+        sock = socket.create_connection(("127.0.0.1", args.port), timeout=10)
+    except OSError as e:
+        print(f"androidframes: 화면 서버에 연결하지 못함: {e}", file=sys.stderr)
+        sys.exit(1)
+    sock.settimeout(15)
+    out = sys.stdout.buffer
+    try:
+        while True:
+            data = sock.recv(1 << 16)
+            if not data:
+                print("androidframes: 화면 서버가 연결을 끊음 (실행기 종료?)", file=sys.stderr)
+                sys.exit(1)
+            out.write(data)
+            out.flush()
+    except (socket.timeout, BrokenPipeError, KeyboardInterrupt):
+        pass
+
+
+DISPLAY_SIZE = {}
+
+
+def android_display_size(serial):
+    """지금 화면 크기(픽셀, 회전 반영) — 2초 동안 기억한다."""
+    hit = DISPLAY_SIZE.get(serial)
+    if hit and time.time() - hit[0] < 2:
+        return hit[1]
+    out = adb(serial, "shell", "dumpsys", "window", "displays", check=False).stdout
+    m = re.search(r"\bcur=(\d+)x(\d+)", out)
+    if not m:
+        m = re.search(r"(\d+)x(\d+)", adb(serial, "shell", "wm", "size", check=False).stdout)
+    size = (int(m.group(1)), int(m.group(2))) if m else (1080, 2400)
+    DISPLAY_SIZE[serial] = (time.time(), size)
+    return size
+
+
+def android_touch(serial, kind, pts, secs):
+    """라이브 세션 직접 터치. 좌표는 화면 대비 0~1. kind: tap · press(길게) · swipe(끌기)."""
+    w, h = android_display_size(serial)
+    px = [int(round(v * (w if i % 2 == 0 else h))) for i, v in enumerate(pts)]
+    ms = str(max(1, int(secs * 1000)))
+    if kind == "tap":
+        cmd = ["input", "tap", str(px[0]), str(px[1])]
+    elif kind == "press":
+        cmd = ["input", "swipe", str(px[0]), str(px[1]), str(px[0]), str(px[1]), ms]
+    else:
+        cmd = ["input", "swipe", *map(str, px[:4]), ms]
+    r = adb(serial, "shell", *cmd, check=False, timeout=secs + 10)
+    good = r.returncode == 0 and not (r.stderr or "").strip()
+    return good, ("ok" if good else (r.stderr or r.stdout).strip()[-200:])
+
+
+ANDROID_REC_REMOTE = "/sdcard/qakit-rec.mp4"
+
+
+def android_record_start(serial):
+    """화면 녹화 시작 (adb screenrecord, 최대 3분 — 안드로이드 제한). → Popen"""
+    adb(serial, "shell", "rm", "-f", ANDROID_REC_REMOTE, check=False)
+    return subprocess.Popen([require_tool("adb"), "-s", serial, "shell", "screenrecord", "--time-limit", "180",
+                             ANDROID_REC_REMOTE], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+
+def android_record_stop(serial, proc, out):
+    """녹화를 끝내고 파일을 가져온다. screenrecord는 SIGINT를 받아야 파일을 마무리한다."""
+    adb(serial, "shell", "pkill", "-INT", "screenrecord", check=False)
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    time.sleep(0.5)
+    adb(serial, "pull", ANDROID_REC_REMOTE, str(out), check=False, timeout=120)
+    adb(serial, "shell", "rm", "-f", ANDROID_REC_REMOTE, check=False)

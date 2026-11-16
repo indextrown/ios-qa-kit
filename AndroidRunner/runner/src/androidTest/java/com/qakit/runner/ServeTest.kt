@@ -20,7 +20,7 @@ import java.net.SocketTimeoutException
  *
  *   adb shell am instrument -w -e port 7912 -e token <토큰> -e package <앱> -e idle 1800 -e launch 1 \
  *       com.qakit.runner.test/androidx.test.runner.AndroidJUnitRunner
- *   호스트는 adb forward tcp:<로컬> tcp:7912 로 붙는다.
+ *   호스트는 adb forward tcp:<로컬> tcp:7912 로 붙는다. 라이브 화면(FrameServer)은 7913 (-e framePort).
  *
  * 명령 (POST, 헤더 X-Qakit-Token): /ping /config /step /dump /run /launch /reset /stop
  * 응답: { ok, message, durationMs, ... } — /dump와 실패 응답의 화면 구조는 uiautomator 형식 XML("xml")로 보내고
@@ -40,6 +40,7 @@ class ServeTest {
         val screen = Screen(pkg)
         val app = AppControl(screen, pkg)
         var runner = Scenario(screen, app)
+        val frames = FrameServer(screen.ua, args.getString("framePort", "7913").toInt()).also { it.start() }
         if (args.getString("launch", "1") == "1") app.launch()
 
         val server = ServerSocket(port, 8, InetAddress.getByName("127.0.0.1"))
@@ -129,6 +130,7 @@ class ServeTest {
                 }
             }
         } finally {
+            frames.running = false
             server.close()
             println("[qakit-serve] stopped")
         }

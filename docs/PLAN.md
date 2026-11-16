@@ -778,7 +778,7 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 | A3 실행기 | UiAutomator2 instrumentation APK + HTTP, `.qa.yml` 단계 해석 (Kotlin) | 완료 |
 | A4 CLI 통합 | `init`(Gradle 탐지)·`build-app`·`run`·`do`·`coverage`·MCP 플랫폼 분기 | |
 | A5 로그·네트워크 | 실패 요약에 앱 패키지만 거른 logcat·크래시 스택. OkHttp 로그 우선, 필요하면 mitmproxy | |
-| A6 라이브 세션 | UI에서 화면 보기·직접 터치 | |
+| A6 라이브 세션 | UI에서 화면 보기·직접 터치·녹화 | 완료 (AI QA는 아직) |
 
 ### 미결
 
@@ -814,3 +814,15 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 | 권한 대화상자 4종 | `permissions: [location, notifications, nearby, background]` |
 
 앱 쪽 관찰 (앱 팀 공유 후보): 로그인 화면에서 키보드가 떠 있을 때 뒤로 가기를 누르면 키보드만 닫히지 않고 앱이 닫힌다. 이메일 입력칸의 contentDescription이 문자열 리소스 ID 숫자("2131886546")로 들어가 있다 (`SignInContent.kt` `R.string.feature_auth_email_input.toString()`).
+
+### A6 라이브 세션 (2026-11-16)
+
+| 부분 | 안드로이드 |
+|---|---|
+| 화면 | 상주 실행기 안 `FrameServer` 스레드가 `UiAutomation.takeScreenshot()` → 600px JPEG를 기기 7913으로 계속 보낸다 (iOS simscreen과 같은 [4바이트 길이][JPEG] 형식). qakit은 adb forward로 받아 `qakit android frames`가 표준 출력으로 넘기고, UI 서버의 MJPEG 중계는 그대로. 명령과 다른 스레드라 시나리오가 도는 중에도 나온다 |
+| 속도 | 12fps (상한). **AVD GPU 가속이 꺼져 있으면 기기 안 캡처가 한 장에 2.5초 → 1fps 안팎** (`screencap`도 마찬가지, PNG면 4~19초). `hw.gpu.enabled=yes, hw.gpu.mode=host`로 0.37초 → 12fps. `qakit android setup`이 새 AVD에 켜고, 기존 AVD는 doctor가 알려 주고 setup이 고친다 |
+| 직접 터치 | `adb shell input tap / swipe` (길게 누르기 = 같은 자리 swipe). 좌표 0~1 → `dumpsys window displays`의 cur=(회전 반영) |
+| 녹화 | `adb shell screenrecord`(최대 3분, 안드로이드 제한) → 끝낼 때 `pkill -INT` 후 pull |
+| 스크린샷(/api/screen) | 라이브 화면 프레임을 쓴다 |
+| 라이브 화면을 열 때 | 실행기가 없으면 앱을 다시 켜지 않고(launch=0) 띄운다 |
+| 아직 | 시나리오 실행 중 누르는 자리 커서(iOS QA_TAPS_FILE), AI QA(MCP) |
