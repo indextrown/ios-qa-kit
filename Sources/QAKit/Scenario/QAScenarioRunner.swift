@@ -15,6 +15,8 @@
 //    read: { from: <대상>, pattern: 정규식(첫 그룹), as: 변수 }
 //    scroll-to: { target: <대상>, in: <대상>, dir: up, max: 8 }
 //    swipe: { on: <대상>, dir: up|down|left|right }
+//    long-press: <대상> | { on: <대상>, seconds: 1 } [expect: <조건>]   길게 누르기 (expect는 tap과 같은 규칙)
+//    drag: { from: <대상>, to?: <대상>, dir?: up|down|left|right, distance?: 0.3(화면 비율), seconds?: 0.5 }   끌기
 //    pinch: { on: <대상>, scale: 2.5, velocity: 2 }
 //    pinch-to: { on: <대상>, pref: 키, target: 값, gain: scale 10 한 번의 변화량, gain-out?: 축소 한 번의 변화량, out?: pinch|two-finger-tap }   필요한 핀치를 계산해 연달아
 //    two-finger-tap: <대상> | { on: <대상>, count: 1, settle: 0.6 }   두 손가락 탭 (지도: 가운데 기준 1단계 축소)
@@ -341,6 +343,55 @@ public final class QAScenarioRunner {
 
         } else if let spec = step["swipe"] as? [String: Any] {
             swipe(resolve(spec["on"] as Any), (spec["dir"] as? String) ?? "up")
+
+        } else if let raw = step["long-press"] {
+            let spec = raw as? [String: Any]
+            let target = spec?["on"] ?? raw
+            let element = resolve(target)
+            try waitFor(element, timeout: number(step["timeout"]) ?? 10, what: target)
+            let effect = step["expect"].map(frontmost)
+            if let effect, try check(effect) {
+                throw fail("누르기 전에 이미 기대 효과가 맞음 → 길게 누르기의 효과를 확인할 수 없음: \(compact(effect))")
+            }
+            waitUntilSettled(element)
+            recordTouch(element, "press")
+            element.press(forDuration: number(spec?["seconds"]) ?? number(step["seconds"]) ?? 1.0)
+            recordTouchDone("press-done")
+            if let effect {
+                guard try evaluate(effect, timeout: number(step["expect-timeout"]) ?? 10) else {
+                    throw fail("길게 누른 뒤 기대 효과가 나타나지 않음: \(compact(effect))")
+                }
+            }
+
+        } else if let spec = step["drag"] as? [String: Any] {
+            guard let fromTarget = spec["from"] else { throw fail("drag에 from: 이 필요함") }
+            let from = resolve(fromTarget)
+            try waitFor(from, timeout: number(spec["timeout"]) ?? 10, what: fromTarget)
+            waitUntilSettled(from)
+            let start = from.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            let end: XCUICoordinate
+            if let toTarget = spec["to"] {
+                let to = resolve(toTarget)
+                try waitFor(to, timeout: 5, what: toTarget)
+                end = to.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            } else {
+                let d = CGFloat(number(spec["distance"]) ?? 0.3), s = app.frame.size
+                let v: CGVector
+                switch (spec["dir"] as? String) ?? "up" {
+                case "down": v = CGVector(dx: 0, dy: d * s.height)
+                case "left": v = CGVector(dx: -d * s.width, dy: 0)
+                case "right": v = CGVector(dx: d * s.width, dy: 0)
+                default: v = CGVector(dx: 0, dy: -d * s.height)
+                }
+                end = start.withOffset(v)
+            }
+            let a = start.screenPoint, b = end.screenPoint
+            let dist = max(hypot(b.x - a.x, b.y - a.y), 1)
+            let speed = dist / CGFloat(max(number(spec["seconds"]) ?? 0.5, 0.1))   // 초당 포인트
+            recordPoint("drag", a)
+            start.press(forDuration: 0.05, thenDragTo: end, withVelocity: XCUIGestureVelocity(speed), thenHoldForDuration: 0.05)
+            recordPoint("drag-done", b)
+            RunLoop.current.run(until: Date().addingTimeInterval(number(spec["settle"]) ?? 0.3))
 
         } else if let spec = step["pinch"] as? [String: Any] {
             let element = resolve(spec["on"] as Any)
@@ -726,10 +777,17 @@ public final class QAScenarioRunner {
         writeTouch(kind, f, s)
     }
 
-    private func recordTouchDone() {
+    private func recordTouchDone(_ kind: String = "tap-done") {
         guard Self.touchFile != nil, let f = lastTouch else { return }
         lastTouch = nil
-        writeTouch("tap-done", f, app.frame)
+        writeTouch(kind, f, app.frame)
+    }
+
+    /// 화면 좌표 한 점 (끌기의 시작·끝)
+    private func recordPoint(_ kind: String, _ p: CGPoint) {
+        guard Self.touchFile != nil else { return }
+        let s = app.frame
+        writeTouch(kind, CGRect(x: p.x - 1, y: p.y - 1, width: 2, height: 2), s)
     }
 
     private func writeTouch(_ kind: String, _ f: CGRect, _ s: CGRect) {

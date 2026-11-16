@@ -253,6 +253,29 @@ class Scenario(private val screen: Screen, private val app: AppControl) {
                 val node = find(spec.opt("on")) ?: throw fail("10초 안에 나타나지 않음: ${compact(spec.opt("on"))}")
                 screen.swipe(node, spec.optString("dir", "up"))
             }
+            step.has("long-press") -> {
+                val raw = step.get("long-press")
+                val target = (raw as? JSONObject)?.opt("on") ?: raw
+                waitFor(target, number(step.opt("timeout")) ?: 10.0)
+                val effect = step.opt("expect")?.let { frontmost(it) }
+                if (effect != null && check(effect)) {
+                    throw fail("누르기 전에 이미 기대 효과가 맞음 → 길게 누르기의 효과를 확인할 수 없음: ${compact(effect)}")
+                }
+                val node = waitUntilSettled(target) ?: throw fail("10초 안에 나타나지 않음: ${compact(target)}")
+                screen.longPress(node, number((raw as? JSONObject)?.opt("seconds")) ?: number(step.opt("seconds")) ?: 1.0)
+                if (effect != null && !evaluate(effect, number(step.opt("expect-timeout")) ?: 10.0)) {
+                    throw fail("길게 누른 뒤 기대 효과가 나타나지 않음: ${compact(effect)}")
+                }
+            }
+            step.optJSONObject("drag") != null -> {
+                val spec = step.getJSONObject("drag")
+                val fromTarget = spec.opt("from") ?: throw fail("drag에 from: 이 필요함")
+                waitFor(fromTarget, number(spec.opt("timeout")) ?: 10.0)
+                val from = waitUntilSettled(fromTarget) ?: throw fail("10초 안에 나타나지 않음: ${compact(fromTarget)}")
+                val to = spec.opt("to")?.let { t -> waitFor(t, 5.0); find(t) ?: throw fail("끝 대상을 찾지 못함: ${compact(t)}") }
+                screen.drag(from, to, spec.optString("dir", "up"), number(spec.opt("distance")) ?: 0.3, number(spec.opt("seconds")) ?: 0.5)
+                sleep(number(spec.opt("settle")) ?: 0.3)
+            }
             step.optJSONObject("pinch") != null -> {
                 val spec = step.getJSONObject("pinch")
                 waitFor(spec.opt("on"), 5.0)

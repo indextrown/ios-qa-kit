@@ -58,6 +58,16 @@ class Change(unittest.TestCase):
         self.assertFalse(self.ring([(1, 1000)]).wait_change(time.time(), timeout=0.2))
 
 
+class Gesture(unittest.TestCase):
+    def test_steps(self):
+        self.assertEqual(q.gesture_step("long_press", {"target": "a.b"}), "long-press: a.b")
+        self.assertEqual(q.gesture_step("long_press", {"target": {"label": "카드"}, "seconds": 2}),
+                         'long-press: { on: { label: "카드" }, seconds: 2 }')
+        self.assertEqual(q.gesture_step("drag", {"from": "list"}), "drag: { from: list, dir: up }")
+        self.assertEqual(q.gesture_step("drag", {"from": "a", "to": "b", "seconds": 1}), "drag: { from: a, to: b, seconds: 1 }")
+        self.assertEqual(q.gesture_step("drag", {"from": "a", "dir": "down", "distance": 0.5}), "drag: { from: a, dir: down, distance: 0.5 }")
+
+
 class Mark(unittest.TestCase):
     def test_touch_mark(self):
         tmp, root = make_workspace()
@@ -81,7 +91,7 @@ class Tools(unittest.TestCase):
                                env={**os.environ, **env}, input="\n".join(json.dumps(m) for m in [
                                    {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
                                    {"jsonrpc": "2.0", "id": 2, "method": "tools/list"},
-                                   {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "drag", "arguments": {}}}]) + "\n")
+                                   {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "tap_point", "arguments": {"x": 1, "y": 1}}}]) + "\n")
             out = [json.loads(x) for x in p.stdout.splitlines()]
             return {t["name"]: t for t in out[1]["result"]["tools"]}, out[2]["result"]
         finally:
@@ -89,9 +99,11 @@ class Tools(unittest.TestCase):
 
     def test_direct_only_when_asked(self):
         plain, call = self.tools({"QAKIT_TOUCH": ""})
-        self.assertEqual(len(plain), 18)
+        self.assertEqual(len(plain), 20)
+        self.assertIn("long_press", plain)   # 길게 누르기·끌기는 XCUITest로도 (시나리오 단계)
+        self.assertNotIn("tap_point", plain)
         self.assertNotIn("via", plain["tap"]["inputSchema"]["properties"])
-        self.assertTrue(call["isError"])   # 직접 터치가 아니면 제스처 도구는 거절
+        self.assertTrue(call["isError"])   # 직접 터치가 아니면 좌표 탭은 거절
         direct, _ = self.tools({"QAKIT_TOUCH": "direct"})
         self.assertEqual(len(direct), 21)
         for n in ("long_press", "drag", "tap_point"):

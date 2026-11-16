@@ -77,6 +77,24 @@ MCP_ACTIONS = ("launch", "tap", "type_text", "swipe", "wait_for", "expect", "ste
                "long_press", "drag", "tap_point")
 
 
+def gesture_step(name, a):
+    """long_press·drag 도구 인자 → 시나리오 단계 글 (long-press·drag)"""
+    if name == "long_press":
+        if a.get("seconds") is not None:
+            return f"long-press: {mcp_yaml({'on': a['target'], 'seconds': a['seconds']})}"
+        return f"long-press: {mcp_yaml(a['target'])}"
+    spec = {"from": a["from"]}
+    if a.get("to") is not None:
+        spec["to"] = a["to"]
+    else:
+        spec["dir"] = a.get("dir") or "up"
+        if a.get("distance") is not None:
+            spec["distance"] = a["distance"]
+    if a.get("seconds") is not None:
+        spec["seconds"] = a["seconds"]
+    return f"drag: {mcp_yaml(spec)}"
+
+
 def mcp_tools(direct=False):
     def tool(name, desc, props=None, required=()):
         props = dict(props or {})
@@ -97,6 +115,13 @@ def mcp_tools(direct=False):
              {"into": MCP_TARGET, "text": {"type": "string"}}, ["into", "text"]),
         tool("swipe", "요소 위에서 쓸기 (목록 스크롤: dir up = 아래 내용 보기).",
              {"on": MCP_TARGET, "dir": {"type": "string", "enum": ["up", "down", "left", "right"]}}, ["on", "dir"]),
+        tool("long_press", "요소를 길게 누른다 (시나리오 long-press 단계로 기록).",
+             {"target": MCP_TARGET, "seconds": {"type": "number", "description": "기본 1"}}, ["target"]),
+        tool("drag", "요소에서 다른 요소로(to), 또는 방향(dir)으로 끈다 (시나리오 drag 단계로 기록). 목록 스크롤은 swipe를 쓰고, "
+                     "끌어서 옮기기·당겨서 새로고침·슬라이더에.",
+             {"from": MCP_TARGET, "to": MCP_TARGET, "dir": {"type": "string", "enum": ["up", "down", "left", "right"]},
+              "distance": {"type": "number", "description": "dir일 때 화면 대비 (기본 0.3)"},
+              "seconds": {"type": "number", "description": "끄는 시간 (기본 0.5)"}}, ["from"]),
         tool("wait_for", "요소가 나타날 때까지 기다린다.",
              {"target": MCP_TARGET, "timeout": {"type": "number", "description": "초 (기본 10)"}}, ["target"]),
         tool("expect", "조건이 지금 맞는지 확인 (안 맞으면 실패로 돌려줌).", {"condition": MCP_CONDITION}, ["condition"]),
@@ -135,15 +160,10 @@ def mcp_tools(direct=False):
                 t["description"] += (" 직접 터치 모드: 화면 구조에서 그 요소의 자리를 찾아 손가락처럼 누른다 (약 0.1초). "
                                      "화면에 없으면 XCUITest가 기다렸다 누른다. 직접 터치가 안 먹히는 것 같으면 via: xcuitest.")
                 t["inputSchema"]["properties"]["via"] = {"type": "string", "enum": ["direct", "xcuitest"]}
-        tgt = MCP_TARGET
+            if t["name"] in ("long_press", "drag"):
+                t["description"] += " 직접 터치 모드: 손가락처럼 바로."
         why = {"why": MCP_WHY}
         tools += [
-            {"name": "long_press", "description": "요소를 길게 누른다 (직접 터치). 시나리오 단계가 없어 기록되지 않음.",
-             "inputSchema": {"type": "object", "properties": {"target": tgt, "seconds": {"type": "number", "description": "기본 1"}, **why}, "required": ["target"]}},
-            {"name": "drag", "description": "요소에서 다른 요소로, 또는 방향(dir)으로 끈다 (직접 터치). 목록 스크롤은 swipe를 쓰고, 끌어서 옮기기·당겨서 새로고침·슬라이더에.",
-             "inputSchema": {"type": "object", "properties": {"from": tgt, "to": tgt, "dir": {"type": "string", "enum": ["up", "down", "left", "right"]},
-                                                              "distance": {"type": "number", "description": "dir일 때 화면 대비 (기본 0.3)"},
-                                                              "seconds": {"type": "number", "description": "기본 0.4"}, **why}, "required": ["from"]}},
             {"name": "tap_point", "description": "화면 좌표(pt, screen의 @x,y와 같은 단위)를 누른다 — 화면 구조에 이름이 없는 곳만. 시나리오로 옮길 수 없음.",
              "inputSchema": {"type": "object", "properties": {"x": {"type": "number"}, "y": {"type": "number"}, **why}, "required": ["x", "y"]}},
         ]
@@ -288,6 +308,7 @@ class McpSession:
         self.direct = os.environ.get("QAKIT_TOUCH") == "direct" and not ws.device
         self.touch = None
         self.last_dump = None   # (시각, 화면 구조 글) — 그 뒤로 화면이 안 바뀌었으면 다시 읽지 않는다
+        self.serve_hash_ok = None   # 떠 있는 실행기가 지금 코드인가 (세션에서 한 번 확인)
 
     @property
     def udid(self):
@@ -339,13 +360,47 @@ class McpSession:
         text = re.sub(r"\x1b\[[0-9;]*m", "", (r.stdout or "") + (r.stderr or ""))
         return r.returncode, self.mask(text.strip())
 
+    def serve_direct(self, path, body, timeout=60):
+        """떠 있는 상주 실행기에 바로 요청 (qakit do를 새 프로세스로 띄우는 0.5~1초를 아낌). 실행기가 없거나·다른 작업공간·
+        옛 코드면 None → 호출한 쪽이 qakit do로 (실행기를 띄우거나 다시 띄움)."""
+        try:
+            udid = self.ws.device["udid"] if self.ws.device else self.udid
+            st = serve_load(udid) if udid else None
+            if not st or st.get("workspace") != str(self.ws.root) or not _pid_alive(st.get("pid")):
+                return None
+            if self.serve_hash_ok is None:
+                self.serve_hash_ok = st.get("runnerHash") == runner_source_hash(self.ws)
+            if not self.serve_hash_ok:
+                return None
+            with sim_lock(self.ws, "qakit mcp"):
+                return serve_request(st, path, body, timeout=timeout)
+        except (ServeTimeout, ConnectionError, OSError, SystemExit):
+            return None
+
+    def dump_text(self, settle):
+        """화면 구조 글 → (성공, 글)"""
+        res = self.serve_direct("/dump", {"settle": settle})
+        if res is not None and res.get("ok") and res.get("dump"):
+            return True, self.mask(res["dump"])
+        code, out = self.qakit("do", "dump", "--settle", str(settle))
+        return code == 0, out
+
+    def check_now(self, cond, timeout=0):
+        """조건 확인 (기록 안 함) → (맞음, 메시지)"""
+        body = {"expect": cond, **({"timeout": timeout} if timeout else {})}
+        res = self.serve_direct("/step", body, timeout=timeout + 30)
+        if res is not None:
+            return bool(res.get("ok")), self.mask(res.get("message") or "")
+        code, out = self.qakit("do", "--no-record", mcp_yaml(body))
+        return code == 0, out
+
     def do(self, step):
         code, out = self.qakit("do", step)
         return code == 0, out
 
     def screen(self, all_=False):
-        code, out = self.qakit("do", "dump", "--settle", "0.3")
-        if code != 0:
+        good, out = self.dump_text(0.3)
+        if not good:
             return False, out[-1500:]
         self.last_dump = (time.time(), out)
         parsed = ui_parse_dump(out)
@@ -391,8 +446,8 @@ class McpSession:
             changed = self.ring.changed_since(t) if self.ring else None
             if changed is False and time.time() - t < 5:
                 return ui_parse_dump(out), None
-        code, out = self.qakit("do", "dump", "--settle", "0.2")
-        if code != 0:
+        good, out = self.dump_text(0.2)
+        if not good:
             return None, out[-800:]
         self.last_dump = (time.time(), out)
         return ui_parse_dump(out), None
@@ -429,8 +484,8 @@ class McpSession:
         (x, y), rect = self.center(el, scr)
         cond = a.get("expect")
         if cond:   # 누르기 전에 이미 맞으면 탭의 효과를 알 수 없음 (XCUITest 탭과 같은 규칙)
-            code, _ = self.qakit("do", "--no-record", mcp_yaml({"expect": tap_condition(cond)}))
-            if code == 0:
+            already, _ = self.check_now(tap_condition(cond))
+            if already:
                 return [{"type": "text", "text": f"❌ 누르기 전에 이미 기대 효과가 맞음 → 탭의 효과를 확인할 수 없음: {mcp_yaml(cond)}"}], True
         self.write_touch("tap", rect, scr)
         t0 = time.time()
@@ -443,8 +498,8 @@ class McpSession:
         line_text = mcp_yaml(step) if len(step) > 1 else f"tap: {mcp_yaml(target)}"
         where = f"@{x:.3f},{y:.3f} ({el['type']}{' #' + el['id'] if el['id'] else ''})"
         if cond:
-            code, out = self.qakit("do", "--no-record", mcp_yaml({"expect": tap_condition(cond), "timeout": a.get("expect-timeout") or 10}))
-            if code != 0:
+            good, out = self.check_now(tap_condition(cond), a.get("expect-timeout") or 10)
+            if not good:
                 return [{"type": "text", "text": f"단계: {line_text}\n❌ 탭 뒤 기대 효과가 나타나지 않음 (직접 터치 {where}) — 탭이 무시됐거나 다른 곳에 닿았을 수 있음\n{out[-600:]}"}], True
         note = ""
         if not cond and self.ring:
@@ -455,7 +510,7 @@ class McpSession:
         return [{"type": "text", "text": f"단계: {line_text}\n✅ 직접 터치 {where} {int((time.time() - t0) * 1000)}ms{note}"}], False
 
     def direct_gesture(self, name, a):
-        """long_press·drag·tap_point — 시나리오 단계가 없는 동작이라 기록하지 않음 (시나리오로 못 옮김)"""
+        """long_press·drag·tap_point 직접 터치. long_press·drag는 시나리오 단계(long-press·drag)로 기록, tap_point는 기록 안 함"""
         parsed, err = self.parsed_screen()
         if err:
             return [{"type": "text", "text": err}], True
@@ -487,7 +542,7 @@ class McpSession:
                 d = float(a.get("distance") or 0.3)
                 dx, dy = {"up": (0, -d), "down": (0, d), "left": (-d, 0), "right": (d, 0)}[a.get("dir") or "up"]
                 q = (min(max(p[0] + dx, 0.02), 0.98), min(max(p[1] + dy, 0.02), 0.98))
-            cmd = f"swipe {p[0]:.4f} {p[1]:.4f} {q[0]:.4f} {q[1]:.4f} {float(a.get('seconds') or 0.4):.2f}"
+            cmd = f"swipe {p[0]:.4f} {p[1]:.4f} {q[0]:.4f} {q[1]:.4f} {float(a.get('seconds') or 0.5):.2f}"
         kind = {"tap_point": "tap", "long_press": "press", "drag": "drag"}[name]
         start = (rect["x"] + rect["w"] / 2) / scr["w"], (rect["y"] + rect["h"] / 2) / scr["h"]
         touch_mark(self.ws, kind, *start)   # 커서는 실제로 누르는 좌표 그대로
@@ -499,7 +554,11 @@ class McpSession:
         self.last_dump = None
         if not good:
             return [{"type": "text", "text": f"직접 터치 실패: {line}"}], True
-        return [{"type": "text", "text": f"직접 터치: {name} {mcp_yaml(a)} → {line} (시나리오 단계가 없어 기록하지 않음 — 시나리오로 옮길 수 없음)"}], False
+        if name == "tap_point":
+            return [{"type": "text", "text": f"직접 터치: tap_point {mcp_yaml(a)} → {line} (좌표라 기록하지 않음 — 시나리오로 옮길 수 없음)"}], False
+        step = gesture_step(name, a)
+        do_log_write(self.ws, {"step": step})
+        return [{"type": "text", "text": f"단계: {step}\n✅ 직접 터치 → {line}"}], False
 
     def call(self, name, a):
         """→ (content 목록, 오류인가)"""
@@ -521,10 +580,14 @@ class McpSession:
             if not data:
                 return text("사진을 찍지 못함 (시뮬레이터만, 켜져 있어야 함)"), True
             return [{"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/jpeg"}], False
-        if name in ("long_press", "drag", "tap_point"):
-            if not self.direct:
-                return [{"type": "text", "text": f"{name}는 직접 터치 모드(AI QA)에서만"}], True
+        if name == "tap_point" and not self.direct:
+            return [{"type": "text", "text": "tap_point는 직접 터치 모드(AI QA)에서만"}], True
+        if name in ("long_press", "drag", "tap_point") and self.direct:
             return self.direct_gesture(name, a)
+        if name in ("long_press", "drag"):   # XCUITest로 (시나리오 단계 그대로)
+            line = gesture_step(name, a)
+            ok_, out = self.do(line)
+            return [{"type": "text", "text": f"단계: {line}\n{out}"}], not ok_
         if name == "tap" and self.direct and a.get("via") != "xcuitest":
             res = self.direct_tap(a)
             if res is not None:
@@ -698,7 +761,7 @@ qakit MCP 도구로 이 앱(시뮬레이터·에뮬레이터)을 직접 QA한다
 3. 문제는 launch부터 같은 단계로 재현한 뒤 report_issue로 남긴다. 확실하지 않으면 보고서에 '확인 필요'로만.
 4. {rule}
 5. 시간은 약 {minutes}분이다. 목표 범위 밖은 하지 않는다.
-6. 마지막 답변은 지침의 보고 형식으로, 한국어 마크다운.{chr(10) + "7. 누르기는 직접 터치(손가락처럼, 빠름)다. long_press·drag도 쓸 수 있고, tap_point(좌표)는 화면 구조에 이름이 없는 곳만. 탭 뒤 '화면 변화 없음' 경고가 나오면 expect를 주거나 via: xcuitest로 다시." if direct else ""}"""
+6. 마지막 답변은 지침의 보고 형식으로, 한국어 마크다운.{chr(10) + "7. 누르기는 직접 터치(손가락처럼, 빠름)다. long_press·drag도 같은 방식이고, tap_point(좌표)는 화면 구조에 이름이 없는 곳만. 탭 뒤 '화면 변화 없음' 경고가 나오면 expect를 주거나 via: xcuitest로 다시." if direct else ""}"""
 
 
 AI_CHAT_SYSTEM = """너는 qakit ui의 채팅창에서 QA 담당자와 대화하며 모바일 앱(시뮬레이터·에뮬레이터)을 대신 조작하는 QA 도우미다.

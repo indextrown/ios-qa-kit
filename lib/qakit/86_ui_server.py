@@ -143,7 +143,7 @@ def cmd_ui(args):
         if not good:
             return None, f"직접 터치 실패: {line}"
         step = str(body.get("step") or "").strip()
-        recorded = bool(step) and kind in ("tap", "swipe") and len(step) < 500   # 끌기는 화면 쪽에서 swipe: 단계로 바꿔 보낸다
+        recorded = bool(step) and len(step) < 500   # 탭 → tap, 길게 → long-press, 끌기 → swipe (화면 쪽에서 단계로 바꿔 보낸다)
         if recorded:
             do_log_write(ws, {"step": step})
         return {"ok": True, "ms": int((time.time() - t0) * 1000), "reply": line, "recorded": recorded}, None
@@ -743,6 +743,11 @@ def cmd_ui(args):
             if path == "/api/draft/save":
                 res, err = save_draft(body)
                 return self.send(400 if err else 200, {"error": err} if err else res)
+            if path == "/api/do-steps/restore":
+                steps, err = do_log_restore(ws, str(body.get("name") or ""))
+                if err:
+                    return self.send(404, {"error": err})
+                return self.send(200, {"steps": steps, "fromLaunch": do_log_read(ws)[1]})
             if path == "/api/do-steps":
                 res, err = edit_do_steps(body)
                 return self.send(400 if err else 200, {"error": err} if err else res)
@@ -875,7 +880,8 @@ def cmd_ui(args):
                     return self.send(200, sorted(f.name[:-len(".qa.yml")] for f in (ws.root / "steps").glob("*.qa.yml")))
                 if path == "/api/do-steps":
                     steps, from_launch = do_log_read(ws)
-                    return self.send(200, {"steps": steps, "fromLaunch": from_launch})
+                    prev = [{"name": p["name"], "count": p["count"], "first": p["steps"][:3]} for p in do_log_prev(ws)]
+                    return self.send(200, {"steps": steps, "fromLaunch": from_launch, "prev": prev})
                 if path == "/api/taps":   # since=-1: 지금 끝 위치만 (지난 기록은 안 보냄)
                     p = taps_path(ws)
                     size = p.stat().st_size if p.exists() else 0
@@ -1056,6 +1062,8 @@ def cmd_do(args):
     ws = find_workspace(args.workspace)
     if args.step[0] == "steps" and len(args.step) == 1:
         return do_steps(ws)
+    if args.step[0] == "restore" and len(args.step) <= 2:
+        return do_restore(ws, args.step[1] if len(args.step) == 2 else None)
     if args.step[0] == "save":
         if len(args.step) != 2:
             fail("저장할 시나리오 이름이 필요합니다.", "예) qakit do save home-12-banner")

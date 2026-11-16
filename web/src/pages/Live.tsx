@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Eye, EyeOff, Hand, Camera, Circle, Square as StopIcon, Keyboard, Radio, Image as ImageIcon, MousePointer2, MousePointerClick, Pause, Play, RotateCcw, ScanLine, TerminalSquare, Timer, CheckCircle2, ArrowUp, ArrowDown, Loader2, Zap } from "lucide-react";
+import { Eye, EyeOff, Hand, Camera, Circle, Square as StopIcon, Keyboard, Radio, Image as ImageIcon, MousePointer2, MousePointerClick, Pause, Play, RotateCcw, ScanLine, TerminalSquare, Timer, CheckCircle2, ArrowUp, ArrowDown, Loader2, Zap, History } from "lucide-react";
 import { fileUrl, get, post, screenUrl, type DoResult, type El, type Elements, type Job } from "../lib/api";
 import { SaveScenario } from "../components/SaveScenario";
 import { StepList } from "../components/StepList";
@@ -37,6 +37,7 @@ function selectorBasis(sel: string): [string, boolean] {
   return [idx ? "라벨 + 순서" : "라벨", idx];
 }
 
+interface Prev { name: string; count: number; first: string[] }
 const SCROLLERS = new Set(["ScrollView", "CollectionView", "Table", "WebView"]);
 /** 끌기 → swipe: 단계. 시작점을 품은 가장 작은 목록·스크롤 영역, 없으면 시작점을 품은 가장 큰 요소(지도 등) 위에서.
  *  dir은 손가락이 움직인 방향 (시나리오 swipe와 같음) */
@@ -97,7 +98,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   const [now, setNow] = useState(Date.now());
   const [capMsg, setCapMsg] = useState<string | null>(null);
   const [result, setResult] = useState<{ step: string; res?: DoResult; error?: string; running?: boolean } | null>(null);
-  const [steps, setSteps] = useState<{ steps: string[]; fromLaunch: boolean } | null>(null);
+  const [steps, setSteps] = useState<{ steps: string[]; fromLaunch: boolean; prev?: Prev[] } | null>(null);
   const [cursor, setCursor] = useState(() => stored("qakit-cursor", true));      // 손가락 커서·탭 표시
   const [clickTap, setClickTap] = useState(() => stored("qakit-click-tap", false)); // 화면을 누르면 바로 탭
   const [pt, setPt] = useState<{ x: number; y: number } | null>(null);              // 마우스 위치 (%)
@@ -167,7 +168,11 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     } catch (e) { setShotError(`화면 구조: ${(e as Error).message}`); }
     setDumping(false);
   }, []);
-  const loadSteps = useCallback(() => { get<{ steps: string[]; fromLaunch: boolean }>("/api/do-steps").then(setSteps).catch(() => {}); }, []);
+  const loadSteps = useCallback(() => { get<{ steps: string[]; fromLaunch: boolean; prev: Prev[] }>("/api/do-steps").then(setSteps).catch(() => {}); }, []);
+  const restore = async (name: string) => {
+    try { await post("/api/do-steps/restore", { name }); loadSteps(); }
+    catch (e) { setCapMsg(`되살리지 못함: ${(e as Error).message}`); }
+  };
   loadElsRef.current = loadEls;
   useEffect(() => { loadEls(); loadSteps(); }, [loadEls, loadSteps]);
   const wasAi = useRef(false);
@@ -251,17 +256,18 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     const moved = Math.hypot(q.x - p.x, (q.y - p.y) * ((scr?.h ?? 2) / (scr?.w ?? 1))) > 0.03;
     const h = hit(ev);
     const fresh = !!els && elsFresh.current;
-    const step = !moved && held < 0.5 && h && fresh ? `tap: ${selectorFor(h, els!.elements, els!.platform === "android")}`
+    const sel_ = h && fresh ? selectorFor(h, els!.elements, els!.platform === "android") : null;
+    const step = !moved && sel_ ? (held < 0.5 ? `tap: ${sel_}` : `long-press: { on: ${sel_}, seconds: ${Math.min(held, 5).toFixed(1)} }`)
       : moved && fresh && clickTap ? swipeStep(p.x, p.y, q.x - p.x, q.y - p.y, els!) : null;   // 끌기는 기록 모드일 때만 단계로
     elsSeq.current++; elsFresh.current = false;
     const body = moved ? { kind: "swipe", x: p.x, y: p.y, x2: q.x, y2: q.y, seconds: Math.min(Math.max(held, 0.15), 2), step }
-      : held >= 0.5 ? { kind: "press", x: p.x, y: p.y, seconds: Math.min(held, 5) } : { kind: "tap", x: p.x, y: p.y, step };
+      : held >= 0.5 ? { kind: "press", x: p.x, y: p.y, seconds: Math.min(held, 5), step } : { kind: "tap", x: p.x, y: p.y, step };
     const label = `직접 터치 · ${moved ? "끌기" : held >= 0.5 ? `길게 누르기 ${held.toFixed(1)}초` : "탭"} @${(p.x * 100).toFixed(0)}%,${(p.y * 100).toFixed(0)}%${step ? ` → ${step}` : ""}`;
     if (h && !moved) setSel(h);
     setResult({ step: label, running: true });
     try {
       const r = await post<{ ms: number; reply: string; recorded: boolean }>("/api/touch", body);
-      setResult({ step: label, res: { code: 0, output: `✅ ${r.ms}ms${r.recorded ? " · 단계 기록" : moved && !clickTap ? " · 기록 안 함 (끌기는 기록 모드에서 swipe로)" : held >= 0.5 ? " · 기록 안 함 (시나리오 단계 없음)" : " · 기록 안 함 (요소 위가 아니거나 화면 구조를 다시 읽기 전)"}` } });
+      setResult({ step: label, res: { code: 0, output: `✅ ${r.ms}ms${r.recorded ? " · 단계 기록" : moved && !clickTap ? " · 기록 안 함 (끌기는 기록 모드에서 swipe로)" : " · 기록 안 함 (요소 위가 아니거나 화면 구조를 다시 읽기 전)"}` } });
     } catch (e) { setResult({ step: label, error: (e as Error).message }); }
     if (!liveOn) await shot();
     loadSteps();
@@ -460,6 +466,24 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
                 onChange={(s) => setSteps((p) => ({ steps: s, fromLaunch: p?.fromLaunch ?? false }))} onRun={(s) => doStep(s, false)} />
             </Card>
             <SaveScenario job={job} refreshJob={refreshJob} stepsCount={steps?.steps.length ?? 0} />
+            {(steps?.prev?.length ?? 0) > 0 && (
+              <Card title={<span className="flex items-center gap-1.5"><History className="h-3.5 w-3.5" />이전 기록 {steps!.prev!.length}</span>}
+                actions={<span className="text-[11px] text-sub">앱을 다시 켜며 비운 기록</span>}>
+                <div className="divide-y divide-line">
+                  {steps!.prev!.map((p) => (
+                    <div key={p.name} className="flex items-start gap-2 px-4 py-2 text-[12px]">
+                      <div className="min-w-0 flex-1">
+                        <div><span className="font-mono text-sub">{p.name.slice(5, 16).replace("_", " ").replace(/-(\d\d)-(\d\d)$/, ":$1:$2")}</span> · 단계 {p.count}개</div>
+                        <div className="truncate font-mono text-[11px] text-sub" title={p.first.join("\n")}>{p.first.join(" → ")}</div>
+                      </div>
+                      <Button size="sm" variant="secondary" disabled={working}
+                        title="이 기록을 지금 기록으로 (지금 기록은 이전 기록으로 남김)"
+                        onClick={() => restore(p.name)}>되살리기</Button>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            )}
           </div>
           {/* AI가 조작하는 동안만 보인다 (늘 붙여 둬야 조작 잠금이 동작) — 말로 시키는 곳은 AI 화면 */}
           <div className={cx("space-y-1", !ai.active && "hidden")}>

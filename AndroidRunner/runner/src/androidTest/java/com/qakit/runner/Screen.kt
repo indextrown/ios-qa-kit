@@ -250,6 +250,34 @@ class Screen(val pkg: String) {
         device.swipe(x1, y1, x2, y2, 12)   // 한 걸음 약 5ms → 빠른 쓸기 (iOS swipeUp과 비슷)
     }
 
+    /** 길게 누르기: 같은 자리에서 움직이지 않는 swipe (한 걸음 약 5ms) */
+    fun longPress(n: Node, seconds: Double) {
+        val r = touchRect(n).takeUnless { it.isEmpty }
+            ?: throw QAFailure("누를 자리가 키보드에 가려졌거나 화면 밖: ${n.type} ${n.id.ifEmpty { n.label }}")
+        device.swipe(r.centerX(), r.centerY(), r.centerX(), r.centerY(), maxOf(20, (seconds * 200).toInt()))
+    }
+
+    /** 끌기: from 가운데 → to 가운데, 또는 dir 방향으로 화면의 distance 비율만큼 */
+    fun drag(from: Node, to: Node?, dir: String, distance: Double, seconds: Double) {
+        val r = touchRect(from).takeUnless { it.isEmpty }
+            ?: throw QAFailure("끌 자리가 키보드에 가려졌거나 화면 밖: ${from.type} ${from.id.ifEmpty { from.label }}")
+        val x1 = r.centerX(); val y1 = r.centerY()
+        val (x2, y2) = if (to != null) {
+            val t = touchRect(to).takeUnless { it.isEmpty } ?: visibleRect(to)
+            t.centerX() to t.centerY()
+        } else {
+            val dx = (screenRect.width() * distance).toInt(); val dy = (screenRect.height() * distance).toInt()
+            when (dir) {
+                "down" -> x1 to y1 + dy
+                "left" -> x1 - dx to y1
+                "right" -> x1 + dx to y1
+                else -> x1 to y1 - dy
+            }
+        }
+        val clamp = { v: Int, max: Int -> v.coerceIn(2, max - 2) }
+        device.drag(x1, y1, clamp(x2, screenRect.width()), clamp(y2, screenRect.height()), maxOf(10, (seconds * 200).toInt()))
+    }
+
     /** 두 손가락 핀치. scale > 1 확대(벌림), < 1 축소(오므림). 좌표 제스처라 요소 종류와 관계없다. */
     fun pinch(n: Node, scale: Double, steps: Int = 25) {
         val r = visibleRect(n).takeUnless { it.isEmpty } ?: screenRect
