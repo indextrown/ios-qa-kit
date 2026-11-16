@@ -731,7 +731,8 @@ AI가 누르는 모든 동작이 ID·라벨 기반 시나리오 단계다 (좌�
 
 ## 안드로이드 지원 설계 (진행 중)
 
-> 상태: A0(설치)·A1(화면 파악) 완료(2026-11-16, Pixel 7 AVD, Android 15 설정 앱으로 확인). 다음은 A2(Compose ID).
+> 상태: A0(설치)·A1(화면 파악)·A3(상주 실행기) 완료(2026-11-16, Pixel 7 AVD, Android 15 설정 앱으로 확인). `qakit run`·`qakit do`·`qakit serve`가 안드로이드에서 동작.
+> 첫 실제 앱 Navigation(mapsea-project)은 Compose만 쓰고 testTag(+testTagsAsResourceId)가 이미 있어 A2는 뒤로 미룬다. 다음은 Navigation으로 검증 → A4(build-app) → A5(logcat).
 > 대상 앱은 XML 뷰와 Compose가 섞인 앱을 전제로 한다. 레포는 이 저장소에 통합하고(`ios-qa-kit` → `qa-kit`), 시나리오·UI·coverage·MCP는 공유, 실행기만 플랫폼별로 둔다.
 
 ### iOS와 대응
@@ -773,13 +774,62 @@ emulator: qakit           # AVD 이름 (기본 qakit)
 |---|---|---|
 | A0 환경 | `qakit android setup/doctor/boot` — JDK·SDK·이미지·AVD 설치, 부팅 대기 | 완료 |
 | A1 화면 파악 | `qakit android screen/dump`(작업공간 없이), 작업공간 `dump-ui`·`doctor` 안드로이드 분기 | 완료 |
-| A2 Compose ID | 소스 삽입 도구 (Kotlin 소스 파싱, `@Composable` 함수의 클릭·입력 요소에 testTag), 빌드 직전 삽입·복원 | 다음 |
-| A3 실행기 | UiAutomator2 instrumentation APK + HTTP, `.qa.yml` 단계 해석 (Kotlin) | |
+| A2 Compose ID | 소스 삽입 도구 (Kotlin 소스 파싱, `@Composable` 함수의 클릭·입력 요소에 testTag), 빌드 직전 삽입·복원 | 보류 (첫 앱은 이미 testTag 있음) |
+| A3 실행기 | UiAutomator2 instrumentation APK + HTTP, `.qa.yml` 단계 해석 (Kotlin) | 완료 |
 | A4 CLI 통합 | `init`(Gradle 탐지)·`build-app`·`run`·`do`·`coverage`·MCP 플랫폼 분기 | |
 | A5 로그·네트워크 | 실패 요약에 앱 패키지만 거른 logcat·크래시 스택. OkHttp 로그 우선, 필요하면 mitmproxy | |
-| A6 라이브 세션 | UI에서 화면 보기·직접 터치 | |
+| A6 라이브 세션 | UI에서 화면 보기·직접 터치·녹화 | 완료 (AI QA는 아직) |
 
 ### 미결
 
 - Compose ID 규칙: `화면Composable.요소` 형식으로 할지, 변수·파라미터 이름을 어디서 가져올지 (A2에서 시범 앱으로 정함)
 - 실기기(USB): adb는 같지만 권한(`pm grant`)과 설치 서명 차이 확인 필요
+
+### A3 상주 실행기 (2026-11-16)
+
+| 부분 | 내용 |
+|---|---|
+| 위치 | `AndroidRunner/` (Gradle 9.8.2, AGP 9.5.0 — Navigation과 같은 판). 실행기 본체는 `runner/src/androidTest` |
+| 구조 | 빈 앱 APK + instrumentation APK. `am instrument -w … ServeTest`가 기기 안 127.0.0.1:7912에 HTTP를 열고, qakit은 `adb forward tcp:0`으로 받은 포트로 붙는다. 상태 파일·`serve_request`·`run_via_serve`·`qakit do`는 iOS와 같다 |
+| 화면 읽기 | 접근성 API로 모든 창(`FLAG_RETRIEVE_INTERACTIVE_WINDOWS`)을 직접 읽는다 — 팝업·드롭다운·권한 대화상자 포함, 키보드·상태 표시줄 제외. 조건 한 번 확인 ≈ 20~30ms |
+| 덤프 | 실행기는 uiautomator 형식 XML만 보내고 qakit(`android_convert_response`)이 덤프 텍스트로 바꾼다 → 형식 코드 한 곳 |
+| 시나리오 | `QAScenarioRunner.swift`를 Kotlin으로 옮김 (`Scenario.kt`). 단계·조건·실패 문구가 같아 실패 요약·추천을 그대로 쓴다 |
+| 다른 점 | 글자 입력은 `ACTION_SET_TEXT`(한글 가능, 누른 뒤 입력 포커스 칸에). 앱 실행은 `am start -W --activity-clear-task`(다른 앱 화면이 작업 위에 남는 경우). `pref`는 SharedPreferences(run-as, debuggable 빌드). `hide-keyboard`는 뒤로 가기. 비밀값은 시작 뒤 `/config`로 |
+| 아직 | 실패 영상, `--bench`, 라이브 세션 직접 터치, ID 정적 검사(소스 ID 목록 없음 — coverage는 저장된 덤프에서 본 ID 기준) |
+
+함정: `adb root`·`adb unroot`로 adbd가 재시작되면 실행 중인 실행기의 UiAutomation 연결이 끊긴다 (셸 명령이 빈 결과). 실행기를 다시 띄우면 된다.
+
+### Navigation 첫 시나리오 (2026-11-16, first-login)
+
+앱 데이터를 지우고(`pm clear` + 권한 미리 허용) 로그인 → 동시 로그인 확인창 → 안내창 3종(interrupts) → 홈. 통과 2회 (36.7초·22.3초).
+작업공간: `~/mapsea/qa-workspaces/navigation-android` (앱 레포는 읽기만). 이 과정에서 고친 실행기 문제:
+
+| 증상 | 원인 → 고침 |
+|---|---|
+| 스플래시가 끝났는데 옛 화면만 보임 | 접근성 노드 캐시가 안 갱신됨 (Compose 화면 전환) → 읽을 때마다 `clearCache()` |
+| `{ type: button, label: 개인 }`을 못 찾음 | 덤프는 버튼 라벨을 안쪽 글자에서 빌려 오는데 실행기는 아니었음 → 같은 규칙으로 |
+| `hide-keyboard` 뒤 앱이 닫힘 | 키보드 창이 숨은 뒤에도 남아 "떠 있음"으로 봄 + 이 앱은 키보드가 떠 있어도 뒤로 가기에 닫힘 → `mInputShown`으로 판단, `type`은 누르지 않고 SET_TEXT 먼저(키보드 안 띄움) |
+| 비밀번호가 이메일 칸에 들어감 | 비밀번호 칸은 읽은 글자가 •라 확인 실패 → 포커스 칸으로 넣는 대체 경로가 이전 칸(이메일)에 넣음 → 비밀번호 칸은 성공 응답을 믿고, 대체 경로는 대상과 같은 자리의 칸만 |
+| 팝업의 "로그인" 대신 아래 화면 "로그인"을 누를 수 있음 | 대상 찾기를 위 창부터 |
+| 권한 대화상자 4종 | `permissions: [location, notifications, nearby, background]` |
+
+앱 쪽 관찰 (앱 팀 공유 후보): 로그인 화면에서 키보드가 떠 있을 때 뒤로 가기를 누르면 키보드만 닫히지 않고 앱이 닫힌다. 이메일 입력칸의 contentDescription이 문자열 리소스 ID 숫자("2131886546")로 들어가 있다 (`SignInContent.kt` `R.string.feature_auth_email_input.toString()`).
+
+### A6 라이브 세션 (2026-11-16)
+
+| 부분 | 안드로이드 |
+|---|---|
+| 화면 | 상주 실행기 안 `FrameServer` 스레드가 `UiAutomation.takeScreenshot()` → 600px JPEG를 기기 7913으로 계속 보낸다 (iOS simscreen과 같은 [4바이트 길이][JPEG] 형식). qakit은 adb forward로 받아 `qakit android frames`가 표준 출력으로 넘기고, UI 서버의 MJPEG 중계는 그대로. 명령과 다른 스레드라 시나리오가 도는 중에도 나온다 |
+| 속도 | 12fps (상한). **AVD GPU 가속이 꺼져 있으면 기기 안 캡처가 한 장에 2.5초 → 1fps 안팎** (`screencap`도 마찬가지, PNG면 4~19초). `hw.gpu.enabled=yes, hw.gpu.mode=host`로 0.37초 → 12fps. `qakit android setup`이 새 AVD에 켜고, 기존 AVD는 doctor가 알려 주고 setup이 고친다 |
+| 직접 터치 | `adb shell input tap / swipe` (길게 누르기 = 같은 자리 swipe). 좌표 0~1 → `dumpsys window displays`의 cur=(회전 반영) |
+| 녹화 | `adb shell screenrecord`(최대 3분, 안드로이드 제한) → 끝낼 때 `pkill -INT` 후 pull |
+| 스크린샷(/api/screen) | 라이브 화면 프레임을 쓴다 |
+| 라이브 화면을 열 때 | 실행기가 없으면 앱을 다시 켜지 않고(launch=0) 띄운다 |
+| 아직 | 시나리오 실행 중 누르는 자리 커서(iOS QA_TAPS_FILE), AI QA(MCP) |
+
+### 가로 화면·태블릿 (2026-11-16)
+
+- 태블릿 AVD `qakit-tablet` (pixel_tablet 2560x1600, Navigation e2e 기준 기기와 같음). Navigation 작업공간은 태블릿 + `orientation: landscape`로 바꿈, first-login 통과 (31.5초·29.7초).
+- 방향: `qakit android boot --landscape`, `qakit android rotate`, qakit.yml `orientation:`. 자동 회전 끄고 `user_rotation` — 기본 방향(휴대폰 세로, 태블릿 가로)은 `wm size` Physical로 판단.
+- 웹: 안드로이드 덤프에 iOS처럼 `Application` 줄(화면 크기 dp)을 둔다 → UI가 화면 크기·방향을 읽는다 (이전에는 없어서 라이브 화면의 요소 상자·클릭이 안드로이드에서 동작하지 않았음). 라이브 세션·AI QA 기기 틀이 가로 화면이면 넓게.
+- 키보드: 태블릿에서 scroll-to 쓸기가 화면 키보드에 닿아 글라이드 입력("see see …")이 이메일 칸에 들어감. `show_ime_with_hard_keyboard=0` + `hw.keyboard=yes`는 이 이미지(Gboard)에서 듣지 않음, `ime disable`은 하나뿐인 키보드라 다시 켜짐 → 에뮬레이터에서 Gboard 앱을 `pm disable-user`(qakit.yml `keyboard: show`면 다시 켬). 실행기도 키보드 내용 영역을 피해 탭·쓸기, 가려진 요소는 hittable 아님.

@@ -35,6 +35,8 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
   const busy = !!job?.running || ai.busy;   // 시나리오 실행 중이거나 AI가 조작 중이면 손 조작을 잠근다
   const [img, setImg] = useState<string | null>(null);
   const [shotError, setShotError] = useState<string | null>(null);
+  // 화면 그림의 실제 가로·세로 (화면 구조를 아직 못 읽었을 때 방향 판단용)
+  const [natural, setNatural] = useState<{ w: number; h: number } | null>(null);
   const [streaming, setStreaming] = useState(() => stored("qakit-live", true));
   const [interval, setIntervalMs] = useState(() => stored("qakit-live-ms", 1000));
   const [boxes, setBoxes] = useState(() => stored("qakit-boxes", true));
@@ -225,6 +227,12 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
     setTimeout(() => { if (!elsFresh.current) loadElsRef.current(); }, 1200);   // 화면이 안 바뀌는 터치여도 다시 읽어 둔다
   };
   const scr = els?.screen;
+  // 가로 화면(안드로이드 태블릿·가로 고정 앱, 아이패드 가로): 화면 구조의 크기, 없으면 받은 그림 크기로 판단
+  const landscape = scr ? scr.w > scr.h : natural ? natural.w > natural.h : false;
+  const onImgLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
+    const { naturalWidth: w, naturalHeight: h } = e.currentTarget;
+    if (w && h && (!natural || (natural.w > natural.h) !== (w > h))) setNatural({ w, h });
+  };
   const selector = sel && els ? selectorFor(sel, els.elements) : null;
   const working = !!result?.running || busy;
   canAuto.current = !working && !dumping && !ai.active;
@@ -267,13 +275,15 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
           </div>
 
           {/* 기기 */}
-          <div className="relative w-full max-w-[360px] rounded-[48px] bg-neutral-900 p-[11px] shadow-[0_24px_60px_-20px_rgba(0,0,0,0.45)] ring-1 ring-black/50 dark:ring-white/15">
-            <div className="relative overflow-hidden rounded-[38px] bg-black">
+          <div className={cx("relative w-full bg-neutral-900 shadow-[0_24px_60px_-20px_rgba(0,0,0,0.45)] ring-1 ring-black/50 dark:ring-white/15",
+            landscape ? "max-w-[880px] rounded-[30px] p-[9px]" : "max-w-[360px] rounded-[48px] p-[11px]")}>
+            <div className={cx("relative overflow-hidden bg-black", landscape ? "rounded-[22px]" : "rounded-[38px]")}>
               {liveOn ? <img key={streamKey} src={`/api/stream?k=${streamKey}`} alt="시뮬레이터 화면 (실시간)" className="block w-full select-none" draggable={false}
-                  style={{ aspectRatio: scr ? `${scr.w} / ${scr.h}` : "9 / 19.5" }}
+                  onLoad={onImgLoad}
+                  style={{ aspectRatio: scr ? `${scr.w} / ${scr.h}` : natural ? `${natural.w} / ${natural.h}` : "9 / 19.5" }}
                   onError={() => { setMode("shot"); setStreamNote("실시간 화면을 열지 못했습니다 — 스크린샷으로 봅니다"); }} />
-                : img ? <img src={img} alt="시뮬레이터 화면" className="block w-full select-none" draggable={false} />
-                : <div className="flex aspect-[9/19.5] items-center justify-center text-[13px] text-neutral-400">{shotError ?? "화면 불러오는 중…"}</div>}
+                : img ? <img src={img} alt="시뮬레이터 화면" className="block w-full select-none" draggable={false} onLoad={onImgLoad} />
+                : <div className={cx("flex items-center justify-center text-[13px] text-neutral-400", landscape ? "aspect-[16/10]" : "aspect-[9/19.5]")}>{shotError ?? "화면 불러오는 중…"}</div>}
               {(img || liveOn) && scr && (
                 <div ref={overlay} className={cx("absolute inset-0", cursor ? "cursor-none" : "cursor-crosshair")}
                   onMouseMove={(e) => { setHover(hit(e)); setPt(pos(e)); }} onMouseLeave={() => { setHover(null); setPt(null); setDown(false); press.current = null; }}

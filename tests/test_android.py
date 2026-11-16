@@ -57,10 +57,32 @@ class AndroidDump(unittest.TestCase):
         login = next(e for e in q.ui_parse_dump(self.text)["elements"] if e["id"] == "loginButton")
         self.assertFalse(login["enabled"])
 
+    def test_application_line_gives_screen(self):
+        lines, _ = q.android_dump_lines(XML, PKG, 2.75, screen=(2400, 1080))
+        self.assertEqual(lines[0], f'Application "{PKG}" @0,0 873x393')
+        self.assertTrue(lines[1].startswith("  StaticText #titleText"))   # 한 단계 안쪽
+        self.assertEqual(q.ui_parse_dump("\n".join(lines))["screen"], {"w": 873, "h": 393})
+
     def test_foreign_window_marked(self):
         lines, _ = q.android_dump_lines(XML.replace(f'package="{PKG}"', 'package="com.android.permissioncontroller"', 1),
                                         PKG, 2.75)
         self.assertEqual(lines[0], "# (다른 앱 창: com.android.permissioncontroller)")
+
+
+class RunnerResponse(unittest.TestCase):
+    def test_xml_becomes_dump_text(self):
+        res = q.android_convert_response({"ok": False, "xml": XML, "package": PKG, "density": 2.75, "screenW": 1080, "screenH": 2400,
+                                           "files": {"dumps/login.txt": "@xml " + XML, "other.txt": "plain"}})
+        self.assertNotIn("xml", res)
+        self.assertTrue(res["dump"].startswith("# qakit dump-ui\n# package: com.example.demo"))
+        self.assertIn("Button #loginButton", res["dump"])
+        self.assertIn('Application "com.example.demo" @0,0 393x873', res["dump"])
+        self.assertIn("SecureTextField #passwordInput", res["files"]["dumps/login.txt"])
+        self.assertEqual(res["files"]["other.txt"], "plain")
+
+    def test_ios_response_untouched(self):
+        res = {"ok": True, "dump": "Button #A.b @0,0 1x1"}
+        self.assertEqual(q.android_convert_response(dict(res)), res)
 
 
 class AndroidIds(unittest.TestCase):

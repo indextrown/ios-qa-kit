@@ -24,6 +24,11 @@ BOOTED = {}
 
 def ensure_booted(ws):
     """시뮬레이터 udid (꺼져 있으면 부팅). 한 번 실행 안에서는 재사용한다."""
+    if ws.platform == "android":   # 안드로이드: 에뮬레이터 serial (꺼져 있으면 띄움)
+        key = "android:" + ws.emulator
+        if key not in BOOTED:
+            BOOTED[key] = android_serial(ws.emulator)
+        return BOOTED[key]
     if ws.simulator not in BOOTED:
         BOOTED[ws.simulator] = _ensure_booted(ws)
     return BOOTED[ws.simulator]

@@ -302,7 +302,14 @@ def main():
     a = asub.add_parser("boot", help="에뮬레이터 띄우기 (부팅 완료까지 기다림)")
     a.add_argument("--avd", help=f"AVD 이름 (기본 {ANDROID_AVD})")
     a.add_argument("--headless", action="store_true", help="창 없이 (CI)")
+    a.add_argument("--orientation", "-o", choices=["landscape", "portrait", "auto"],
+                   help="부팅 뒤 화면 방향 고정 (landscape: 가로, portrait: 세로, auto: 기기 회전 따름)")
+    a.add_argument("--landscape", dest="orientation", action="store_const", const="landscape", help="= --orientation landscape")
     a.set_defaults(func=cmd_android_boot)
+    a = asub.add_parser("rotate", help="실행 중인 에뮬레이터 화면 방향 바꾸기")
+    a.add_argument("orientation", choices=["landscape", "portrait", "auto"])
+    a.add_argument("--avd", help="여러 기기 중 이 AVD의 에뮬레이터")
+    a.set_defaults(func=cmd_android_rotate)
     a = asub.add_parser("screen", help="지금 화면의 앱·Activity·Fragment (빠름)")
     a.add_argument("--avd", help="여러 기기 중 이 AVD의 에뮬레이터")
     a.add_argument("--json", action="store_true")
@@ -315,6 +322,9 @@ def main():
     a.add_argument("--print", action="store_true", help="--out과 함께 화면에도 출력")
     a.add_argument("--json", action="store_true", help="요소 목록을 JSON으로")
     a.set_defaults(func=cmd_android_dump)
+    a = asub.add_parser("frames", help="(qakit ui 내부용) 실행기 화면 프레임 받기")
+    a.add_argument("--port", type=int, required=True)
+    a.set_defaults(func=cmd_android_frames)
 
     # --build는 명령 앞뒤 어디에 써도 되게 (qakit run x --build release)
     for sp in sub.choices.values():

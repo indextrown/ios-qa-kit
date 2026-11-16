@@ -13,6 +13,10 @@ def scenario_runner_source_hash():
     return h.hexdigest()
 
 
+def runner_source_hash(ws):
+    return android_runner_hash() if ws.platform == "android" else scenario_runner_source_hash()
+
+
 def ensure_scenario_runner(udid):
     """도구의 범용 시나리오 실행기를 필요할 때만 빌드한다 (앱마다 프로젝트를 만들지 않음)."""
     h = hashlib.sha1(scenario_runner_source_hash().encode())
@@ -158,7 +162,7 @@ def serve_request(st, path, body=None, timeout=120):
         r = conn.getresponse()
         raw = r.read().decode("utf-8")
         try:
-            return json.loads(raw)
+            return android_convert_response(json.loads(raw))
         except ValueError:
             return {"ok": False, "message": f"HTTP {r.status}"}
     except (socket.timeout, TimeoutError):
@@ -207,6 +211,8 @@ def serve_stop(udid, reason=None, quiet=False, force=False):
 
 def serve_start(ws, udid, idle=1800, launch=True):
     """test_serve를 백그라운드로 띄우고 포트·토큰을 받을 때까지 기다린다."""
+    if ws.platform == "android":
+        return android_serve_start(ws, udid, idle=idle, launch=launch)
     SERVE_DIR.mkdir(parents=True, exist_ok=True)
     ensure_autoid(ws)
     token = hashlib.sha1(os.urandom(32)).hexdigest()
@@ -290,7 +296,7 @@ def serve_ready_for(ws, udid):
     """이 작업공간용 상주 실행기가 지금 바로 쓸 수 있게 떠 있는가 (qakit run이 자동으로 서버를 쓸지)."""
     st = serve_load(udid)
     return bool(st and st.get("workspace") == str(ws.root)
-                and st.get("runnerHash") == scenario_runner_source_hash() and serve_alive(st))
+                and st.get("runnerHash") == runner_source_hash(ws) and serve_alive(st))
 
 
 SERVE_SUMMARY = "summary.txt"   # 상주 실행기로 돈 run의 요약 (xcresult 대신)
@@ -410,7 +416,7 @@ def serve_ensure(ws, udid):
     st = serve_load(udid)
     if st:
         why = None
-        if st.get("runnerHash") != scenario_runner_source_hash():
+        if st.get("runnerHash") != runner_source_hash(ws):
             why = "실행기 코드가 바뀜"
         elif st.get("workspace") != str(ws.root):
             why = f"다른 작업공간({st.get('workspace')})의 실행기"
@@ -498,7 +504,7 @@ def known_ids(ws):
     """앱에 있는 ID 전체 (시나리오 정적 검사용). 앱 소스·도구가 지난번과 같으면 파싱하지 않고 저장해 둔 목록을 쓴다.
     한 명령 안에서는 재사용한다 (qakit run 여러 개)."""
     if str(ws.root) not in KNOWN_IDS:
-        KNOWN_IDS[str(ws.root)] = _known_ids(ws)
+        KNOWN_IDS[str(ws.root)] = android_seen_ids(ws) if ws.platform == "android" else _known_ids(ws)
     return KNOWN_IDS[str(ws.root)]
 
 
@@ -597,7 +603,8 @@ def load_checked_scenario(ws, name, strict=True):
         scenario = scenario_tools.load_scenario(path, ws.root)
     except scenario_tools.YamlError as e:
         fail(f"시나리오 형식 오류: {e}")
-    unknown = scenario_tools.check_ids(scenario, known_ids(ws), extra_ok=("Mapbox",))
+    # 안드로이드는 앱 소스에서 ID 목록을 만들지 않으므로(덤프로 본 ID뿐) 검사하지 않는다
+    unknown = [] if ws.platform == "android" else scenario_tools.check_ids(scenario, known_ids(ws), extra_ok=("Mapbox",))
     if unknown:
         import difflib
         ids = known_ids(ws)
@@ -763,7 +770,7 @@ class RunVideo:
 
     def __init__(self, ws, udid):
         self.proc = None
-        if RUN_VIDEO["mode"] == "off" or ws.device or not udid:
+        if RUN_VIDEO["mode"] == "off" or ws.device or not udid or ws.platform == "android":   # 안드로이드 녹화는 A6
             return
         self.raw = ws.results_dir / f".video-{os.getpid()}-{int(time.time() * 1000)}.mp4"
         self.raw.parent.mkdir(parents=True, exist_ok=True)

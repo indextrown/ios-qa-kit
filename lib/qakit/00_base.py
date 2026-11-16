@@ -132,6 +132,8 @@ class Workspace:
         self.variant = str(app.get("variant", "debug"))
         self.package = str(app.get("packageName", "")) if self.platform == "android" else ""
         self.emulator = str(self.cfg.get("emulator", ANDROID_AVD))   # AVD 이름
+        self.orientation = str(self.cfg.get("orientation") or "")   # 안드로이드 화면 방향: landscape · portrait · auto
+        self.keyboard = str(self.cfg.get("keyboard") or "hide")   # 안드로이드 소프트 키보드: hide(기본) · show
         self.language = self.cfg.get("language")
         self.locale = self.cfg.get("locale")
         perms = self.cfg.get("permissions") or []

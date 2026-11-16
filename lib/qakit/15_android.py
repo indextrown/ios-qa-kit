@@ -207,18 +207,49 @@ def cmd_android_setup(args):
     avd = args.avd or ANDROID_AVD
     if avd in android_avds():
         ok(f"AVD 있음: {avd}")
+        if android_avd_tuned(avd) is False:
+            android_avd_enable_gpu(avd)
+            ok(f"AVD 설정을 맞췄습니다 ({avd}: GPU 가속·하드웨어 키보드) — 실행 중인 에뮬레이터는 다시 켜야 반영됩니다 "
+               "(adb emu kill → qakit android boot)")
     else:
         avdm = require_tool("avdmanager")
         r = subprocess.run([avdm, "create", "avd", "-n", avd, "-k", image, "-d", args.device_profile],
                            input="no\n", text=True, env=env, capture_output=True)
         if r.returncode != 0:
             fail(f"AVD 생성 실패: {avd}", (r.stderr or r.stdout or "")[-600:])
-        ok(f"AVD 만듦: {avd} ({args.device_profile}, {image})")
+        android_avd_enable_gpu(avd)   # 기본값(auto)은 화면 캡처가 느려 라이브 화면이 1fps 안팎이 될 수 있다
+        ok(f"AVD 만듦: {avd} ({args.device_profile}, {image}, GPU 가속)")
     print()
     ok("안드로이드 준비 완료. 다음: qakit android boot  →  qakit android screen")
     if not os.environ.get("ANDROID_HOME"):
         info(f"(선택) 셸 설정에 추가하면 adb를 바로 쓸 수 있습니다: export ANDROID_HOME={sdk}; "
              'export PATH="$ANDROID_HOME/platform-tools:$PATH"')
+
+
+def android_avd_config(avd):
+    return Path(os.environ.get("ANDROID_AVD_HOME") or Path.home() / ".android" / "avd") / f"{avd}.avd" / "config.ini"
+
+
+AVD_TUNING = {
+    "hw.gpu.enabled": "yes", "hw.gpu.mode": "host",   # 꺼져 있으면 화면 캡처 한 장 2.5초 → 라이브 화면 1fps
+    "hw.keyboard": "yes",   # 하드웨어 키보드가 있으면 소프트 키보드를 숨길 수 있다 (실행기가 show_ime_with_hard_keyboard=0)
+}
+
+
+def android_avd_tuned(avd):
+    """qakit용 AVD 설정(GPU 가속·하드웨어 키보드)이 다 맞나. 설정 파일이 없으면 None."""
+    try:
+        cfg = dict(l.split("=", 1) for l in android_avd_config(avd).read_text().splitlines() if "=" in l)
+    except OSError:
+        return None
+    return all(cfg.get(k) == v for k, v in AVD_TUNING.items())
+
+
+def android_avd_enable_gpu(avd):
+    """AVD 설정을 qakit에 맞춘다 (GPU 가속, 하드웨어 키보드). 에뮬레이터를 다시 켜야 반영된다."""
+    f = android_avd_config(avd)
+    lines = [l for l in f.read_text().splitlines() if l.split("=", 1)[0] not in AVD_TUNING]
+    f.write_text("\n".join(lines + [f"{k}={v}" for k, v in AVD_TUNING.items()]) + "\n")
 
 
 def android_doctor_lines():
@@ -232,6 +263,10 @@ def android_doctor_lines():
     ]
     avds = android_avds()
     rows.append((bool(avds), f"AVD: {', '.join(avds)}", "AVD 없음", "qakit android setup"))
+    off = [a for a in avds if android_avd_tuned(a) is False]
+    rows.append((not off, "AVD 설정 (GPU 가속·하드웨어 키보드)",
+                 f"AVD 설정이 qakit용이 아님: {', '.join(off)} (GPU 가속이 꺼지면 라이브 화면 1fps 안팎, 하드웨어 키보드가 없으면 "
+                 "소프트 키보드가 버튼을 가림)", "qakit android setup --avd <이름> 으로 맞춘 뒤 에뮬레이터 다시 켜기"))
     devs = adb_devices()
     ready = [f"{s}{' ' + d if d else ''}" for s, st, d in devs if st == "device"]
     bad = [f"{s}({st})" for s, st, _ in devs if st != "device"]
@@ -258,8 +293,12 @@ def cmd_android_boot(args):
     serial = android_serial(args.avd or ANDROID_AVD, boot=False)
     if serial and (not args.avd or emulator_avd_name(serial) == args.avd):
         ok(f"이미 실행 중: {serial}")
-        return
-    android_boot(args.avd or ANDROID_AVD, headless=args.headless)
+    else:
+        serial = android_boot(args.avd or ANDROID_AVD, headless=args.headless)
+    if args.orientation:
+        android_set_orientation(serial, args.orientation)
+        w, h = android_display_size(serial)
+        ok(f"화면 방향: {args.orientation} ({w}x{h})")
 
 
 # ─────────────────────────────── A1: 지금 화면 파악 ───────────────────────────────
@@ -376,10 +415,15 @@ def first_text(node):
     return ""
 
 
-def android_dump_lines(xml, target, density):
-    """uiautomator XML → (덤프 줄들, 통계). iOS dump-ui와 같은 꼴: `타입 #ID "라벨" ... @x,y wxh` (dp)."""
+def android_dump_lines(xml, target, density, screen=None):
+    """uiautomator XML → (덤프 줄들, 통계). iOS dump-ui와 같은 꼴: `타입 #ID "라벨" ... @x,y wxh` (dp).
+    screen=(가로, 세로 픽셀)을 주면 맨 위에 iOS처럼 `Application` 줄을 둔다 — qakit ui가 화면 크기·방향을 여기서 읽는다."""
     root = ET.fromstring(xml)
     lines, stats = [], {"interactive": 0, "withId": 0, "missing": []}
+    base = 0
+    if screen:
+        lines.append(f'Application "{target}" @0,0 {round(screen[0] / density)}x{round(screen[1] / density)}')
+        base = 1
 
     def coord(v):
         return str(int(round(v / density)))   # iOS 덤프처럼 정수 (공용 파서가 정수만 읽는다)
@@ -421,7 +465,7 @@ def android_dump_lines(xml, target, density):
         for c in node:
             visit(c, depth + 1 if meaningful else depth)   # 이름 없는 레이아웃 칸은 접어서 깊이를 늘리지 않는다
 
-    visit(root, 0)
+    visit(root, base)
     return lines, stats
 
 
@@ -430,7 +474,7 @@ def android_dump_text(serial, package=None):
     fg = android_foreground(serial)
     target = package or fg["package"]
     density = android_density(serial)
-    lines, st = android_dump_lines(android_ui_xml(serial), target, density)
+    lines, st = android_dump_lines(android_ui_xml(serial), target, density, android_display_size(serial))
     frags = android_fragments(serial, target)
     total, with_id = st["interactive"], st["withId"]
     ratio = round(with_id * 100 / total) if total else 100
@@ -493,7 +537,8 @@ def android_launch(serial, package, fresh=True):
         fail(f"{package}가 기기에 없거나 실행할 화면이 없습니다.", "qakit build-app")
     if fresh:
         adb(serial, "shell", "am", "force-stop", package, check=False)
-    r = adb(serial, "shell", "am", "start", "-W", "-n", comp[0], check=False, timeout=60)
+    # 다른 앱 화면(브라우저 로그인 등)이 이 앱 작업 위에 남아 있으면 force-stop으로 안 닫힌다 → 작업째 비우고 시작
+    r = adb(serial, "shell", "am", "start", "-W", "--activity-clear-task", "-n", comp[0], check=False, timeout=60)
     if "Error" in (r.stdout + r.stderr):
         fail(f"앱 실행 실패: {comp[0]}", (r.stdout + r.stderr).strip()[-300:])
 
@@ -539,3 +584,346 @@ def android_doctor_ws(ws, check, problem_count):
     if problem_count():
         fail(f"문제 {problem_count()}개", "위 → 안내대로 고친 뒤 다시 qakit doctor")
     ok("모두 정상")
+
+
+# ─────────────────────────────── A3: 상주 실행기 (AndroidRunner, UiAutomator2) ───────────────────────────────
+# iOS 상주 실행기와 같은 HTTP 명령(/ping /step /dump /run /launch /reset /stop). 기기 안 127.0.0.1:7912에 열고
+# adb forward로 붙는다. 그래서 serve_request·run_via_serve·qakit do는 그대로 쓴다.
+
+ANDROID_RUNNER_DIR = KIT_DIR / "AndroidRunner"
+ANDROID_RUNNER_BUILD = KIT_DIR / ".build" / "android-runner"
+ANDROID_RUNNER_DEVICE_PORT = 7912
+ANDROID_FRAME_DEVICE_PORT = 7913   # 라이브 화면 (FrameServer)
+ANDROID_RUNNER_TEST = "com.qakit.runner.test/androidx.test.runner.AndroidJUnitRunner"
+
+
+def android_runner_hash():
+    """실행기 소스 해시 (빌드·설치·상주 실행기 재시작 판단)."""
+    h = hashlib.sha1()
+    for f in sorted(ANDROID_RUNNER_DIR.rglob("*")):
+        rel = f.relative_to(ANDROID_RUNNER_DIR)
+        if f.is_file() and not ({"build", ".gradle"} & set(rel.parts)):
+            h.update(str(rel).encode())
+            h.update(f.read_bytes())
+    return h.hexdigest()
+
+
+def ensure_android_runner_built():
+    """실행기 APK 두 개(빈 앱 + instrumentation)를 소스가 바뀌었을 때만 빌드한다. → (app_apk, test_apk)"""
+    app_apk, test_apk = ANDROID_RUNNER_BUILD / "runner.apk", ANDROID_RUNNER_BUILD / "runner-test.apk"
+    stamp = ANDROID_RUNNER_BUILD / "hash"
+    h = android_runner_hash()
+    if app_apk.exists() and test_apk.exists() and stamp.exists() and stamp.read_text() == h:
+        return app_apk, test_apk
+    if not android_java_home() or not android_sdk_root():
+        fail("안드로이드 실행기를 빌드할 JDK·SDK가 없습니다.", "qakit android setup")
+    info("안드로이드 실행기 빌드 중 (처음에는 Gradle을 받느라 몇 분 걸립니다)…")
+    r = subprocess.run(["./gradlew", "-q", "--console=plain", ":runner:assembleDebug", ":runner:assembleDebugAndroidTest"],
+                       cwd=ANDROID_RUNNER_DIR, env=android_env(), capture_output=True, text=True)
+    if r.returncode != 0:
+        fail("안드로이드 실행기 빌드 실패", ((r.stdout or "") + (r.stderr or ""))[-1500:])
+    out = ANDROID_RUNNER_DIR / "runner" / "build" / "outputs" / "apk"
+    ANDROID_RUNNER_BUILD.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(out / "debug" / "runner-debug.apk", app_apk)
+    shutil.copyfile(out / "androidTest" / "debug" / "runner-debug-androidTest.apk", test_apk)
+    stamp.write_text(h)
+    ok("안드로이드 실행기 빌드됨")
+    return app_apk, test_apk
+
+
+def ensure_android_runner_installed(serial):
+    app_apk, test_apk = ensure_android_runner_built()
+    h = android_runner_hash()
+    stamp = SERVE_DIR / f"{serial}.android-runner"
+    installed = adb(serial, "shell", "pm", "list", "instrumentation", check=False).stdout
+    if stamp.exists() and stamp.read_text() == h and "com.qakit.runner.test" in installed:
+        return
+    info("기기에 실행기 설치 중…")
+    for apk in (app_apk, test_apk):
+        r = adb(serial, "install", "-r", "-t", str(apk), check=False, timeout=180)
+        if "Success" not in (r.stdout or ""):
+            fail(f"실행기 설치 실패: {apk.name}", (r.stdout + r.stderr).strip()[-400:])
+    SERVE_DIR.mkdir(parents=True, exist_ok=True)
+    stamp.write_text(h)
+
+
+def android_app_installed(serial, package):
+    return adb(serial, "shell", "pm", "path", package, check=False).stdout.startswith("package:")
+
+
+def android_serve_start(ws, serial, idle=1800, launch=True):
+    """안드로이드 상주 실행기를 띄우고 /ping이 될 때까지 기다린다. iOS serve_start와 같은 상태 파일을 쓴다."""
+    SERVE_DIR.mkdir(parents=True, exist_ok=True)
+    if not ws.package:
+        fail("qakit.yml에 app.packageName이 없습니다.")
+    if not android_app_installed(serial, ws.package):
+        fail(f"기기({serial})에 {ws.package}가 설치되어 있지 않습니다.", "qakit build-app")
+    ensure_android_runner_installed(serial)
+    if ws.orientation:   # qakit.yml orientation: — 앱을 켜기 전에 방향을 맞춘다
+        android_set_orientation(serial, ws.orientation)
+    android_soft_keyboard(serial, show=ws.keyboard == "show")
+    token = hashlib.sha1(os.urandom(32)).hexdigest()
+    r = adb(serial, "forward", "tcp:0", f"tcp:{ANDROID_RUNNER_DEVICE_PORT}")
+    port = int(r.stdout.strip())
+    frame_port = int(adb(serial, "forward", "tcp:0", f"tcp:{ANDROID_FRAME_DEVICE_PORT}").stdout.strip())   # 라이브 화면
+    log = SERVE_DIR / f"{serial}.log"
+    cmd = [require_tool("adb"), "-s", serial, "shell", "am", "instrument", "-w",
+           "-e", "port", str(ANDROID_RUNNER_DEVICE_PORT), "-e", "token", token, "-e", "package", ws.package,
+           "-e", "idle", str(int(idle)), "-e", "launch", "1" if launch else "0",
+           "-e", "framePort", str(ANDROID_FRAME_DEVICE_PORT),
+           "-e", "class", "com.qakit.runner.ServeTest", ANDROID_RUNNER_TEST]
+    info("상주 실행기 시작 중 (안드로이드)…")
+    started_at = time.time()
+    with open(log, "w") as out:
+        proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+    probe = {"port": port, "token": token}
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        try:
+            if serve_request(probe, "/ping", timeout=5).get("ok"):
+                break
+        except (ServeTimeout, ConnectionError):
+            pass
+        if proc.poll() is not None:
+            kept = SERVE_DIR / f"{serial}.failed.log"
+            shutil.copyfile(log, kept)
+            tail = "\n   ".join(log.read_text(errors="replace").strip().splitlines()[-12:])
+            fail("상주 실행기가 시작되지 않았습니다. 다시 실행하면 새로 띄웁니다.", f"{tail}\n   전체 로그: {kept}")
+        time.sleep(0.5)
+    else:
+        os.killpg(proc.pid, 15)
+        fail("상주 실행기가 120초 안에 준비되지 않았습니다.", f"로그: {log}")
+    serve_request(probe, "/config", {"secrets": ws.secrets()}, timeout=10)   # 비밀값은 명령줄 대신 요청 본문으로
+    st = {"udid": serial, "platform": "android", "pid": proc.pid, "port": port, "framePort": frame_port, "token": token,
+          "workspace": str(ws.root), "bundleId": ws.package, "runnerHash": android_runner_hash(),
+          "attachOnly": not launch, "started": datetime.datetime.now().isoformat(timespec="seconds"), "log": str(log)}
+    serve_state_file(serial).write_text(json.dumps(st, ensure_ascii=False, indent=2))
+    ok(f"상주 실행기 준비됨 (포트 {port}, {time.time() - started_at:.0f}초)")
+    return st
+
+
+def android_format_dump(xml, package, density, activity=None, fragments=None, screen=None):
+    """실행기가 보낸 uiautomator 형식 XML → qakit 덤프 텍스트 (android_dump_text와 같은 머리말)."""
+    lines, st = android_dump_lines(xml, package, density or 1.0, screen)
+    total, with_id = st["interactive"], st["withId"]
+    header = ["# qakit dump-ui", f"# package: {package}"]
+    if activity:
+        header.append(f"# activity: {activity}")
+    if fragments is not None:
+        header.append(f"# fragments: {' > '.join(fragments) or '-'}")
+    header += [f"# interactive: {total}, with ID: {with_id} ({round(with_id * 100 / total) if total else 100}%)",
+               f"# coords: dp (density {density or 1:g})"]
+    if st["missing"]:
+        header.append("# missing ID: " + ", ".join(st["missing"][:20]))
+    return "\n".join(header + lines) + "\n"
+
+
+def android_convert_response(res):
+    """실행기 응답의 XML(화면 구조, dump: 단계 파일)을 덤프 텍스트로 바꾼다. iOS 응답은 그대로."""
+    if not isinstance(res, dict) or "density" not in res:
+        return res
+    screen = (res["screenW"], res["screenH"]) if res.get("screenW") and res.get("screenH") else None
+    if res.get("xml"):
+        res["dump"] = android_format_dump(res.pop("xml"), res.get("package"), res.get("density"), screen=screen)
+    for k, v in list((res.get("files") or {}).items()):
+        if isinstance(v, str) and v.startswith("@xml "):
+            res["files"][k] = android_format_dump(v[5:], res.get("package"), res.get("density"), screen=screen)
+    return res
+
+
+def android_seen_ids(ws):
+    """안드로이드는 앱 소스에서 ID를 뽑지 않는다 → 저장된 화면 덤프에서 본 ID (coverage용)."""
+    ids = set()
+    files = [ws.results_dir / "ui-dump.txt"] + sorted((ws.results_dir / "dumps").glob("*.txt"))
+    for f in files:
+        try:
+            ids |= {e["id"] for e in ui_parse_dump(f.read_text(encoding="utf-8"))["elements"] if e["id"]}
+        except OSError:
+            pass
+    return ids
+
+
+# qakit.yml permissions: (iOS simctl privacy 이름과 같은 말) → 안드로이드 권한. android.permission.X를 그대로 써도 된다
+ANDROID_PERMISSIONS = {
+    "location": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION"],
+    "location-always": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "ACCESS_BACKGROUND_LOCATION"],
+    "notifications": ["POST_NOTIFICATIONS"],
+    "nearby": ["BLUETOOTH_SCAN", "BLUETOOTH_CONNECT", "NEARBY_WIFI_DEVICES"],   # 근처 기기 (블루투스·Wi-Fi)
+    "camera": ["CAMERA"],
+    "microphone": ["RECORD_AUDIO"],
+    "photos": ["READ_MEDIA_IMAGES", "READ_MEDIA_VIDEO"],
+    "contacts": ["READ_CONTACTS"],
+    "calendar": ["READ_CALENDAR", "WRITE_CALENDAR"],
+}
+
+
+def android_grant_permissions(ws, serial):
+    """qakit.yml permissions:를 미리 허용한다 (앱 설치·pm clear 뒤 권한 대화상자가 시나리오를 막지 않게)."""
+    granted = []
+    for name in ws.permissions:
+        name = str(name)
+        if name == "background":   # 배터리 최적화 예외 → "항상 백그라운드에서 실행할까요?" 대화상자가 뜨지 않는다
+            adb(serial, "shell", "dumpsys", "deviceidle", "whitelist", "+" + ws.package, check=False)
+            granted.append("배터리 최적화 예외")
+            continue
+        perms = ANDROID_PERMISSIONS.get(name) or ([name.split(".")[-1]] if "." in name else None)
+        if not perms:
+            warn(f"알 수 없는 권한 이름: {name} (location·notifications·camera… 또는 android.permission.X)")
+            continue
+        for perm in perms:
+            r = adb(serial, "shell", "pm", "grant", ws.package, "android.permission." + perm, check=False)
+            if r.returncode == 0:
+                granted.append(perm)
+    if granted:
+        ok("권한 미리 허용: " + ", ".join(dict.fromkeys(granted)))
+
+
+
+# ─────────────────────────────── A6: 라이브 세션 (qakit ui) ───────────────────────────────
+
+def android_live_runner(ws, serial):
+    """라이브 화면용 상주 실행기. 이미 떠 있으면 그대로, 없으면 앱을 다시 켜지 않고(launch=False) 띄운다."""
+    st = serve_load(serial)
+    if st and st.get("workspace") == str(ws.root) and st.get("runnerHash") == android_runner_hash() \
+            and st.get("framePort") and serve_alive(st):
+        return st
+    serve_stop(serial, quiet=True)
+    return android_serve_start(ws, serial, launch=False)
+
+
+def cmd_android_frames(args):
+    """(qakit ui 내부용) 실행기 화면 서버에서 받은 JPEG 프레임을 그대로 표준 출력으로 — simscreen과 같은 형식."""
+    import socket
+    try:
+        sock = socket.create_connection(("127.0.0.1", args.port), timeout=10)
+    except OSError as e:
+        print(f"androidframes: 화면 서버에 연결하지 못함: {e}", file=sys.stderr)
+        sys.exit(1)
+    sock.settimeout(15)
+    out = sys.stdout.buffer
+    try:
+        while True:
+            data = sock.recv(1 << 16)
+            if not data:
+                print("androidframes: 화면 서버가 연결을 끊음 (실행기 종료?)", file=sys.stderr)
+                sys.exit(1)
+            out.write(data)
+            out.flush()
+    except (socket.timeout, BrokenPipeError, KeyboardInterrupt):
+        pass
+
+
+DISPLAY_SIZE = {}
+
+
+def android_display_size(serial):
+    """지금 화면 크기(픽셀, 회전 반영) — 2초 동안 기억한다."""
+    hit = DISPLAY_SIZE.get(serial)
+    if hit and time.time() - hit[0] < 2:
+        return hit[1]
+    out = adb(serial, "shell", "dumpsys", "window", "displays", check=False).stdout
+    m = re.search(r"\bcur=(\d+)x(\d+)", out)
+    if not m:
+        m = re.search(r"(\d+)x(\d+)", adb(serial, "shell", "wm", "size", check=False).stdout)
+    size = (int(m.group(1)), int(m.group(2))) if m else (1080, 2400)
+    DISPLAY_SIZE[serial] = (time.time(), size)
+    return size
+
+
+def android_touch(serial, kind, pts, secs):
+    """라이브 세션 직접 터치. 좌표는 화면 대비 0~1. kind: tap · press(길게) · swipe(끌기)."""
+    w, h = android_display_size(serial)
+    px = [int(round(v * (w if i % 2 == 0 else h))) for i, v in enumerate(pts)]
+    ms = str(max(1, int(secs * 1000)))
+    if kind == "tap":
+        cmd = ["input", "tap", str(px[0]), str(px[1])]
+    elif kind == "press":
+        cmd = ["input", "swipe", str(px[0]), str(px[1]), str(px[0]), str(px[1]), ms]
+    else:
+        cmd = ["input", "swipe", *map(str, px[:4]), ms]
+    r = adb(serial, "shell", *cmd, check=False, timeout=secs + 10)
+    good = r.returncode == 0 and not (r.stderr or "").strip()
+    return good, ("ok" if good else (r.stderr or r.stdout).strip()[-200:])
+
+
+ANDROID_REC_REMOTE = "/sdcard/qakit-rec.mp4"
+
+
+def android_record_start(serial):
+    """화면 녹화 시작 (adb screenrecord, 최대 3분 — 안드로이드 제한). → Popen"""
+    adb(serial, "shell", "rm", "-f", ANDROID_REC_REMOTE, check=False)
+    return subprocess.Popen([require_tool("adb"), "-s", serial, "shell", "screenrecord", "--time-limit", "180",
+                             ANDROID_REC_REMOTE], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+
+def android_record_stop(serial, proc, out):
+    """녹화를 끝내고 파일을 가져온다. screenrecord는 SIGINT를 받아야 파일을 마무리한다."""
+    adb(serial, "shell", "pkill", "-INT", "screenrecord", check=False)
+    try:
+        proc.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+    time.sleep(0.5)
+    adb(serial, "pull", ANDROID_REC_REMOTE, str(out), check=False, timeout=120)
+    adb(serial, "shell", "rm", "-f", ANDROID_REC_REMOTE, check=False)
+
+
+# ─────────────────────────────── 화면 방향 ───────────────────────────────
+
+def android_set_orientation(serial, orientation):
+    """화면 방향 고정: landscape(가로) · portrait(세로) · auto(기기 회전 따름).
+    자동 회전을 끄고 user_rotation을 정한다. 기기의 기본 방향(휴대폰=세로, 태블릿=가로)에 따라 값이 다르다."""
+    orientation = (orientation or "").lower()
+    if orientation in ("", "auto"):
+        adb(serial, "shell", "settings", "put", "system", "accelerometer_rotation", "1", check=False)
+        return
+    if orientation not in ("landscape", "portrait"):
+        fail(f"화면 방향은 landscape·portrait·auto 중 하나: {orientation}")
+    m = re.search(r"Physical size: (\d+)x(\d+)", adb(serial, "shell", "wm", "size", check=False).stdout)
+    natural_landscape = bool(m) and int(m.group(1)) > int(m.group(2))
+    want_landscape = orientation == "landscape"
+    rotation = "0" if natural_landscape == want_landscape else "1"
+    adb(serial, "shell", "settings", "put", "system", "accelerometer_rotation", "0", check=False)
+    adb(serial, "shell", "settings", "put", "system", "user_rotation", rotation, check=False)
+    DISPLAY_SIZE.pop(serial, None)
+    deadline = time.time() + 5   # 회전이 끝날 때까지 (화면 크기 가로·세로가 바뀜)
+    while time.time() < deadline:
+        w, h = android_display_size(serial)
+        if (w > h) == want_landscape:
+            break
+        DISPLAY_SIZE.pop(serial, None)
+        time.sleep(0.3)
+
+
+def cmd_android_rotate(args):
+    serial = android_serial(args.avd, boot=False)
+    if not serial:
+        fail("연결된 안드로이드 기기가 없습니다.", "qakit android boot")
+    android_set_orientation(serial, args.orientation)
+    w, h = android_display_size(serial)
+    ok(f"화면 방향: {args.orientation} ({w}x{h})")
+
+
+# 에뮬레이터의 화면 키보드 앱. 꺼 두면 입력칸에 포커스가 가도 키보드가 뜨지 않는다 (음성 입력만 남아 화면에 안 보임)
+SOFT_KEYBOARDS = ("com.google.android.inputmethod.latin", "com.android.inputmethod.latin")
+
+
+def android_soft_keyboard(serial, show):
+    """에뮬레이터 화면 키보드 켜기/끄기 (qakit.yml keyboard: show | hide(기본)).
+    qakit은 글자를 키보드 없이 넣는다(SET_TEXT). 떠 있는 키보드는 버튼을 가리고, 쓸기가 키보드에 닿으면
+    글라이드 입력으로 글자가 들어간다 (태블릿에서 확인, 2026-11-16). show_ime_with_hard_keyboard=0은 이 이미지에서 듣지 않았다.
+    실기기는 건드리지 않는다. 끈 뒤에도 Mac 키보드로 에뮬레이터 창에 입력할 수 있다 (AVD hw.keyboard=yes)."""
+    if not serial.startswith("emulator-"):
+        return
+    installed = adb(serial, "shell", "pm", "list", "packages", check=False).stdout
+    disabled = adb(serial, "shell", "pm", "list", "packages", "-d", check=False).stdout
+    for pkg in SOFT_KEYBOARDS:
+        if f"package:{pkg}" not in installed.split():
+            continue
+        is_off = f"package:{pkg}" in disabled
+        if show and is_off:
+            adb(serial, "shell", "pm", "enable", pkg, check=False)
+            info(f"화면 키보드 켬 ({pkg})")
+        elif not show and not is_off:
+            adb(serial, "shell", "pm", "disable-user", "--user", "0", pkg, check=False)
+            info("화면 키보드 끔 — 시험 중 버튼을 가리지 않게 (qakit.yml keyboard: show 로 켬, Mac 키보드 입력은 됨)")

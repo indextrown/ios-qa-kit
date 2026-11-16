@@ -47,15 +47,25 @@
 | `--secrets <파일>` | 다른 계정 파일 |
 | `--build debug\|release` | 빌드 종류 (기본 debug = `app.configuration`, release = `app.release.configuration` 기본 `Release`, bundle ID는 자동). 명령 뒤에 써도 됨. 앱의 Release가 실서비스 서버를 쓰면 시나리오도 실서비스에 접속한다 |
 
-## 안드로이드 (미리 보기: 설치·화면 파악까지)
+## 안드로이드 (미리 보기)
 
-시나리오 실행은 아직 iOS만. 안드로이드 앱은 지금 **화면 파악**에 쓴다 (설계: 도구 레포 `docs/PLAN.md` "안드로이드 지원 설계").
+`qakit.yml`에 `platform: android`면 `run`·`do`·`serve`·`dump-ui`·`doctor`가 안드로이드로 동작한다. 시나리오 문법은 iOS와 같다 (설계: 도구 레포 `docs/PLAN.md` "안드로이드 지원 설계").
+- 상주 실행기(UiAutomator2)로만 돈다: 첫 실행 때 실행기를 빌드(Gradle, 몇 분)·설치하고 띄운다. `--no-serve`·`--bench`·실패 영상은 아직 없음.
+- 앱은 미리 기기에 설치해 둔다 (`build-app` 아직). `--reset`·`reset: true`는 `pm clear`.
+- ID 정적 검사(`check`의 앱에 없는 ID)는 하지 않는다. coverage는 저장된 덤프(`results/ui-dump.txt`, `results/dumps/`)에서 본 ID 기준.
+- 글자 입력은 한글도 된다. 칸을 누르지 않고 바로 넣으므로(접근성 SET_TEXT) 대개 키보드가 뜨지 않는다 → `hide-keyboard`는 꼭 필요할 때만. `hide-keyboard`는 키보드가 실제로 떠 있을 때만 뒤로 가기를 보내는데, 앱에 따라 그 뒤로 가기에 화면·앱이 닫힐 수 있다(Navigation 로그인 화면).
+- qakit.yml `orientation: landscape|portrait|auto` — 실행기를 띄울 때 화면 방향 고정. `keyboard: hide`(기본)|`show` — 에뮬레이터 화면 키보드 앱(Gboard)을 꺼 두어 버튼을 가리지 않게 한다 (실기기는 그대로, Mac 키보드 입력은 됨). 키보드에 가려진 요소는 hittable이 아니고, 탭·쓸기는 키보드 영역을 피한다.
+- `pref`·`read-pref`는 SharedPreferences(debuggable 빌드).
+- `permissions:`(qakit.yml)는 reset(`pm clear`) 뒤 미리 허용한다: `location`, `location-always`, `notifications`, `nearby`(블루투스·Wi-Fi 근처 기기), `camera`, `microphone`, `photos`, `contacts`, `calendar`, `background`(배터리 최적화 예외 — "항상 백그라운드에서 실행" 대화상자), 또는 `android.permission.X`.
+- Compose `contentDescription`은 ID가 아니라 라벨이다: `{ label: locationFocusIcon }`. 팝업이 떠 있으면 대상은 위 창(팝업)에서 먼저 찾는다.
+- `input:`(입력 알림)은 맨 위 대화상자의 첫 입력칸, `alert-button`은 버튼 글자(대소문자 무시).
 
 | 명령 | 설명 |
 |---|---|
-| `qakit android setup [--avd 이름] [--image 시스템이미지]` | JDK 17(brew openjdk@17)·cmdline-tools·platform-tools·emulator·시스템 이미지·AVD(기본 `qakit`, pixel_7) 설치. Android Studio 불필요. 이미 있으면 건너뜀 |
+| `qakit android setup [--avd 이름] [--image 시스템이미지] [--device-profile pixel_tablet]` | JDK 17(brew openjdk@17)·cmdline-tools·platform-tools·emulator·시스템 이미지·AVD(기본 `qakit`, pixel_7) 설치. Android Studio 불필요. 이미 있으면 건너뜀. AVD는 GPU 가속·하드웨어 키보드를 켠다 (기존 AVD도 맞춤, 에뮬레이터 재시작 필요). 태블릿: `--avd qakit-tablet --device-profile pixel_tablet` (2560x1600) |
 | `qakit android doctor` | JDK·SDK·adb·emulator·AVD·연결된 기기 점검 |
-| `qakit android boot [--avd 이름] [--headless]` | 에뮬레이터 실행 후 부팅 완료까지 대기 (이미 떠 있으면 그대로). 로그 `~/.qakit/emulator-<AVD>.log` |
+| `qakit android boot [--avd 이름] [--headless] [--landscape \| --orientation landscape\|portrait\|auto]` | 에뮬레이터 실행 후 부팅 완료까지 대기 (이미 떠 있으면 그대로). `--landscape`: 부팅 뒤 가로로 고정. 로그 `~/.qakit/emulator-<AVD>.log` |
+| `qakit android rotate landscape\|portrait\|auto [--avd 이름]` | 실행 중인 에뮬레이터 화면 방향 바꾸기 (자동 회전 끄고 고정, auto는 다시 켬). 휴대폰·태블릿의 기본 방향 차이를 알아서 맞춘다 |
 | `qakit android screen [--json]` | 지금 앞의 앱 패키지·Activity·Fragment(바깥 → 안쪽). 덤프보다 빠름 |
 | `qakit android dump [--package P] [--settle 초] [-o 파일 [--print]] [--json]` | 지금 화면 구조. 형식은 iOS `dump-ui`와 같다 (`타입 #ID "라벨" value="…" (disabled) @x,y wxh`, 좌표 dp). 머리말에 package·activity·fragments·ID 없는 요소 |
 

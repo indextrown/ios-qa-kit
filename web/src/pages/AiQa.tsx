@@ -52,6 +52,7 @@ export function AiQa() {
   useEffect(() => { store("qakit-ai-mode", mode); store("qakit-ai-start", scStart); }, [mode, scStart]);
   useEffect(() => { get<string[]>("/api/steps-files").then(setStepFiles).catch(() => {}); }, []);
   const [cursor, setCursor] = useState(() => stored("qakit-ai-cursor", true));   // 실행기가 누르는 자리 커서
+  const [wide, setWide] = useState(false);   // 가로 화면
   const [job, setJob] = useState<AiJob | null>(null);
   const [events, setEvents] = useState<Ev[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -255,9 +256,13 @@ export function AiQa() {
             <Button size="sm" variant="ghost" onClick={() => setCursor(!cursor)} title="AI가 누르는 자리로 커서가 움직이고 누른 곳에 표시"
               className={cx(cursor ? "bg-muted font-medium" : "text-sub")}><MousePointer2 className="h-3.5 w-3.5" />커서 {cursor ? "켬" : "끔"}</Button>
           </div>
-          <div className="mx-auto w-full max-w-[300px] rounded-[38px] bg-neutral-900 p-2.5 shadow-e3 ring-1 ring-black/40">
-            <div className="relative overflow-hidden rounded-[30px] bg-black">
-              <img src="/api/stream?k=ai" alt="시뮬레이터 화면 (실시간)" className="block aspect-[9/19.5] w-full object-cover" />
+          <div className={cx("mx-auto w-full bg-neutral-900 shadow-e3 ring-1 ring-black/40",
+            wide ? "max-w-[560px] rounded-[24px] p-2" : "max-w-[300px] rounded-[38px] p-2.5")}>
+            <div className={cx("relative overflow-hidden bg-black", wide ? "rounded-[18px]" : "rounded-[30px]")}>
+              {/* 가로 화면(태블릿·가로 고정 앱)도 자르지 않게 받은 그림의 비율 그대로 */}
+              <img src="/api/stream?k=ai" alt="시뮬레이터 화면 (실시간)" className="block w-full"
+                style={{ aspectRatio: wide ? undefined : "9 / 19.5" }}
+                onLoad={(e) => { const { naturalWidth: w, naturalHeight: h } = e.currentTarget; if (w && h && (w > h) !== wide) setWide(w > h); }} />
               <RobotCursor enabled={cursor} />
             </div>
           </div>
