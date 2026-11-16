@@ -11,7 +11,7 @@
 시뮬레이터 (앱이 화면을 그림)
    │  그리는 곳: IOSurface  ← 포트 이름 com.apple.framebuffer.display
    ▼
-simscreen (Swift 도구)     바뀌었나? (seed) → 600px로 줄여 JPEG
+simscreen (Swift 도구)     바뀌었나? (seed) → 900px로 줄여 하드웨어 JPEG
    │  stdout: [길이 4바이트][JPEG] …
    ▼
 qakit ui 서버 (Python)     최신 한 장을 보관 → 보고 있는 브라우저 모두에게
@@ -67,9 +67,10 @@ SimDevice.io                         기기의 입출력
 ### 3. 바뀔 때만 보내기
 
 ```text
-반복 (최대 24fps):
+반복 (최대 60fps):
   seed가 지난번과 다르면 (또는 2초 지났으면 — 새로 붙은 브라우저용)
-    IOSurface 잠금(읽기) → CGImage → 600px 폭으로 줄임 → JPEG(품질 0.65)
+    IOSurface → VTPixelTransfer(GPU)로 900px 폭으로 줄임 → VideoToolbox 하드웨어 JPEG(품질 0.7)
+    (하드웨어가 안 되면 CGImage → 줄임 → ImageIO JPEG. SIMSCREEN_NO_HW=1이면 이쪽만)
     stdout에 [4바이트 길이][JPEG]
   3초마다 포트를 다시 확인 (회전·기기 재시작으로 화면 메모리가 바뀔 수 있음)
 ```
@@ -94,7 +95,7 @@ SimDevice.io                         기기의 입출력
 | | tapflow | qakit |
 |---|---|---|
 | 화면 메모리 | SimulatorKit의 화면 콜백 등록 (`registerScreenCallbacksWithUUID:…frameCallback:…`) — 새 프레임마다 호출됨 | CoreSimulator 포트에서 IOSurface를 잡고 seed를 주기적으로 확인 (콜백 없음, 코드가 짧음) |
-| 인코딩 | H.264 (VideoToolbox 하드웨어) 기본, 안 되는 브라우저는 JPEG | JPEG (MJPEG) — 로컬(127.0.0.1)이라 대역폭 걱정이 적고 디코더가 필요 없음 |
+| 인코딩 | H.264 (VideoToolbox 하드웨어) 기본, 안 되는 브라우저는 JPEG | 하드웨어 JPEG (VideoToolbox) → MJPEG — 로컬(127.0.0.1)이라 대역폭 걱정이 적고 디코더가 필요 없음 |
 | 전송 | relay 서버를 거쳐 WebSocket (원격 팀 공유) | 같은 Mac의 HTTP (`<img>` 하나) |
 | 터치 | SimulatorKit의 HID 신호 주입 — 좌표로 진짜 손가락처럼 | XCUITest가 **ID·라벨로** (시나리오에 이름으로 기록되는 게 핵심이라 좌표 터치는 안 씀) |
 | Xcode 27 대응 | SimulatorKit 위치 변경으로 한때 화면·터치가 안 됨 (tapflow #797) | SimulatorKit을 안 써서 그 변경과 무관. CoreSimulator 위치는 그대로 |
@@ -106,9 +107,10 @@ SimDevice.io                         기기의 입출력
 | 항목 | 결과 |
 |---|---|
 | 화면 메모리 | 1206×2622, 색·노치 정상 |
-| 화면이 움직일 때 | 초당 약 20장 (목표 24) |
-| 한 장 크기 | 약 150KB (600×1304) |
-| 도구 CPU | 평균 22% (움직일 때), 멈춰 있으면 거의 0 |
+| 화면이 움직일 때 | 시뮬레이터가 그리는 만큼 (상한 60, 계속 바뀌면 약 50장) |
+| 한 장 만들기 (900px) | 하드웨어 JPEG 약 7ms · CoreGraphics+ImageIO 약 24ms (2026-11 이전 방식) |
+| 한 장 크기 | 약 200KB (900×1956) |
+| 도구 CPU (계속 바뀔 때 50장/초) | 하드웨어 약 12% · CoreGraphics 약 84% — 이전 방식은 CPU를 시뮬레이터·브라우저와 다퉈 버벅였다. 멈춰 있으면 거의 0 |
 | 멈춰 있을 때 | 2초에 한 장 |
 
 ## 한계와 위험
