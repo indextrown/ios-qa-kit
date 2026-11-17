@@ -1,7 +1,9 @@
 """qakit mcp: 단계 글 만들기, JSON-RPC (시뮬레이터 없이)"""
 import json
+import os
 import subprocess
 import sys
+import time
 import unittest
 
 from helpers import QAKIT, load_qakit, make_workspace
@@ -32,8 +34,14 @@ class McpYaml(unittest.TestCase):
 class Protocol(unittest.TestCase):
     def setUp(self):
         self.tmp, self.root = make_workspace()
+        # 멈추는 가짜 xcrun (시뮬레이터 서비스가 뜨는 중인 것처럼) — 러너의 simctl에 따라 느려지지 않고, 시간 제한도 확인
+        fake = self.root / "fake-bin"
+        fake.mkdir()
+        (fake / "xcrun").write_text("#!/bin/sh\nexec /bin/sleep 30\n", encoding="utf-8")
+        (fake / "xcrun").chmod(0o755)
+        env = dict(os.environ, PATH=f"{fake}{os.pathsep}{os.environ.get('PATH', '')}", QAKIT_SIMCTL_TIMEOUT="1")
         self.p = subprocess.Popen([sys.executable, str(QAKIT), "-w", str(self.root), "mcp"], stdin=subprocess.PIPE,
-                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+                                  stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, env=env)
         self.n = 0
 
     def tearDown(self):
@@ -72,6 +80,18 @@ class Protocol(unittest.TestCase):
         logs = list((self.root / "results" / "ai").glob("*/log.jsonl"))
         self.assertEqual(len(logs), 1)
         self.assertEqual(len(logs[0].read_text(encoding="utf-8").splitlines()), 3)
+
+    def test_simctl_hangs(self):
+        """시뮬레이터를 찾다 simctl이 멈추면 QAKIT_SIMCTL_TIMEOUT초만 기다리고, 다음 조작 때 다시 찾는다"""
+        self.rpc("initialize", {"protocolVersion": "2025-06-18"})
+        start = time.monotonic()
+        for _ in range(2):   # 장면 보관 시작이 기기를 찾는 조작 (이름이 틀려 저장은 안 됨)
+            r = self.rpc("tools/call", {"name": "save_scenario", "arguments": {"name": "Bad Name", "title": "x"}})["result"]
+            self.assertTrue(r["isError"])
+        self.assertLess(time.monotonic() - start, 10, "멈춘 simctl(30초)을 기다림")
+        shot = self.rpc("tools/call", {"name": "screenshot", "arguments": {}})["result"]
+        self.assertTrue(shot["isError"])
+        self.assertIn("사진을 찍지 못함", shot["content"][0]["text"])
 
     def test_common_steps_and_read(self):
         (self.root / "steps" / "home.qa.yml").write_text("name: 홈 탭\nstart: { visible: Home.sort }\nsteps:\n  - wait: Home.sort\n", encoding="utf-8")

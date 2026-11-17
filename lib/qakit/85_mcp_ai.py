@@ -75,6 +75,8 @@ MCP_CONDITION = {"type": "object", "description": "조건: { visible: 대상 } �
 
 
 MCP_WHY = {"type": "string", "description": "왜 하는지 한 줄 (사람이 qakit ui에서 지켜볼 때 보임). 예) 빈 검색어로 검색해 안내 문구 확인"}
+MCP_SIMCTL_TIMEOUT = float(os.environ.get("QAKIT_SIMCTL_TIMEOUT") or 10)   # MCP가 기기를 찾을 때 simctl·adb 명령 하나를 기다리는 초
+
 MCP_ACTIONS = ("launch", "tap", "type_text", "swipe", "wait_for", "expect", "step", "run_scenario", "save_scenario",
                "long_press", "drag", "tap_point")
 
@@ -371,13 +373,16 @@ class McpSession:
     def udid(self):
         if self._udid is False:
             self._udid = None
-            if self.ws.platform == "android":
-                with contextlib.suppress(Exception, SystemExit):
-                    self._udid = android_serial(self.ws.emulator, boot=False)
-            elif not self.ws.device:
-                with contextlib.suppress(Exception, SystemExit):
-                    self._udid = simulator_udid(self.ws.simulator)[0]
-        return self._udid
+            try:
+                if self.ws.platform == "android":
+                    self._udid = android_serial(self.ws.emulator, boot=False, timeout=MCP_SIMCTL_TIMEOUT)
+                elif not self.ws.device:
+                    self._udid = simulator_udid(self.ws.simulator, timeout=MCP_SIMCTL_TIMEOUT)[0]
+            except subprocess.TimeoutExpired:   # simctl·adb가 멈춤 (서비스가 뜨는 중 등) — 이 호출은 넘기고 다음에 다시 찾는다
+                self._udid = False
+            except (Exception, SystemExit):
+                pass
+        return self._udid or None
 
     def session_dir(self):
         if not self.dir:
@@ -681,8 +686,9 @@ class McpSession:
             return [{"type": "text", "text": "tap_point는 직접 터치 모드(AI QA)에서만"}], True
         if self.ring is None and name in MCP_ACTIONS and os.environ.get("QAKIT_AI_VIDEO", "1") != "0" \
                 and self.ws.platform != "android":   # 장면 보관은 simscreen (iOS)
-            self.ring = FrameRing(self.udid)
-            self.ring.start()
+            if self.udid:   # 못 찾았으면(simctl이 멈춤 등) 다음 조작 때 다시
+                self.ring = FrameRing(self.udid)
+                self.ring.start()
         text = lambda t: [{"type": "text", "text": t}]
         if name == "get_testing_guide":
             return text(MCP_GUIDE), False
