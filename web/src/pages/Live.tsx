@@ -301,7 +301,7 @@ export function Live({ job, refreshJob }: { job: Job | null; refreshJob: () => v
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="flex items-start justify-center gap-4">
           {/* 세로 도구 막대 */}
-          <div className="sticky top-4 z-10 flex flex-col gap-0.5 rounded-xl bg-card p-1 ring-1 ring-line">
+          <div className="sticky top-4 z-30 flex flex-col gap-0.5 rounded-xl bg-card p-1 ring-1 ring-line">
             <ToolBtn label={streaming ? "화면 갱신 멈춤" : "화면 갱신 다시"} onClick={() => setStreaming(!streaming)}>
               {streaming ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}</ToolBtn>
             <ToolBtn label={mode === "stream" ? "실시간 → 스크린샷으로" : "스크린샷 → 실시간으로"} active={mode === "stream"}
@@ -510,8 +510,8 @@ function ToolBtn({ label, onClick, active, danger, disabled, children }:
       className={cx("group relative flex h-9 w-9 items-center justify-center rounded-lg transition-colors disabled:opacity-40",
         danger ? "bg-bad/10 text-bad" : active ? "bg-muted text-fg" : "text-sub hover:bg-muted hover:text-fg")}>
       {children}
-      {/* 이름표는 왼쪽(빈 곳)에 — 오른쪽은 기기 테두리에 가려짐 */}
-      <span className="pointer-events-none absolute right-full top-1/2 z-30 mr-2 -translate-y-1/2 whitespace-nowrap rounded-md bg-fg px-2 py-1 text-[11.5px] text-bg opacity-0 shadow-e3 transition-opacity group-hover:opacity-100">{label}</span>
+      {/* 이름표는 오른쪽(기기 위)에 — 왼쪽은 창이 좁으면 메뉴 칸에 잘려 글자가 겹쳤다 (맥 앱 창). 도구 막대가 z-30이라 기기 위로 올라온다 */}
+      <span className="pointer-events-none absolute left-full top-1/2 z-50 ml-2 -translate-y-1/2 whitespace-nowrap rounded-md bg-fg px-2 py-1 text-[11.5px] text-bg opacity-0 shadow-e3 transition-opacity group-hover:opacity-100">{label}</span>
     </button>
   );
 }
