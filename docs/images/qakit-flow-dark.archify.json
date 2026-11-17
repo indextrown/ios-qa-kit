@@ -1,0 +1,190 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "qa-kit 흐름",
+    "quality_profile": "showcase",
+    "legend": {
+      "mode": "hidden"
+    }
+  },
+  "lanes": [
+    {
+      "id": "ai",
+      "label": "AI가 처음 한 번"
+    },
+    {
+      "id": "repeat",
+      "label": "그다음부터"
+    },
+    {
+      "id": "base",
+      "label": "qakit이 관리"
+    }
+  ],
+  "phases": [
+    {
+      "id": "make",
+      "label": "만들기",
+      "fromCol": 0,
+      "toCol": 2,
+      "variant": "emphasis"
+    },
+    {
+      "id": "reuse",
+      "label": "반복",
+      "fromCol": 3,
+      "toCol": 4,
+      "variant": "dashed"
+    }
+  ],
+  "mainPath": [
+    "explore",
+    "write",
+    "check",
+    "run"
+  ],
+  "nodes": [
+    {
+      "id": "explore",
+      "lane": "ai",
+      "col": 0,
+      "type": "frontend",
+      "label": "화면 탐색",
+      "sublabel": "qakit do · dump",
+      "width": 132
+    },
+    {
+      "id": "write",
+      "lane": "ai",
+      "col": 1,
+      "type": "backend",
+      "label": "시나리오 작성",
+      "sublabel": "*.qa.yml",
+      "width": 132
+    },
+    {
+      "id": "check",
+      "lane": "ai",
+      "col": 2,
+      "type": "security",
+      "label": "검사 · 실행",
+      "sublabel": "qakit check · run",
+      "width": 132
+    },
+    {
+      "id": "run",
+      "lane": "repeat",
+      "col": 3,
+      "type": "cloud",
+      "label": "반복 실행",
+      "sublabel": "qakit run 한 줄 · AI 토큰 0",
+      "width": 170
+    },
+    {
+      "id": "ci",
+      "lane": "repeat",
+      "col": 4,
+      "type": "external",
+      "label": "CI 보고서",
+      "sublabel": "--junit",
+      "width": 132
+    },
+    {
+      "id": "app",
+      "lane": "base",
+      "col": 0,
+      "type": "database",
+      "label": "앱 레포",
+      "sublabel": "읽기만",
+      "width": 132
+    },
+    {
+      "id": "serve",
+      "lane": "base",
+      "col": 1,
+      "type": "messagebus",
+      "label": "상주 실행기",
+      "sublabel": "범용 XCUITest",
+      "width": 132
+    },
+    {
+      "id": "sim",
+      "lane": "base",
+      "col": 2,
+      "type": "cloud",
+      "label": "시뮬레이터 · 기기",
+      "sublabel": "iOS · 안드로이드",
+      "width": 132
+    },
+    {
+      "id": "autoid",
+      "lane": "base",
+      "col": 3,
+      "type": "security",
+      "label": "AutoID",
+      "sublabel": "ID 자동 부여",
+      "width": 132
+    }
+  ],
+  "edges": [
+    {
+      "from": "explore",
+      "to": "write",
+      "label": "통과한 단계",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "from": "write",
+      "to": "check"
+    },
+    {
+      "from": "check",
+      "to": "run",
+      "label": "통과",
+      "variant": "emphasis"
+    },
+    {
+      "from": "check",
+      "to": "write",
+      "label": "실패 요약",
+      "role": "return",
+      "variant": "dashed"
+    },
+    {
+      "from": "run",
+      "to": "ci"
+    },
+    {
+      "from": "explore",
+      "to": "serve",
+      "variant": "dashed",
+      "role": "async",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "serve",
+      "to": "sim",
+      "label": "조작",
+      "variant": "emphasis"
+    },
+    {
+      "from": "app",
+      "to": "serve",
+      "label": "빌드",
+      "fromSide": "right",
+      "toSide": "left",
+      "route": "straight"
+    },
+    {
+      "from": "autoid",
+      "to": "sim",
+      "label": "주입",
+      "variant": "dashed",
+      "role": "branch"
+    }
+  ]
+}
