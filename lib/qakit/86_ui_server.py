@@ -627,6 +627,14 @@ def cmd_ui(args):
                 meta.update(ended=datetime.datetime.now().isoformat(timespec="seconds"), code=proc.returncode,
                             cost=(result or {}).get("cost"), turns_used=(result or {}).get("turns"))
                 (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+            with aij["lock"]:   # 하는 중에 온 말 → 같은 대화로 이어서 (끼어듦이면 그쪽이 보낸다)
+                nxt = aij["queue"].pop(0) if aij.get("queue") and aij.get("chat") and aij["proc"] is proc \
+                    and not aij.get("stopped") else None
+            if nxt:
+                _, err = ai_chat(nxt)
+                if err:
+                    with aij["lock"]:
+                        aij["events"].append({"kind": "error", "t": round(time.time() - aij["started"], 1), "text": f"기다리던 말을 보내지 못함: {err}"})
 
         def watchdog():   # 시간 한도
             try:
@@ -648,8 +656,17 @@ def cmd_ui(args):
         if not eng or not eng["ready"]:
             return None, f"AI 채팅은 지금 Claude Code만 됩니다 — {(eng or {}).get('note', '없음')}"
         with aij["lock"]:
-            if aij["proc"] and aij["proc"].poll() is None:
-                return None, "AI가 아직 하는 중입니다 (멈춤으로 끊을 수 있음)"
+            busy = aij["proc"] and aij["proc"].poll() is None
+            if busy and body.get("interrupt"):
+                pass   # 아래에서 지금 일을 멈추고 이 말을 바로 보낸다
+            elif busy:   # 하는 중에 온 말은 줄을 세웠다가 지금 차례가 끝나면 이어서 보낸다 (같은 대화)
+                q = aij.setdefault("queue", [])
+                if len(q) >= 5:
+                    return None, "기다리는 말이 이미 5개입니다"
+                q.append({"message": message, "model": body.get("model"), "effort": body.get("effort")})
+                return {"queued": len(q)}, None
+        if body.get("interrupt") and busy:
+            ai_stop("끼어듦 — 새 말을 바로 보냄", keep_queue=True)
         if job["proc"] and job["proc"].poll() is None:
             return None, "시나리오 실행 중에는 보낼 수 없습니다"
         minutes = max(1, min(30, int(body.get("minutes") or 10)))
@@ -671,15 +688,17 @@ def cmd_ui(args):
         with aij["lock"]:
             if aij["proc"] and aij["proc"].poll() is None:
                 return None, "AI가 하는 중에는 새 대화를 열 수 없습니다"
-            aij.update(chat=None, events=[], started=None, result=None, dir=None, goal=None, pending=None)
+            aij.update(chat=None, events=[], started=None, result=None, dir=None, goal=None, pending=None, queue=[])
         return {"ok": True}, None
 
-    def ai_stop(why="멈춤 (사용자)"):
+    def ai_stop(why="멈춤 (사용자)", keep_queue=False):
         with aij["lock"]:
             proc = aij["proc"]
             if not proc or proc.poll() is not None:
                 return None, "돌고 있는 AI QA가 없음"
             aij["stopped"] = why
+            if not keep_queue:
+                aij["queue"] = []   # 멈춤 = 기다리던 말도 보내지 않음
         with contextlib.suppress(OSError):
             os.killpg(proc.pid, signal.SIGTERM)   # 에이전트와 그 아래 MCP 서버까지
         try:
@@ -693,7 +712,7 @@ def cmd_ui(args):
         with aij["lock"]:
             running = bool(aij["proc"]) and aij["proc"].poll() is None
             return {"running": running, "engine": aij["engine"], "goal": aij["goal"], "started": aij["started"], "mode": aij.get("mode"),
-                    "chat": bool(aij.get("chat")), "run": aij.get("run"),
+                    "chat": bool(aij.get("chat")), "run": aij.get("run"), "queue": [x["message"] for x in aij.get("queue") or []],
                     "ended": aij["ended"], "code": aij["code"], "limit": aij["limit"], "stopped": aij["stopped"],
                     "dir": results_rel(ws, aij["dir"]) if aij["dir"] else None, "total": len(aij["events"]),
                     "events": aij["events"][since:], "result": aij["result"]}

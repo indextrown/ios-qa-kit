@@ -175,13 +175,13 @@ class Tools(unittest.TestCase):
 
     def test_direct_only_when_asked(self):
         plain, call = self.tools({"QAKIT_TOUCH": ""})
-        self.assertEqual(len(plain), 20)
+        self.assertEqual(len(plain), 21)
         self.assertIn("long_press", plain)   # 길게 누르기·끌기는 XCUITest로도 (시나리오 단계)
         self.assertNotIn("tap_point", plain)
         self.assertNotIn("via", plain["tap"]["inputSchema"]["properties"])
         self.assertTrue(call["isError"])   # 직접 터치가 아니면 좌표 탭은 거절
         direct, _ = self.tools({"QAKIT_TOUCH": "direct"})
-        self.assertEqual(len(direct), 21)
+        self.assertEqual(len(direct), 22)
         for n in ("long_press", "drag", "tap_point"):
             self.assertIn(n, direct)
         self.assertIn("via", direct["tap"]["inputSchema"]["properties"])
