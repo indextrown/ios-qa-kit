@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bot, ChevronDown, ChevronRight, ClipboardList, FileCheck2, Loader2, MessageSquare, MessageSquarePlus, Play, Send, Square, Wrench, XCircle } from "lucide-react";
+import { Bot, ChevronDown, ChevronRight, ClipboardList, FileCheck2, Loader2, MessageSquare, MessageSquarePlus, Play, Send, Square, Wrench, XCircle, Zap } from "lucide-react";
 import { AI_EFFORTS, AI_MODELS, fileUrl, get, post } from "../lib/api";
 import { cx, store, stored } from "../lib/util";
 import { Button, Card } from "./ui";
 
 interface Ev { kind: "user" | "info" | "text" | "tool" | "result" | "error"; text: string; t: number; why?: string }
 interface Job {
-  running: boolean; started: number | null; ended: number | null; total: number; events: Ev[]; chat?: boolean; run?: string | null;
+  running: boolean; started: number | null; ended: number | null; total: number; events: Ev[]; chat?: boolean; run?: string | null; queue?: string[];
   dir: string | null; stopped: string | null; limit: number | null; goal: string | null;
   result: { text: string; cost: number | null; turns: number | null; error: boolean } | null;
 }
@@ -110,12 +110,13 @@ export function AiChat() {
   const running = !!job?.running;
   const busy = running || sending;
   const common = { model: model || null, effort: effort || null };
-  const send = async (msg = text) => {
+  const canQueue = running && mode === "chat";   // AI가 하는 중에도 말은 보낼 수 있다 (끝나면 이어서 · 끼어들기)
+  const send = async (msg = text, interrupt = false) => {
     const m = msg.trim();
-    if (busy || (!m && mode !== "scenario")) return;
+    if (sending || (running && !canQueue) || (!m && mode !== "scenario")) return;
     setSending(true); setError(null);
     try {
-      if (mode === "chat") await post("/api/ai/chat", { message: m, ...common });
+      if (mode === "chat") await post("/api/ai/chat", { message: m, interrupt, ...common });
       else if (mode === "task") await post("/api/ai/start", { goal: m, mode: "qa", minutes, turns: 80, save, inChat: true, ...common });
       else await post("/api/ai/start", { goal: m || "지금까지 대화에서 확인한 흐름", mode: "scenario", minutes, turns: 80, inChat: true,
         name: scName.trim() || null, start: scStart || null, readSource, ...common });
@@ -170,6 +171,8 @@ export function AiChat() {
           if (e.kind === "error") return <div key={i} className="flex items-start gap-1.5 text-[11.5px] text-bad"><XCircle className="mt-0.5 h-3 w-3 shrink-0" /><span className="break-words">{e.text}</span></div>;
           return null;
         })())}
+        {(job?.queue ?? []).map((q, i) => <div key={`q${i}`} className="flex justify-end"><div className="max-w-[85%] whitespace-pre-wrap break-words rounded-2xl rounded-br-md bg-primary/40 px-3 py-2 text-primary-fg"
+          title="AI가 지금 일을 끝내면 이어서 보냅니다">{q}<div className="mt-0.5 text-[10.5px] opacity-80">대기 중 — 지금 일이 끝나면 보냄</div></div></div>)}
         {running && <div className="flex items-center gap-1.5 pl-1 text-[12px] text-sub"><Loader2 className="h-3.5 w-3.5 animate-spin" />{runLabel}
           {job?.run !== "chat" && job?.limit ? ` · ${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")} / ${job.limit / 60}분` : ""}</div>}
         {saved.length > 0 && !running && (
@@ -207,10 +210,12 @@ export function AiChat() {
             placeholder={mode === "chat" ? "무엇을 해 볼까요? (Enter 보내기, Shift+Enter 줄바꿈)" : mode === "task" ? "맡길 목표 (예: 로그인 화면 QA — 빈 값·틀린 비밀번호·뒤로 가기)" : "어떤 흐름을 시나리오로 (비우면 지금까지 대화에서 확인한 흐름)"}
             onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }}
             className="min-h-[2.5rem] flex-1 resize-y rounded-md bg-muted px-2.5 py-1.5 text-[12.5px] outline-none placeholder:text-sub" />
-          {running
-            ? <Button type="button" variant="danger" onClick={stop}><Square className="h-3.5 w-3.5 fill-current" />멈춤</Button>
-            : <Button type="submit" variant="primary" disabled={busy || (!text.trim() && mode !== "scenario")} loading={sending}>
-                <Send className="h-3.5 w-3.5" />{mode === "chat" ? "보내기" : mode === "task" ? "맡기기" : "남기기"}</Button>}
+          {running && <Button type="button" variant="danger" onClick={stop} title="멈춤 (기다리는 말도 보내지 않음)"><Square className="h-3.5 w-3.5 fill-current" />멈춤</Button>}
+          {canQueue && <Button type="button" disabled={sending || !text.trim()} onClick={() => send(text, true)}
+            title="지금 하던 일을 멈추고 이 말을 바로 보냄 (대화는 이어짐)"><Zap className="h-3.5 w-3.5" />끼어들기</Button>}
+          {(!running || canQueue) && <Button type="submit" variant="primary" disabled={sending || (!text.trim() && mode !== "scenario")} loading={sending}
+            title={running ? "지금 일이 끝나면 이어서 보냄" : undefined}>
+              <Send className="h-3.5 w-3.5" />{running ? "대기열에" : mode === "chat" ? "보내기" : mode === "task" ? "맡기기" : "남기기"}</Button>}
         </form>
         <div className="mt-1.5 text-[11px] text-sub">Claude Code 계정 사용량이 듭니다 · AI는 qakit 도구만 쓰고, 되돌릴 수 없는 일(삭제·결제 등)은 분명히 시킬 때만 합니다</div>
       </div>

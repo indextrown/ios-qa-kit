@@ -133,8 +133,9 @@ def main():
     parser.add_argument("--version", action=_VersionAction, help="버전(과 설치 폴더의 git 브랜치) 표시")
     parser.add_argument("-w", "--workspace", help="작업공간 경로 (기본: 현재 폴더에서 qakit.yml 탐색)")
     parser.add_argument("--app", help="앱 경로 일시 지정 (다른 워크트리/브랜치 폴더 검증용)")
-    parser.add_argument("--build", choices=["debug", "release"], default="debug",
-                        help="빌드 종류 (기본 debug = qakit.yml app.configuration, release = app.release.configuration 기본 Release)")
+    parser.add_argument("--build", choices=["debug", "release"], default=None,
+                        help="빌드 종류 (기본 debug = qakit.yml app.configuration, release = app.release.configuration 기본 Release. "
+                             "ui는 주지 않으면 그 작업공간에서 마지막으로 연 빌드)")
     device_help = "실기기에서 실행: select(방향키로 고르기, 값 생략 시) · last(지난번 기기) · <기기 이름>"
     parser.add_argument("--device", nargs="?", const="select", default=None, metavar="기기", help=device_help)
     parser.add_argument("--secrets", help="비밀값 파일 직접 지정 (기본: qakit.yml의 secrets). 계정을 바꿔 돌릴 때")

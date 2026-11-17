@@ -827,7 +827,7 @@ def android_live_runner(ws, serial):
     """라이브 화면용 상주 실행기. 이미 떠 있으면 그대로, 없으면 앱을 다시 켜지 않고(launch=False) 띄운다."""
     st = serve_load(serial)
     if st and st.get("workspace") == str(ws.root) and st.get("runnerHash") == android_runner_hash() \
-            and st.get("framePort") and serve_alive(st):
+            and serve_same_app(ws, st) and st.get("framePort") and serve_alive(st):
         return st
     # 다른 실행(qakit run·do·build-app)이 실행기를 띄우거나 쓰는 중이면 건드리지 않는다 — 여기서 다시 띄우면 그 실행의
     # 실행기를 죽이고 서로 번갈아 "Process crashed"가 난다 (qakit ui를 열어 둔 채 qakit run, 2026-11-16)

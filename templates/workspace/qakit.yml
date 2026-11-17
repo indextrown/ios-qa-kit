@@ -6,6 +6,8 @@ app:
   scheme: {{SCHEME}}
   configuration: {{CONFIGURATION}}
   bundleId: {{BUNDLE_ID}}
+  # xcodebuild에 덧붙일 인자 (필요할 때만). 시뮬레이터는 이 맥의 아키텍처 하나만 빌드한다
+  # buildArgs: ["EXCLUDED_ARCHS=x86_64"]
   # --build release 때 쓸 설정 (생략하면 configuration: Release, bundleId는 프로젝트에서 자동으로 읽음)
   #   주의: 앱의 Release가 실서비스 서버를 쓰면 시나리오도 실서비스에 접속한다
   # release:

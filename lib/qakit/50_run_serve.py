@@ -173,6 +173,12 @@ def serve_request(st, path, body=None, timeout=120):
         conn.close()
 
 
+def serve_same_app(ws, st):
+    """떠 있는 실행기가 이 작업공간의 지금 빌드 앱용인가 (debug 실행기에 release 명령이 가던 문제 — 패키지가 다름)"""
+    app = getattr(ws, "package", None) if ws.platform == "android" else getattr(ws, "bundle_id", None)
+    return not st.get("bundleId") or not app or st.get("bundleId") == app
+
+
 def serve_alive(st):
     if not st or not _pid_alive(st.get("pid")):
         return False
@@ -397,7 +403,7 @@ def serve_start(ws, udid, idle=1800, launch=True):
 def serve_ready_for(ws, udid):
     """이 작업공간용 상주 실행기가 지금 바로 쓸 수 있게 떠 있는가 (qakit run이 자동으로 서버를 쓸지)."""
     st = serve_load(udid)
-    return bool(st and st.get("workspace") == str(ws.root)
+    return bool(st and st.get("workspace") == str(ws.root) and serve_same_app(ws, st)
                 and st.get("runnerHash") == runner_source_hash(ws) and serve_alive(st))
 
 
@@ -539,6 +545,8 @@ def serve_ensure(ws, udid):
             why = "실행기 코드가 바뀜"
         elif st.get("workspace") != str(ws.root):
             why = f"다른 작업공간({st.get('workspace')})의 실행기"
+        elif not serve_same_app(ws, st):
+            why = f"다른 빌드의 앱({st.get('bundleId')})용 실행기"
         elif not serve_alive(st):
             why = "응답 없음"
         if why is None:
@@ -652,6 +660,8 @@ def cmd_touch(args):
     if ws.device:
         fail("직접 터치는 시뮬레이터만")
     udid = ensure_booted(ws)
+    if ws.platform == "android":
+        return android_cmd_touch(udid, args.action)
     helper = DirectTouch(ws, udid)
     started = time.time()
     why = helper.start()
@@ -680,6 +690,24 @@ def cmd_touch(args):
         info("   → 자세히: docs/private-apis.md '손가락처럼 누르기'")
     elif before and after:
         ok("화면이 바뀜 — 터치가 먹혔습니다")
+
+def android_cmd_touch(serial, action):
+    """안드로이드 qakit touch: adb input으로 바로 누른다 (상주 실행기 필요 없음). 누른 뒤 화면이 바뀌었는지도 본다."""
+    if action and action[0] == "ping":
+        ok("adb input — 준비 필요 없음")
+        return
+    before = android_shot_jpeg(serial, 300)
+    good, line = AndroidTouch(serial).send(" ".join(action))
+    (ok if good else warn)(f"{line} · adb input")
+    if not good:
+        sys.exit(1)
+    time.sleep(1)
+    after = android_shot_jpeg(serial, 300)
+    if before and after and screens_alike(before, after):
+        warn("1초 뒤에도 화면이 그대로입니다 — 누른 자리가 화면을 바꾸지 않는 곳일 수 있습니다")
+    elif before and after:
+        ok("화면이 바뀜 — 터치가 먹혔습니다")
+
 
 def coverage(ws):
     """앱 ID(자동 ID, 화면타입.프로퍼티) 중 시나리오가 쓰는 것. 화면 = ID 맨 앞 타입 이름.

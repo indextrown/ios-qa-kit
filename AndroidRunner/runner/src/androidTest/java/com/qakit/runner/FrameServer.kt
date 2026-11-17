@@ -19,6 +19,12 @@ class FrameServer(private val ua: UiAutomation, private val port: Int, private v
     @Volatile var running = true
     private val fps = 12
 
+    companion object {
+        /** 명령(단계·화면 읽기)을 하는 중인가 — 그동안은 초당 4장으로 (화면 캡처가 화면 구조 읽기를 늦춤: 중앙값 0.37→0.50초, 2026-11-17 측정) */
+        @Volatile var busy = 0
+        const val SLOW_MS = 250L
+    }
+
     init { isDaemon = true }
 
     override fun run() {
@@ -33,6 +39,9 @@ class FrameServer(private val ua: UiAutomation, private val port: Int, private v
                     sock.tcpNoDelay = true
                     val out = BufferedOutputStream(sock.getOutputStream(), 1 shl 16)
                     val buf = ByteArrayOutputStream(1 shl 16)
+                    var lastSize = -1
+                    var lastHash = 0
+                    var still = 0   // 연달아 같은 장면 수 — 화면이 멈춰 있으면 천천히 캡처하고, 같은 장면은 보내지 않는다 (tapflow의 seed 건너뛰기처럼)
                     try {
                         while (running) {
                             val started = SystemClock.elapsedRealtime()
@@ -47,13 +56,20 @@ class FrameServer(private val ua: UiAutomation, private val port: Int, private v
                                 buf.reset()
                                 small.compress(Bitmap.CompressFormat.JPEG, quality, buf)
                                 val n = buf.size()
-                                out.write(byteArrayOf((n ushr 24).toByte(), (n ushr 16).toByte(), (n ushr 8).toByte(), n.toByte()))
-                                buf.writeTo(out)
-                                out.flush()
+                                val hash = java.util.Arrays.hashCode(buf.toByteArray())
+                                if (n == lastSize && hash == lastHash) still += 1 else {
+                                    still = 0; lastSize = n; lastHash = hash
+                                    out.write(byteArrayOf((n ushr 24).toByte(), (n ushr 16).toByte(), (n ushr 8).toByte(), n.toByte()))
+                                    buf.writeTo(out)
+                                    out.flush()
+                                }
                                 if (small !== bmp) small.recycle()
                                 bmp.recycle()
                             }
-                            val wait = 1000L / fps - (SystemClock.elapsedRealtime() - started)
+                            // 받는 쪽이 끊겼는지는 보내기에서만 알 수 있다 → 같은 장면이 오래 이어지면 2초마다 한 번은 보낸다
+                            if (still > 0 && still % 8 == 0) { lastSize = -1 }
+                            val interval = if (busy > 0 || still >= 6) SLOW_MS else 1000L / fps
+                            val wait = interval - (SystemClock.elapsedRealtime() - started)
                             if (wait > 0) SystemClock.sleep(wait)
                         }
                     } catch (e: Exception) {

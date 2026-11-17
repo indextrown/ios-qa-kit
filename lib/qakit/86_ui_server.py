@@ -3,13 +3,81 @@
 STREAM_KEEP = 3   # 실시간 화면 스트림 동시 연결 (창·탭 몇 개). 넘으면 오래된 것부터 서버가 끊는다
 
 
+WORKSPACES_FILE = Path.home() / ".qakit" / "workspaces.json"
+UI_SERVERS_FILE = Path.home() / ".qakit" / "ui-servers.json"
+
+
+def _read_json(f, default):
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def register_workspace(ws):
+    """qakit ui를 연 작업공간을 기억한다 (UI의 작업공간 바꾸기 목록). 빌드 종류도 — 다시 열 때 같은 것으로."""
+    data = _read_json(WORKSPACES_FILE, {})
+    data[str(ws.root)] = {"name": ws.name, "platform": ws.platform, "build": ws.build,
+                          "last": datetime.datetime.now().isoformat(timespec="seconds")}
+    with contextlib.suppress(OSError):
+        WORKSPACES_FILE.parent.mkdir(parents=True, exist_ok=True)
+        WORKSPACES_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def known_workspaces(current):
+    """기억한 작업공간 (최근 순, qakit.yml이 남아 있는 것만)."""
+    data = _read_json(WORKSPACES_FILE, {})
+    with contextlib.suppress(Exception):   # 맥 앱의 최근 작업공간도 (앱으로만 연 것)
+        import plistlib
+        r = subprocess.run(["defaults", "export", "io.github.indextrown.qakit", "-"], capture_output=True, timeout=5)
+        for p in plistlib.loads(r.stdout).get("recentWorkspaces") or []:
+            if p not in data and (Path(p) / "qakit.yml").exists():
+                with contextlib.suppress(Exception):
+                    w = Workspace(Path(p))
+                    data[p] = {"name": w.name, "platform": w.platform}
+    out = [dict(v, path=k, current=k == str(current)) for k, v in data.items() if (Path(k) / "qakit.yml").exists()]
+    return sorted(out, key=lambda x: x.get("last") or "", reverse=True)
+
+
+def ui_server_for(path, build):
+    """그 작업공간의 qakit ui 주소 — 이미 떠 있으면 그것, 아니면 새로 띄운다 (터미널·브라우저로 쓸 때 작업공간 바꾸기). → (주소, 오류)"""
+    servers = _read_json(UI_SERVERS_FILE, {})
+    cur = servers.get(path)
+    if cur and _pid_alive(cur.get("pid") or 0):   # 전에 띄운 서버가 살아 있으면 그 주소 (토큰 링크)
+        return cur["url"], None
+    log = Path.home() / ".qakit" / f"ui-{hashlib.sha1(path.encode()).hexdigest()[:8]}.log"
+    cmd = [sys.executable, str(KIT_DIR / "bin" / "qakit"), "-w", path, "ui", "--no-open"] + (["--build", build] if build in ("debug", "release") else [])
+    with open(log, "w") as out:
+        proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
+    deadline = time.time() + 240   # 시뮬레이터·에뮬레이터를 켜야 하면 오래 걸린다
+    while time.time() < deadline:
+        time.sleep(0.5)
+        m = re.search(r"qakit ui: (http://127\.0\.0\.1:\d+/\?token=[\w-]+)", log.read_text(errors="replace"))
+        if m:
+            servers[path] = {"url": m.group(1), "pid": proc.pid}
+            with contextlib.suppress(OSError):
+                UI_SERVERS_FILE.write_text(json.dumps(servers, ensure_ascii=False, indent=1), encoding="utf-8")
+            return m.group(1), None
+        if proc.poll() is not None:
+            tail = "\n".join(re.sub(r"\x1b\[[0-9;]*m", "", log.read_text(errors="replace")).strip().splitlines()[-4:])
+            return None, f"그 작업공간의 qakit ui가 바로 끝났습니다: {tail}"
+    return None, f"240초 안에 열리지 않았습니다 (로그: {log})"
+
+
 def cmd_ui(args):
     """결과 보기 + 시뮬레이터 라이브 화면 (로컬 웹, 127.0.0.1). docs/PLAN.md "UI 설계" U1."""
     import http.server
     import secrets as pysecrets
     import threading
     import urllib.parse
+    global BUILD_MODE
     ws = find_workspace(args.workspace)
+    if BUILD_MODE is None:   # --build를 안 줬으면 이 작업공간에서 마지막으로 연 빌드 (맥 앱은 --build 없이 연다)
+        last = (_read_json(WORKSPACES_FILE, {}).get(str(ws.root)) or {}).get("build")
+        if last in ("debug", "release") and last != ws.build:
+            BUILD_MODE = last
+            ws = find_workspace(args.workspace)
+            info(f"빌드: {last} (이 작업공간에서 마지막으로 연 빌드 — 바꾸려면 --build)")
     token = pysecrets.token_urlsafe(18)
     android = ws.platform == "android"
     # 안드로이드: 에뮬레이터 serial (꺼져 있으면 띄움). 라이브 화면·터치·녹화는 adb + 상주 실행기 화면 서버
@@ -566,6 +634,14 @@ def cmd_ui(args):
                 meta.update(ended=datetime.datetime.now().isoformat(timespec="seconds"), code=proc.returncode,
                             cost=(result or {}).get("cost"), turns_used=(result or {}).get("turns"))
                 (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+            with aij["lock"]:   # 하는 중에 온 말 → 같은 대화로 이어서 (끼어듦이면 그쪽이 보낸다)
+                nxt = aij["queue"].pop(0) if aij.get("queue") and aij.get("chat") and aij["proc"] is proc \
+                    and not aij.get("stopped") else None
+            if nxt:
+                _, err = ai_chat(nxt)
+                if err:
+                    with aij["lock"]:
+                        aij["events"].append({"kind": "error", "t": round(time.time() - aij["started"], 1), "text": f"기다리던 말을 보내지 못함: {err}"})
 
         def watchdog():   # 시간 한도
             try:
@@ -587,8 +663,17 @@ def cmd_ui(args):
         if not eng or not eng["ready"]:
             return None, f"AI 채팅은 지금 Claude Code만 됩니다 — {(eng or {}).get('note', '없음')}"
         with aij["lock"]:
-            if aij["proc"] and aij["proc"].poll() is None:
-                return None, "AI가 아직 하는 중입니다 (멈춤으로 끊을 수 있음)"
+            busy = aij["proc"] and aij["proc"].poll() is None
+            if busy and body.get("interrupt"):
+                pass   # 아래에서 지금 일을 멈추고 이 말을 바로 보낸다
+            elif busy:   # 하는 중에 온 말은 줄을 세웠다가 지금 차례가 끝나면 이어서 보낸다 (같은 대화)
+                q = aij.setdefault("queue", [])
+                if len(q) >= 5:
+                    return None, "기다리는 말이 이미 5개입니다"
+                q.append({"message": message, "model": body.get("model"), "effort": body.get("effort")})
+                return {"queued": len(q)}, None
+        if body.get("interrupt") and busy:
+            ai_stop("끼어듦 — 새 말을 바로 보냄", keep_queue=True)
         if job["proc"] and job["proc"].poll() is None:
             return None, "시나리오 실행 중에는 보낼 수 없습니다"
         minutes = max(1, min(30, int(body.get("minutes") or 10)))
@@ -610,15 +695,17 @@ def cmd_ui(args):
         with aij["lock"]:
             if aij["proc"] and aij["proc"].poll() is None:
                 return None, "AI가 하는 중에는 새 대화를 열 수 없습니다"
-            aij.update(chat=None, events=[], started=None, result=None, dir=None, goal=None, pending=None)
+            aij.update(chat=None, events=[], started=None, result=None, dir=None, goal=None, pending=None, queue=[])
         return {"ok": True}, None
 
-    def ai_stop(why="멈춤 (사용자)"):
+    def ai_stop(why="멈춤 (사용자)", keep_queue=False):
         with aij["lock"]:
             proc = aij["proc"]
             if not proc or proc.poll() is not None:
                 return None, "돌고 있는 AI QA가 없음"
             aij["stopped"] = why
+            if not keep_queue:
+                aij["queue"] = []   # 멈춤 = 기다리던 말도 보내지 않음
         with contextlib.suppress(OSError):
             os.killpg(proc.pid, signal.SIGTERM)   # 에이전트와 그 아래 MCP 서버까지
         try:
@@ -632,7 +719,7 @@ def cmd_ui(args):
         with aij["lock"]:
             running = bool(aij["proc"]) and aij["proc"].poll() is None
             return {"running": running, "engine": aij["engine"], "goal": aij["goal"], "started": aij["started"], "mode": aij.get("mode"),
-                    "chat": bool(aij.get("chat")), "run": aij.get("run"),
+                    "chat": bool(aij.get("chat")), "run": aij.get("run"), "queue": [x["message"] for x in aij.get("queue") or []],
                     "ended": aij["ended"], "code": aij["code"], "limit": aij["limit"], "stopped": aij["stopped"],
                     "dir": results_rel(ws, aij["dir"]) if aij["dir"] else None, "total": len(aij["events"]),
                     "events": aij["events"][since:], "result": aij["result"]}
@@ -788,6 +875,15 @@ def cmd_ui(args):
                 fresh = Workspace(ws.root)
                 ws.worktree_base, ws.worktree_update = fresh.worktree_base, fresh.worktree_update
                 return self.send(200, worktree_info(ws))
+            if path == "/api/workspaces/open":   # 다른 작업공간 (터미널·브라우저: 그 작업공간의 qakit ui를 띄우고 주소를 돌려줌)
+                target = str(body.get("path") or "")
+                known = {w["path"]: w for w in known_workspaces(ws.root)}
+                if target not in known and not (Path(target) / "qakit.yml").is_file():
+                    return self.send(400, {"error": "qakit 작업공간이 아닙니다 (qakit.yml 없음)"})
+                if target == str(ws.root):
+                    return self.send(200, {"url": None, "same": True})
+                url_, err = ui_server_for(target, (known.get(target) or {}).get("build"))
+                return self.send(409 if err else 200, {"error": err} if err else {"url": url_})
             if path == "/api/ai/chat/new":
                 res, err = ai_new_chat()
                 return self.send(409 if err else 200, {"error": err} if err else res)
@@ -927,6 +1023,9 @@ def cmd_ui(args):
                     return self.send(200, ai_session_info(ws, d, full=True))
                 if path == "/api/ai/engines":
                     return self.send(200, ai_engines())
+                if path == "/api/workspaces":   # 작업공간 바꾸기 목록. app: 맥 앱 창이면 앱이 연다 (qakit-app://open)
+                    return self.send(200, {"current": str(ws.root), "app": bool(os.environ.get("QAKIT_UI_PARENT")),
+                                           "workspaces": known_workspaces(ws.root)})
                 if path == "/api/ai/job":
                     return self.send(200, ai_state(int(q.get("since", 0) or 0)))
                 if path == "/api/ai":   # 가장 최근 AI 세션 (qakit mcp) — 활동 기록·지금 하는 일·보고한 문제
@@ -1025,6 +1124,7 @@ def cmd_ui(args):
             except BrokenPipeError:
                 pass
 
+    register_workspace(ws)
     server = http.server.ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     url = f"http://127.0.0.1:{server.server_address[1]}/?token={token}"
     ok(f"qakit ui: {url}")
