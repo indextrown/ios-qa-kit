@@ -652,6 +652,8 @@ def cmd_touch(args):
     if ws.device:
         fail("직접 터치는 시뮬레이터만")
     udid = ensure_booted(ws)
+    if ws.platform == "android":
+        return android_cmd_touch(udid, args.action)
     helper = DirectTouch(ws, udid)
     started = time.time()
     why = helper.start()
@@ -680,6 +682,24 @@ def cmd_touch(args):
         info("   → 자세히: docs/private-apis.md '손가락처럼 누르기'")
     elif before and after:
         ok("화면이 바뀜 — 터치가 먹혔습니다")
+
+def android_cmd_touch(serial, action):
+    """안드로이드 qakit touch: adb input으로 바로 누른다 (상주 실행기 필요 없음). 누른 뒤 화면이 바뀌었는지도 본다."""
+    if action and action[0] == "ping":
+        ok("adb input — 준비 필요 없음")
+        return
+    before = android_shot_jpeg(serial, 300)
+    good, line = AndroidTouch(serial).send(" ".join(action))
+    (ok if good else warn)(f"{line} · adb input")
+    if not good:
+        sys.exit(1)
+    time.sleep(1)
+    after = android_shot_jpeg(serial, 300)
+    if before and after and screens_alike(before, after):
+        warn("1초 뒤에도 화면이 그대로입니다 — 누른 자리가 화면을 바꾸지 않는 곳일 수 있습니다")
+    elif before and after:
+        ok("화면이 바뀜 — 터치가 먹혔습니다")
+
 
 def coverage(ws):
     """앱 ID(자동 ID, 화면타입.프로퍼티) 중 시나리오가 쓰는 것. 화면 = ID 맨 앞 타입 이름.
