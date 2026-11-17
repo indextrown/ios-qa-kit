@@ -6,10 +6,12 @@
 
 MCP_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 
-MCP_INSTRUCTIONS = """qakit: iOS 시뮬레이터의 앱을 ID·라벨로 조작하고 확인하는 QA 도구.
+MCP_INSTRUCTIONS = """qakit: 시뮬레이터·에뮬레이터의 앱을 ID·라벨로 조작하고 확인하는 QA 도구.
 순서: get_testing_guide(처음 한 번) → launch → screen(화면 구조 읽기) → tap·type_text·swipe·wait_for·expect → screen으로 결과 확인 → 반복.
 - 화면은 screen(텍스트)으로 읽는다. screenshot은 색·배치·이미지처럼 눈으로만 아는 것에만 (토큰이 많이 듦).
-- 대상(target)은 screen에 나온 #ID를 우선 쓴다. ID가 없으면 { type, label } (줄바꿈 라벨은 contains). 좌표 탭은 없다.
+- 대상(target)은 screen에 나온 #ID를 우선 쓴다. ID가 없으면 { type, label } (줄바꿈 라벨은 contains). 같은 대상이 여럿이면 index로 고른다.
+- 탭한 뒤에는 screen으로 다시 읽는다 — 방금 읽지 않은 화면의 요소는 누르지 않는다 (탭 결과에 화면 요약이 붙으면 그것으로 충분).
+- 여러 단계를 이미 알면 step 도구의 steps로 한 번에 보낸다 (왕복이 줄어 빠름). 공통 단계(use:)가 있으면 그것부터.
 - 비밀번호 등은 {secret:키} (작업공간 secrets.txt의 키)로만 친다. 실제 값을 묻거나 출력하지 않는다.
 - 문제는 같은 단계로 한 번 더 재현한 뒤 report_issue로 남긴다. 확인된 경로는 save_scenario로 시나리오로 남긴다 (재생해서 통과해야 남음).
 - 조작 도구에는 why(왜 하는지 한 줄)를 같이 준다 — 사람이 `qakit ui` 라이브 세션에서 실시간 화면·커서·활동 기록으로 지켜본다."""
@@ -107,7 +109,9 @@ def mcp_tools(direct=False):
         tool("launch", "앱을 종료하고 새로 켠다. 기록(recorded_steps)도 여기서부터 새로 시작한다."),
         tool("screen", "지금 화면 구조: 요소마다 종류 #ID \"라벨\" @x,y 너비x높이. 대상(target)은 여기 나온 ID·라벨을 쓴다.",
              {"all": {"type": "boolean", "description": "true면 라벨·ID 없는 요소까지 (기본 false)"}}),
-        tool("screenshot", "지금 화면 사진 (작게, JPEG). 색·배치·이미지처럼 화면 구조로 알 수 없는 것만 볼 때."),
+        tool("screenshot", "지금 화면 사진 (JPEG). 색·배치·지도·이미지처럼 화면 구조로 알 수 없는 것만 볼 때. "
+                           "기본 폭은 기기에 맞춤(태블릿 1024, 폰 600) — 아주 작은 글자·지도 위 표시를 볼 때만 width를 키운다.",
+             {"width": {"type": "number", "description": "사진 폭 px (300~1600)"}}),
         tool("tap", "요소를 누른다. expect를 주면 누른 뒤 그 조건이 맞아야 통과 (누르기 전에 이미 맞으면 실패).",
              {"target": MCP_TARGET, "expect": MCP_CONDITION,
               "timeout": {"type": "number", "description": "요소가 나타날 때까지 기다릴 초 (기본 10)"}}, ["target"]),
@@ -125,9 +129,15 @@ def mcp_tools(direct=False):
         tool("wait_for", "요소가 나타날 때까지 기다린다.",
              {"target": MCP_TARGET, "timeout": {"type": "number", "description": "초 (기본 10)"}}, ["target"]),
         tool("expect", "조건이 지금 맞는지 확인 (안 맞으면 실패로 돌려줌).", {"condition": MCP_CONDITION}, ["condition"]),
-        tool("step", "시나리오 단계 한 줄을 그대로 실행 (위 도구로 안 되는 것: use: 공통단계, hide-keyboard, scroll-to, if 등). "
-                     "예) \"use: login\", \"hide-keyboard: true\"",
-             {"yaml": {"type": "string"}}, ["yaml"]),
+        tool("step", "시나리오 단계를 그대로 실행 (위 도구로 안 되는 것: use: 공통단계, hide-keyboard, scroll-to, if 등). "
+                     "예) \"use: login\", \"hide-keyboard: true\". 순서를 이미 알면 steps로 여러 줄을 한 번에 (앞 단계가 실패하면 거기서 멈춤).",
+             {"yaml": {"type": "string", "description": "단계 한 줄"},
+              "steps": {"type": "array", "items": {"type": "string"}, "description": "단계 여러 줄 (차례로)"}}),
+        tool("logs", "앱 로그·크래시 보기 (안드로이드). 앱이 죽거나·멈추거나·네트워크 오류가 의심될 때. 비밀값은 가려짐.",
+             {"since": {"type": "string", "description": "얼마 전부터 (예: 2m, 10m — 기본 5m)"},
+              "level": {"type": "string", "enum": ["V", "D", "I", "W", "E"], "description": "이 수준 이상 (기본 W)"},
+              "grep": {"type": "string", "description": "이 글자가 든 줄만"},
+              "crash": {"type": "boolean", "description": "크래시·ANR만"}}),
         tool("recorded_steps", "마지막 launch 이후 통과한 단계 목록 (save_scenario가 이것으로 시나리오를 만든다)."),
         tool("list_scenarios", "이미 있는 시나리오 (이름·제목·태그·최근 결과)."),
         tool("find_ids", "앱 ID 목록에서 찾기 (자동 ID '타입.프로퍼티' — 화면 구조에 없을 때나 소스에서 본 이름 확인용).",
@@ -264,33 +274,80 @@ def tap_condition(c):
     return c
 
 
-def find_element(target, parsed):
-    """대상(시나리오 문법) → 화면 구조에서 화면에 보이는 요소 하나. (요소, 이유)"""
+def _ancestors(els, i):
+    """화면 구조(차례대로 펼친 트리)에서 i번 요소의 조상 위치들"""
+    d = els[i]["depth"]
+    for j in range(i - 1, -1, -1):
+        if els[j]["depth"] < d:
+            d = els[j]["depth"]
+            yield j
+
+
+def _describe(els, i):
+    e = els[i]
+    lab = (e["labelRaw"] or "").replace("\n", "⏎")[:40]
+    where = next((els[j] for j in _ancestors(els, i) if els[j]["id"] or (els[j]["labelRaw"] and els[j]["type"] != e["type"])), None)
+    ctx = f' (안: {where["type"]}{" #" + where["id"] if where["id"] else ""}{" " + chr(34) + (where["labelRaw"] or "")[:30] + chr(34) if where["labelRaw"] else ""})' if where else ""
+    return f'{e["type"]}{" #" + e["id"] if e["id"] else ""}{" " + chr(34) + lab + chr(34) if lab else ""} @{e["x"]},{e["y"]}{ctx}'
+
+
+OVERLAY_TYPES = ("Button", "TextField", "SecureTextField", "Switch", "Slider", "Cell")
+
+
+def covered_by(els, i, scr):
+    """i번 요소의 가운데를 뒤에 그려진(나중에 나온) 다른 조작 요소가 덮는가 → 그 요소 위치 또는 None"""
+    e = els[i]
+    cx, cy = e["x"] + e["w"] / 2, e["y"] + e["h"] / 2
+    area = (scr.get("w") or 1) * (scr.get("h") or 1)
+    end = i + 1
+    while end < len(els) and els[end]["depth"] > e["depth"]:   # i의 자손은 건너뜀
+        end += 1
+    anc = set(_ancestors(els, i))
+    for j in range(end, len(els)):
+        o = els[j]
+        if j in anc or o["type"] not in OVERLAY_TYPES or not (o["id"] or o["labelRaw"]):
+            continue
+        if o["w"] * o["h"] > area * 0.4 or o["w"] * o["h"] >= e["w"] * e["h"] * 4:
+            continue   # 화면 전체를 덮는 틀·큰 칸은 겹침으로 보지 않음 (패널·목록 칸)
+        if o["x"] <= cx <= o["x"] + o["w"] and o["y"] <= cy <= o["y"] + o["h"]:
+            return j
+    return None
+
+
+def find_element(target, parsed, strict=False):
+    """대상(시나리오 문법) → 화면 구조에서 화면에 보이는 요소 하나. (요소, 이유)
+    strict: index 없이 서로 다른 요소 여럿이 맞으면 고르지 않고 후보를 알려 준다 (엉뚱한 '닫기'를 누르지 않게)."""
     scr = parsed.get("screen") or {}
     sw, sh = scr.get("w") or 0, scr.get("h") or 0
     els = parsed.get("elements") or []
     visible = lambda e: e["w"] > 0 and e["h"] > 0 and e["x"] < sw and e["y"] < sh and e["x"] + e["w"] > 0 and e["y"] + e["h"] > 0
     t = target if isinstance(target, dict) else {"id": str(target)}
     if "id" in t:
-        hits = [e for e in els if e["id"] == t["id"]]
+        hits = [i for i, e in enumerate(els) if e["id"] == t["id"]]
     else:
         kinds = DIRECT_TYPES.get(str(t.get("type", "")).lower()) if t.get("type") not in (None, "any") else None
         lab = lambda e: (e["labelRaw"] or "")
         if "label" in t:
-            hits = [e for e in els if lab(e) == str(t["label"])]
+            hits = [i for i, e in enumerate(els) if lab(e) == str(t["label"])]
         elif "contains" in t:
-            hits = [e for e in els if str(t["contains"]) in lab(e)]
+            hits = [i for i, e in enumerate(els) if str(t["contains"]) in lab(e)]
         else:
             return None, "대상에 id·label·contains가 없음"
         if kinds:
-            hits = [e for e in hits if e["type"] in kinds]
-    shown = [e for e in hits if visible(e)]
+            hits = [i for i in hits if els[i]["type"] in kinds]
+    shown = [i for i in hits if visible(els[i])]
     if not shown:
         return None, "화면 구조에 없음" if not hits else "화면 밖에 있음"
+    if "index" not in t and strict and len(shown) > 1:
+        hs = set(shown)
+        distinct = [i for i in shown if not hs.intersection(_ancestors(els, i))]   # 같은 것의 안쪽 요소(라벨 겹침)는 하나로
+        if len(distinct) > 1:
+            return None, (f"같은 대상이 {len(distinct)}개 — 어느 것인지 index(0부터)나 #ID로 골라 주세요:\n"
+                          + "\n".join(f"  index {shown.index(i)}: {_describe(els, i)}" for i in distinct))
     idx = int(t.get("index", 0) or 0)
     if idx >= len(shown):
         return None, f"index {idx} 없음 ({len(shown)}개)"
-    return shown[idx], None
+    return els[shown[idx]], None
 
 
 class McpSession:
@@ -353,7 +410,8 @@ class McpSession:
 
     def qakit(self, *args, timeout=180):
         try:
-            r = subprocess.run([sys.executable, str(KIT_DIR / "bin" / "qakit"), "-w", str(self.ws.root), *args],
+            build = ["--build", self.ws.build] if self.ws.build != "debug" else []   # 이 서버와 같은 빌드의 앱 (release 작업공간)
+            r = subprocess.run([sys.executable, str(KIT_DIR / "bin" / "qakit"), "-w", str(self.ws.root), *build, *args],
                                capture_output=True, text=True, timeout=timeout, env=dict(os.environ, PYTHONUNBUFFERED="1"))
         except subprocess.TimeoutExpired:
             return 124, f"{timeout}초 안에 끝나지 않음"
@@ -398,8 +456,19 @@ class McpSession:
         code, out = self.qakit("do", step)
         return code == 0, out
 
-    def screen(self, all_=False):
-        good, out = self.dump_text(0.3)
+    def after_screen(self, settle=0.5, limit=120):
+        """조작 뒤 화면 요약 (AI가 screen을 다시 부르는 왕복을 아낌). QAKIT_AI_AUTOSCREEN=0이면 끔"""
+        if os.environ.get("QAKIT_AI_AUTOSCREEN", "1") == "0":
+            return ""
+        good, out = self.screen(settle=settle)
+        if not good:
+            return ""
+        lines = out.splitlines()
+        more = f"\n...({len(lines) - limit}줄 더 — 전체는 screen)" if len(lines) > limit else ""
+        return "\n\n지금 화면 (조작 뒤 자동으로 읽음):\n" + "\n".join(lines[:limit]) + more
+
+    def screen(self, all_=False, settle=0.3):
+        good, out = self.dump_text(settle)
         if not good:
             return False, out[-1500:]
         self.last_dump = (time.time(), out)
@@ -421,10 +490,18 @@ class McpSession:
                 lines = lines[:301] + [f"...({len(lines) - 301}줄 생략 — 필요하면 swipe 후 다시)"]
         return True, "\n".join(lines)
 
-    def shot(self, width=440):
-        """작은 JPEG (simscreen, 안 되면 simctl)."""
+    def shot(self, width=None):
+        """JPEG (simscreen, 안 되면 simctl · 안드로이드 screencap). 폭을 안 주면 기기에 맞춤: 태블릿(가로 900pt 넘음) 1024, 폰 600."""
         if not self.udid:
             return None
+        if not width:
+            wide = False
+            with contextlib.suppress(Exception):
+                parsed = ui_parse_dump(self.last_dump[1]) if self.last_dump else self.parsed_screen()[0]
+                scr = (parsed or {}).get("screen") or {}
+                wide = min(scr.get("w") or 0, scr.get("h") or 0) > 600   # 짧은 변 600pt(dp) 넘으면 태블릿
+            width = 1024 if wide else 600
+        width = int(min(max(width, 300), 1600))
         if self.ws.platform == "android":
             return android_shot_jpeg(self.udid, width)
         return screen_jpeg(self.udid, width)
@@ -469,10 +546,18 @@ class McpSession:
         parsed, err = self.parsed_screen()
         if err:
             return None
-        el, why = find_element(target, parsed)
+        el, why = find_element(target, parsed, strict=True)
         if not el:
+            if why and why.startswith("같은 대상이"):
+                return [{"type": "text", "text": f"❌ 누르지 않음 — {why}"}], True
             return None   # 화면에 없음·밖 → XCUITest가 기다렸다 누르게
         scr = parsed["screen"]
+        els = parsed["elements"]
+        i = next((k for k, e in enumerate(els) if e is el), None)
+        j = covered_by(els, i, scr) if i is not None else None
+        if j is not None:
+            return [{"type": "text", "text": f"❌ 누르지 않음 — {_describe(els, i)} 의 가운데를 {_describe(els, j)} 가 덮고 있음. "
+                                             "덮은 것을 먼저 닫거나, 정말 그 자리를 누르려면 via: xcuitest"}], True
         (x, y), rect = self.center(el, scr)
         cond = a.get("expect")
         if cond:   # 누르기 전에 이미 맞으면 탭의 효과를 알 수 없음 (XCUITest 탭과 같은 규칙)
@@ -499,7 +584,8 @@ class McpSession:
             if changed is False:
                 note = "\n⚠️ 1초 안에 화면 변화 없음 — 직접 터치가 무시됐을 수 있음 (화면이 원래 안 바뀌는 탭이면 괜찮음. 확실히 하려면 expect를 주거나 via: xcuitest)"
         do_log_write(self.ws, {"step": line_text})
-        return [{"type": "text", "text": f"단계: {line_text}\n✅ 직접 터치 {where} {int((time.time() - t0) * 1000)}ms{note}"}], False
+        took = int((time.time() - t0) * 1000)
+        return [{"type": "text", "text": f"단계: {line_text}\n✅ 직접 터치 {where} {took}ms{note}{self.after_screen()}"}], False
 
     def direct_gesture(self, name, a):
         """long_press·drag·tap_point 직접 터치. long_press·drag는 시나리오 단계(long-press·drag)로 기록, tap_point는 기록 안 함"""
@@ -570,7 +656,7 @@ class McpSession:
             ok_, out = self.screen(bool(a.get("all")))
             return text(out), not ok_
         if name == "screenshot":
-            data = self.shot()
+            data = self.shot(a.get("width"))
             if not data:
                 return text("사진을 찍지 못함 (시뮬레이터만, 켜져 있어야 함)"), True
             return [{"type": "image", "data": base64.b64encode(data).decode(), "mimeType": "image/jpeg"}], False
@@ -584,6 +670,32 @@ class McpSession:
             res = self.direct_tap(a)
             if res is not None:
                 return res
+        if name == "tap" and "index" not in (a["target"] if isinstance(a["target"], dict) else {}):
+            parsed, err = self.parsed_screen()   # 같은 대상이 여럿이면 실행기가 첫째를 누르므로 먼저 알려 준다
+            if parsed:
+                el, why = find_element(a["target"], parsed, strict=True)
+                if not el and why and why.startswith("같은 대상이"):
+                    return text(f"❌ 누르지 않음 — {why}"), True
+        if name == "step" and a.get("steps"):
+            lines = [str(x).strip() for x in a["steps"] if str(x).strip()]
+            outs = []
+            for k, line in enumerate(lines):
+                ok_, out = self.do(line)
+                outs.append(f"{k + 1}. {line}\n{out.strip()[-800:]}")
+                if not ok_:
+                    rest = f"\n(남은 {len(lines) - k - 1}단계는 하지 않음)" if k + 1 < len(lines) else ""
+                    return text("\n".join(outs) + rest + self.after_screen()), True
+            return text("\n".join(outs) + self.after_screen()), False
+        if name == "logs":
+            if self.ws.platform != "android":
+                return text("logs는 지금 안드로이드만 (iOS는 qakit 실행 결과의 로그를 보세요)"), True
+            args_ = ["android", "logs", "--since", str(a.get("since") or "5m"), "--level", str(a.get("level") or "W"), "-n", "200"]
+            if a.get("grep"):
+                args_ += ["--grep", str(a["grep"])]
+            if a.get("crash"):
+                args_ += ["--crash"]
+            code, out = self.qakit(*args_, timeout=60)
+            return text(out[-8000:] or "로그 없음"), code != 0
         if name in ("tap", "type_text", "swipe", "wait_for", "expect", "step"):
             if name == "tap":
                 target = a["target"]   # timeout·expect는 단계 키 (대상 안이 아님)
@@ -601,7 +713,8 @@ class McpSession:
             else:
                 line = str(a["yaml"]).strip()
             ok_, out = self.do(line)
-            return text(f"단계: {line}\n{out}"), not ok_
+            more = self.after_screen() if ok_ and name in ("tap", "swipe", "step") else ""
+            return text(f"단계: {line}\n{out}{more}"), not ok_
         if name == "recorded_steps":
             steps, from_launch = do_log_read(self.ws)
             head = "launch 이후" if from_launch else "launch 기록 없음 (앞 상태에 기대는 단계가 섞였을 수 있음 — launch부터 다시)"
@@ -757,12 +870,48 @@ qakit MCP 도구로 이 앱(시뮬레이터·에뮬레이터)을 직접 QA한다
 
 
 AI_CHAT_SYSTEM = """너는 qakit ui의 채팅창에서 QA 담당자와 대화하며 모바일 앱(시뮬레이터·에뮬레이터)을 대신 조작하는 QA 도우미다.
-- 쓸 수 있는 것은 qakit MCP 도구뿐이다. 처음 조작하기 전에 get_testing_guide를 한 번 읽는다.
+- 쓸 수 있는 것은 qakit MCP 도구뿐이다. QA(문제 찾기)를 맡을 때만 get_testing_guide를 먼저 읽는다 — 단순 조작·질문이면 바로 한다.
 - 사용자가 말한 만큼만 한다. 범위가 모호하면 짧게 되묻는다. 앱을 처음부터 다시 켜는 launch는 필요할 때만 (지금 화면에서 이어서 하는 게 기본).
 - 조작 도구마다 why(왜 하는지 한 줄)를 준다. 화면은 screen으로 읽고, 필요할 때만 screenshot.
 - 되돌릴 수 없는 일(삭제·탈퇴·결제·게시·실제 전송)은 사용자가 이 대화에서 분명히 시키기 전에는 하지 않는다.
 - 문제를 찾으면 재현한 뒤 report_issue로 남긴다. 사용자가 시나리오로 남기라고 하면 save_scenario.
 - 답은 한국어로 짧게: 한 일, 본 것(화면·결과), 다음에 할 수 있는 것. 긴 보고서 형식은 쓰지 않는다."""
+
+
+def ai_workspace_context(ws):
+    """AI에게 처음부터 알려 줄 작업공간 사정 (도구로 하나씩 찾는 왕복을 아낌): 기기·빌드·앱, 공통 단계, 시나리오, 비밀값 키 이름.
+    비밀값은 키 이름만 (값은 절대 넣지 않음)."""
+    android = ws.platform == "android"
+    app = getattr(ws, "package", None) if android else getattr(ws, "bundle_id", None)
+    lines = ["## 이 작업공간 (미리 알려 줌 — list_common_steps·list_scenarios를 다시 부르지 않아도 됨)",
+             f"- {ws.name}: {'안드로이드 에뮬레이터 ' + str(ws.emulator) if android else 'iOS 시뮬레이터 ' + str(ws.simulator)}"
+             f" · 빌드 {ws.build}" + (f" · 앱 {app}" if app else "")
+             + (" · 화면 좌표는 dp" if android else " · 화면 좌표는 pt")]
+    steps = []
+    for f in sorted((ws.root / "steps").glob("*.qa.yml")):
+        head = {}
+        with contextlib.suppress(Exception):
+            head = scenario_tools.parse_yaml(f.read_text(encoding="utf-8")) or {}
+        note = ""
+        with contextlib.suppress(OSError):   # 파일 맨 위 주석 첫 줄 = 무엇을 하는 단계인가
+            first = next((l for l in f.read_text(encoding="utf-8").splitlines() if l.strip()), "")
+            note = first.lstrip("# ").strip() if first.startswith("#") else ""
+        steps.append(f"  - use: {f.name[:-len('.qa.yml')]} — {(head.get('name') or note)[:140]}")
+    if steps:
+        lines += ["- 공통 단계 (step 도구로 \"use: <이름>\" — 여러 화면을 한 번에 지나감. 맞는 것이 있으면 하나씩 누르지 말고 이것부터):", *steps]
+    with contextlib.suppress(Exception):
+        sc = ui_scenarios(ws)
+        if sc:
+            lines.append("- 시나리오: " + ", ".join(f"{x['name']}({x['title'][:40]})" for x in sc[:30])
+                         + (f" 외 {len(sc) - 30}개" if len(sc) > 30 else ""))
+    with contextlib.suppress(Exception):
+        keys = sorted(ws.secrets())
+        if keys:
+            lines.append("- 비밀값 키 (입력은 {secret:키}, 값은 묻지도 출력하지도 않음): " + ", ".join(keys))
+    lines.append("- 조작 도구(tap·step)의 결과에 조작 뒤 화면이 붙어 온다 — 그걸로 충분하면 screen을 다시 부르지 않는다.")
+    if android:
+        lines.append("- 앱이 죽거나 멈추거나 네트워크 오류가 의심되면 logs 도구로 로그·크래시를 본다.")
+    return "\n".join(lines)
 
 
 AI_MODELS = {"claude": ["opus", "sonnet", "haiku"]}   # claude --model 별칭 (계정 기본은 빈 값)
@@ -783,8 +932,10 @@ def ai_command(engine, ws, d, prompt, turns, read_source=False, direct=False, ch
         tools = ["--tools", "Read,Grep,Glob", "--allowedTools", "mcp__qakit,Read,Grep,Glob"] if read_source \
             else ["--tools", "", "--allowedTools", "mcp__qakit"]
         extra = ["--add-dir", str(ws.app_dir)] if read_source and ws.app_dir else []
+        context = ai_workspace_context(ws)
         session = (["--resume", chat["id"]] if chat["resume"] else ["--session-id", chat["id"]]) + \
-            ["--append-system-prompt", AI_CHAT_SYSTEM] if chat else ["--no-session-persistence"]
+            ["--append-system-prompt", AI_CHAT_SYSTEM + "\n\n" + context] if chat \
+            else ["--no-session-persistence", "--append-system-prompt", context]
         return [shutil.which("claude") or "claude", "-p", prompt, "--output-format", "stream-json", "--verbose",
                 "--strict-mcp-config", "--mcp-config", str(cfg), *tools, *extra,
                 "--permission-mode", "dontAsk", "--max-turns", str(turns), *session,

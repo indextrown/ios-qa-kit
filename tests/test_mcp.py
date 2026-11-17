@@ -57,7 +57,7 @@ class Protocol(unittest.TestCase):
         self.assertIn("get_testing_guide", init["result"]["instructions"])
         self.rpc("notifications/initialized", notify=True)   # 알림에는 답하지 않는다 (다음 줄이 다음 응답)
         tools = {t["name"]: t for t in self.rpc("tools/list")["result"]["tools"]}
-        self.assertEqual(len(tools), 20)
+        self.assertEqual(len(tools), 21)
         self.assertIn("why", tools["tap"]["inputSchema"]["properties"])
         self.assertNotIn("why", tools["screen"]["inputSchema"]["properties"])
         guide = self.rpc("tools/call", {"name": "get_testing_guide", "arguments": {}})["result"]
