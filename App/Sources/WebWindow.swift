@@ -91,7 +91,17 @@ class WebWindow: NSObject, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url else { return decisionHandler(.allow) }
         if url.scheme == "qakit-app" {
-            if url.absoluteString.hasSuffix("retry") { retry() }
+            let app = NSApp.delegate as? AppDelegate
+            switch url.host {
+            case "open":   // 웹 화면의 작업공간 바꾸기 → 그 작업공간 창 (이미 열려 있으면 그 창으로)
+                if let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "path" })?.value {
+                    app?.open(path: path)
+                }
+            case "open-folder":
+                app?.openFolder(nil)
+            default:
+                if url.absoluteString.hasSuffix("retry") { retry() }
+            }
             return decisionHandler(.cancel)
         }
         if action.shouldPerformDownload { return decisionHandler(.download) }   // <a download>

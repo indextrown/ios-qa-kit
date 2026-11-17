@@ -4,6 +4,7 @@ import { cx, store, stored } from "../lib/util";
 import type { Info } from "../lib/api";
 import { getTheme, setTheme, type Theme } from "../lib/theme";
 import { WorktreePanel } from "./WorktreePanel";
+import { WorkspaceSwitch } from "./WorkspaceSwitch";
 
 type NavItem = { id: string; href: string; label: string; icon: typeof Bot };
 const GROUPS: { label: string; items: NavItem[] }[] = [
@@ -48,10 +49,7 @@ export function Layout({ active, info, running, crumbs, children }:
       <aside className={cx("flex shrink-0 flex-col border-r border-line bg-side transition-[width] duration-150", narrow ? "w-[56px]" : "w-60")}>
         <div className={cx("flex h-12 items-center gap-2", narrow ? "justify-center" : "px-4")}>
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-fg"><Smartphone className="h-4 w-4" /></div>
-          {!narrow && <div className="min-w-0 leading-tight">
-            <div className="text-[14px] font-semibold tracking-head">qakit</div>
-            <div className="truncate text-[11px] text-sub">{info?.name ?? "…"}</div>
-          </div>}
+          {!narrow && <WorkspaceSwitch name={info?.name ?? "…"} />}
         </div>
         <nav className="flex flex-1 flex-col gap-4 overflow-y-auto px-2 py-3">
           {GROUPS.map((g) => (
