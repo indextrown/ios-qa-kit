@@ -248,12 +248,6 @@ def system_checks(timeout=DOCTOR_TIMEOUT):
         except OSError:
             return subprocess.CompletedProcess(cmd, 127, "", "")
 
-    def limited(fn, *a):   # → (결과, 시간을 넘겼는지)
-        try:
-            return fn(*a), False
-        except subprocess.TimeoutExpired:
-            return None, True
-
     def java():
         try:
             return android_java_home(timeout=timeout)
@@ -358,7 +352,7 @@ def cmd_doctor(args):
 
     info(f"작업공간: {ws.root}")
     if ws.platform == "android":
-        return android_doctor_ws(ws, check, lambda: problems)
+        return android_doctor_ws(ws, check, lambda: problems, timeout=timeout)
     try:
         xc = run(["xcodebuild", "-version"], check=False, timeout=timeout)
         check(xc.returncode == 0, (xc.stdout or "").splitlines()[0] if xc.stdout else "", "Xcode 없음",

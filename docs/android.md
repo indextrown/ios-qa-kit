@@ -35,7 +35,7 @@ qakit doctor && qakit build-app && qakit run <시나리오>
 | 명령 | 하는 일 |
 |---|---|
 | `qakit android setup` | JDK 17·Android SDK·에뮬레이터·AVD(`qakit`) 설치. **Android Studio 없이**. 태블릿: `--avd qakit-tablet --device-profile pixel_tablet` |
-| `qakit android doctor` | 안드로이드 도구·AVD·연결된 기기 점검 |
+| `qakit android doctor` | 안드로이드 도구·AVD·연결된 기기 점검. adb·emulator가 20초(`--timeout`) 안에 답하지 않으면 그 항목만 "확인 못 함" (adb 서버가 멈췄으면 `adb kill-server` 뒤 다시) |
 | `qakit android boot [--avd 이름] [--landscape]` | 에뮬레이터 띄우기 (부팅 완료까지 기다림). `--landscape`: 가로로 고정 |
 | `qakit android rotate landscape\|portrait\|auto` | 실행 중인 에뮬레이터 화면 방향 바꾸기 |
 | `qakit android screen [--json]` | 지금 화면의 앱·Activity·Fragment |

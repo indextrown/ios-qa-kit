@@ -43,10 +43,10 @@ def android_java_home(timeout=None):
     return None
 
 
-def android_env():
-    """sdkmanager·avdmanager·gradle이 쓸 환경 변수 (JAVA_HOME, ANDROID_HOME)."""
+def android_env(timeout=None):
+    """sdkmanager·avdmanager·gradle이 쓸 환경 변수 (JAVA_HOME, ANDROID_HOME). timeout: java_home을 기다리는 최대 초"""
     env = dict(os.environ)
-    jh, sdk = android_java_home(), android_sdk_root()
+    jh, sdk = android_java_home(timeout), android_sdk_root()
     if jh:
         env["JAVA_HOME"] = str(jh)
         env["PATH"] = f"{jh}/bin:" + env.get("PATH", "")
@@ -77,12 +77,13 @@ def require_tool(name):
 
 # ─────────────────────────────── 기기 (에뮬레이터·USB) ───────────────────────────────
 
-def adb_devices():
-    """[(serial, state, 설명)] — state: device | offline | unauthorized."""
+def adb_devices(timeout=None):
+    """[(serial, state, 설명)] — state: device | offline | unauthorized.
+    timeout초 안에 답이 없으면 subprocess.TimeoutExpired (adb 서버가 멈추면 끝나지 않는다 — qakit doctor)"""
     adb = android_tool("adb")
     if not adb:
         return []
-    r = run([adb, "devices", "-l"], check=False)
+    r = run([adb, "devices", "-l"], check=False, timeout=timeout)
     rows = []
     for line in (r.stdout or "").splitlines():
         parts = line.split()
@@ -93,26 +94,27 @@ def adb_devices():
     return rows
 
 
-def android_avds():
+def android_avds(timeout=None):
     emu = android_tool("emulator")
     if not emu:
         return []
-    r = run([emu, "-list-avds"], check=False, env=android_env())
+    r = run([emu, "-list-avds"], check=False, env=android_env(timeout), timeout=timeout)
     return [l.strip() for l in (r.stdout or "").splitlines() if l.strip() and not l.startswith("INFO")]
 
 
-def emulator_avd_name(serial):
+def emulator_avd_name(serial, timeout=None):
     """실행 중인 에뮬레이터의 AVD 이름 (실기기면 None)."""
     if not serial.startswith("emulator-"):
         return None
-    r = run([android_tool("adb"), "-s", serial, "emu", "avd", "name"], check=False)
+    r = run([android_tool("adb"), "-s", serial, "emu", "avd", "name"], check=False, timeout=timeout)
     lines = [l.strip() for l in (r.stdout or "").splitlines() if l.strip() and l.strip() != "OK"]
     return lines[0] if lines else None
 
 
-def android_serial(avd=None, boot=True, headless=False):
-    """쓸 기기 serial. ANDROID_SERIAL → 실행 중인 avd 에뮬레이터 → 연결된 기기 하나 → (boot면) avd를 띄움."""
-    ready = [s for s, st, _ in adb_devices() if st == "device"]
+def android_serial(avd=None, boot=True, headless=False, timeout=None):
+    """쓸 기기 serial. ANDROID_SERIAL → 실행 중인 avd 에뮬레이터 → 연결된 기기 하나 → (boot면) avd를 띄움.
+    timeout: adb 명령 하나를 기다리는 최대 초 (넘기면 subprocess.TimeoutExpired — qakit doctor)"""
+    ready = [s for s, st, _ in adb_devices(timeout) if st == "device"]
     want = os.environ.get("ANDROID_SERIAL")
     if want:
         if want not in ready:
@@ -120,7 +122,7 @@ def android_serial(avd=None, boot=True, headless=False):
         return want
     if avd:
         for s in ready:
-            if emulator_avd_name(s) == avd:
+            if emulator_avd_name(s, timeout) == avd:
                 return s
     elif len(ready) == 1:
         return ready[0]
@@ -253,32 +255,56 @@ def android_avd_enable_gpu(avd):
     f.write_text("\n".join(lines + [f"{k}={v}" for k, v in AVD_TUNING.items()]) + "\n")
 
 
-def android_doctor_lines():
-    """[(정상 여부, 정상 문구, 문제 문구, 안내)] — qakit android doctor와 작업공간 doctor가 함께 쓴다."""
-    jh, sdk = android_java_home(), android_sdk_root()
+def android_doctor_lines(timeout=None):
+    """→ ([(정상 여부, 정상 문구, 문제 문구, 안내)], AVD 목록, 기기 목록) — qakit android doctor와 작업공간 doctor가 함께 쓴다.
+    바깥 명령(java_home·emulator -list-avds·adb devices)은 동시에 돌리고 각각 timeout초까지만 기다린다 — 넘기면 그 줄은
+    "확인 못 함"이고 목록은 None (adb 서버가 멈추면 adb devices가 끝나지 않는다)."""
+    import concurrent.futures
+
+    def java():
+        try:
+            return android_java_home(timeout)
+        except OSError:   # java_home이 없는 시스템
+            return None
+
+    def slow(what, cmd, hint="잠시 뒤 다시 점검"):
+        return (False, "", f"{what} 확인 못 함 — {timeout}초 안에 답이 없음 ({cmd})",
+                f"{hint} — 계속 느리면 --timeout {(timeout or 0) * 3}")
+
+    with concurrent.futures.ThreadPoolExecutor(3) as pool:
+        java_f = pool.submit(limited, java)
+        avds_f = pool.submit(limited, android_avds, timeout)
+        devs_f = pool.submit(limited, adb_devices, timeout)
+    (jh, java_slow), (avds, avds_slow), (devs, devs_slow) = java_f.result(), avds_f.result(), devs_f.result()
+    sdk = android_sdk_root()
     rows = [
-        (bool(jh), f"JDK: {jh}", "JDK 17 없음", "qakit android setup"),
+        slow("JDK", "/usr/libexec/java_home") if java_slow else (bool(jh), f"JDK: {jh}", "JDK 17 없음", "qakit android setup"),
         (bool(sdk), f"Android SDK: {sdk}", "Android SDK 없음", "qakit android setup"),
         (bool(android_tool("adb")), "adb 설치됨", "adb 없음 (platform-tools)", "qakit android setup"),
         (bool(android_tool("emulator")), "emulator 설치됨", "emulator 없음", "qakit android setup"),
     ]
-    avds = android_avds()
-    rows.append((bool(avds), f"AVD: {', '.join(avds)}", "AVD 없음", "qakit android setup"))
-    off = [a for a in avds if android_avd_tuned(a) is False]
-    rows.append((not off, "AVD 설정 (GPU 가속·하드웨어 키보드)",
-                 f"AVD 설정이 qakit용이 아님: {', '.join(off)} (GPU 가속이 꺼지면 라이브 화면 1fps 안팎, 하드웨어 키보드가 없으면 "
-                 "소프트 키보드가 버튼을 가림)", "qakit android setup --avd <이름> 으로 맞춘 뒤 에뮬레이터 다시 켜기"))
-    devs = adb_devices()
-    ready = [f"{s}{' ' + d if d else ''}" for s, st, d in devs if st == "device"]
-    bad = [f"{s}({st})" for s, st, _ in devs if st != "device"]
-    rows.append((not bad, f"연결된 기기: {', '.join(ready) or '(없음 — qakit android boot)'}",
-                 f"응답 없는 기기: {', '.join(bad)}", "unauthorized면 기기에서 USB 디버깅 허용"))
-    return rows
+    if avds_slow:
+        rows.append(slow("AVD", "emulator -list-avds"))
+    else:
+        rows.append((bool(avds), f"AVD: {', '.join(avds)}", "AVD 없음", "qakit android setup"))
+        off = [a for a in avds if android_avd_tuned(a) is False]
+        rows.append((not off, "AVD 설정 (GPU 가속·하드웨어 키보드)",
+                     f"AVD 설정이 qakit용이 아님: {', '.join(off)} (GPU 가속이 꺼지면 라이브 화면 1fps 안팎, 하드웨어 키보드가 없으면 "
+                     "소프트 키보드가 버튼을 가림)", "qakit android setup --avd <이름> 으로 맞춘 뒤 에뮬레이터 다시 켜기"))
+    if devs_slow:
+        rows.append(slow("연결된 기기", "adb devices", "adb 서버가 멈췄으면 adb kill-server 뒤 다시 점검"))
+    else:
+        ready = [f"{s}{' ' + d if d else ''}" for s, st, d in devs if st == "device"]
+        bad = [f"{s}({st})" for s, st, _ in devs if st != "device"]
+        rows.append((not bad, f"연결된 기기: {', '.join(ready) or '(없음 — qakit android boot)'}",
+                     f"응답 없는 기기: {', '.join(bad)}", "unauthorized면 기기에서 USB 디버깅 허용"))
+    return rows, avds, devs
 
 
 def cmd_android_doctor(args):
     problems = 0
-    for good, okmsg, badmsg, hint in android_doctor_lines():
+    rows, _, _ = android_doctor_lines(getattr(args, "timeout", DOCTOR_TIMEOUT))
+    for good, okmsg, badmsg, hint in rows:
         if good:
             ok(okmsg)
         else:
@@ -565,9 +591,10 @@ def android_dump_ui_ws(ws, args):
         time.sleep(1)
 
 
-def android_doctor_ws(ws, check, problem_count):
-    """작업공간(platform: android)의 qakit doctor."""
-    for good, okmsg, badmsg, hint in android_doctor_lines():
+def android_doctor_ws(ws, check, problem_count, timeout=None):
+    """작업공간(platform: android)의 qakit doctor. timeout: 바깥 명령(adb·emulator) 하나를 기다리는 최대 초."""
+    rows, avds, devs = android_doctor_lines(timeout)
+    for good, okmsg, badmsg, hint in rows:
         check(good, okmsg, badmsg, hint)
     gradle_root = ws.app_dir
     check(gradle_root and gradle_root.is_dir() and any((gradle_root / n).exists() for n in
@@ -575,12 +602,24 @@ def android_doctor_ws(ws, check, problem_count):
           f"Gradle 프로젝트: {gradle_root}", f"Gradle 프로젝트 아님: {gradle_root}",
           "qakit.yml의 app.project에 settings.gradle(.kts)가 있는 폴더를 적으세요")
     check(bool(ws.package), f"packageName: {ws.package}", "app.packageName 비어 있음")
-    check(ws.emulator in android_avds(), f"에뮬레이터(AVD): {ws.emulator}", f"AVD '{ws.emulator}' 없음",
-          "qakit android setup --avd " + ws.emulator)
-    serial = android_serial(ws.emulator, boot=False) if ws.emulator in android_avds() else None
+    if avds is not None:   # None이면 위에서 "AVD 확인 못 함"을 이미 알렸다
+        check(ws.emulator in avds, f"에뮬레이터(AVD): {ws.emulator}", f"AVD '{ws.emulator}' 없음",
+              "qakit android setup --avd " + ws.emulator)
+    serial = None
+    if avds is not None and ws.emulator in avds and devs is not None:   # adb가 멈췄으면 다시 기다리지 않는다
+        try:
+            serial = android_serial(ws.emulator, boot=False, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            check(False, "", f"실행 중인 에뮬레이터 확인 못 함 — {timeout}초 안에 답이 없음 (adb emu avd name)",
+                  f"잠시 뒤 다시 qakit doctor — 계속 느리면 --timeout {(timeout or 0) * 3}")
     if serial and ws.package:
-        r = adb(serial, "shell", "pm", "path", ws.package, check=False)
-        check(r.stdout.startswith("package:"), "대상 앱 설치됨", "대상 앱이 기기에 없음", "qakit build-app")
+        try:
+            r = subprocess.run([android_tool("adb"), "-s", serial, "shell", "pm", "path", ws.package],
+                               capture_output=True, text=True, timeout=timeout)
+            check(r.stdout.startswith("package:"), "대상 앱 설치됨", "대상 앱이 기기에 없음", "qakit build-app")
+        except subprocess.TimeoutExpired:
+            check(False, "", f"대상 앱 설치 확인 못 함 — {timeout}초 안에 답이 없음 (adb shell pm path)",
+                  f"잠시 뒤 다시 qakit doctor — 계속 느리면 --timeout {(timeout or 0) * 3}")
     print()
     if problem_count():
         fail(f"문제 {problem_count()}개", "위 → 안내대로 고친 뒤 다시 qakit doctor")
