@@ -187,6 +187,9 @@ class Workspace:
         self.project = expand(app.get("project", ""), self.root)
         self.scheme = app.get("scheme", "")
         self.configuration = app.get("configuration", "Debug")
+        # xcodebuild에 덧붙일 인자 (프로젝트마다 필요한 빌드 설정, 예: ["EXCLUDED_ARCHS=x86_64"])
+        extra = app.get("buildArgs") or []
+        self.build_args = [str(x) for x in (extra if isinstance(extra, list) else str(extra).split())]
         self.bundle_id = app.get("bundleId", "")
         self.simulator = str(self.cfg.get("simulator", "iPhone 17"))
         self.platform = str(self.cfg.get("platform", "ios")).lower()   # ios | android

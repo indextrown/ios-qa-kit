@@ -448,6 +448,21 @@ def cmd_build_app(args):
         cmd_build_app_ws(ws)
 
 
+def sim_arch():
+    """시뮬레이터용으로 빌드할 아키텍처 = 이 맥 (Apple 실리콘 arm64, 인텔 x86_64). Rosetta로 돌아도 실제 칩 기준"""
+    r = subprocess.run(["sysctl", "-n", "hw.optional.arm64"], capture_output=True, text=True)
+    return "arm64" if r.stdout.strip() == "1" else "x86_64"
+
+
+def arch_hint(log):
+    """링크가 아키텍처 불일치로 실패했으면 원인·우회법 한 줄"""
+    m = re.search(r"found architecture '([\w-]+)', required architecture '([\w-]+)'", log)
+    if not m:
+        return None
+    return (f"원인: 바이너리 의존성(xcframework·라이브러리)에 {m.group(2)} 조각이 없음 ({m.group(1)}만 있음). "
+            f"qakit.yml app.buildArgs로 아키텍처를 지정하세요 — 예) buildArgs: [\"ARCHS={m.group(1)}\", \"EXCLUDED_ARCHS={m.group(2)}\"]")
+
+
 def cmd_build_app_ws(ws):
     if ws.platform == "android":
         return android_build_app(ws)
@@ -466,6 +481,11 @@ def cmd_build_app_ws(ws):
            "-derivedDataPath", str(ws.app_build_dir)]
     if ws.device:
         cmd += ["-allowProvisioningUpdates", f"DEVELOPMENT_TEAM={device_team(ws)}"]
+    else:
+        # 시뮬레이터는 이 맥의 아키텍처 하나만 (generic 대상은 arm64·x86_64를 모두 빌드 → 시뮬레이터 조각이 arm64뿐인
+        # 바이너리 의존성(xcframework)이 x86_64 링크에서 실패). 빌드도 거의 절반으로 준다
+        cmd += [f"ARCHS={sim_arch()}", "ONLY_ACTIVE_ARCH=YES"]
+    cmd += ws.build_args
     state = app_state(ws)
     before = git(ws.app_dir, "status", "--porcelain", "--", *app_pathspec(ws))
     # SwiftUI 소스에 ID를 끼워 넣고 빌드한 뒤, 무슨 일이 있어도(실패·Ctrl-C) 원래대로 되돌린다
@@ -485,7 +505,8 @@ def cmd_build_app_ws(ws):
         warn("빌드 중 앱 레포 파일이 바뀌었습니다 (QA가 만든 변경일 수 있음): " + ", ".join(c[3:] for c in changed))
     if r.returncode != 0:
         errors = [l for l in (r.stdout or "").splitlines() if "error:" in l]
-        fail("앱 빌드 실패", "\n   ".join(dict.fromkeys(errors[:15])) or f"로그: {log_path}")
+        hint = arch_hint(r.stdout or "")
+        fail("앱 빌드 실패", "\n   ".join(list(dict.fromkeys(errors[:15])) + ([hint] if hint else [])) or f"로그: {log_path}")
 
     app_path = find_built_app(ws)
     if not app_path:
