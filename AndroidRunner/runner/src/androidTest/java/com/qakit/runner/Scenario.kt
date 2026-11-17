@@ -34,6 +34,15 @@ class Scenario(private val screen: Screen, private val app: AppControl) {
     private var handlingInterrupt = false
     private var currentStep = JSONObject()
     private var lastInterruptPoll = 0L
+    // 끼어드는 화면 확인에서 막 읽은 화면 구조 — 그 단계의 첫 대상 찾기(waitFor)가 다시 읽지 않고 쓴다 (0.3초 안, 한 번만)
+    private var freshTree: Screen.Tree? = null
+    private var freshAt = 0L
+
+    private fun takeFresh(): Screen.Tree? {
+        val t = freshTree?.takeIf { now() - freshAt < 300 }
+        freshTree = null
+        return t
+    }
 
     private fun note(s: String) { notes += s }
     private fun now() = SystemClock.elapsedRealtime()
@@ -135,14 +144,17 @@ class Scenario(private val screen: Screen, private val app: AppControl) {
         handlingInterrupt = true
         try {
             val currentIds = ids(current)
+            var shared = lazy { screen.tree() }   // 끼어드는 화면 조건들은 화면 구조 한 번으로 (전에는 조건마다 새로 읽음)
             for (step in interrupts) {
                 if (currentIds.intersect(ids(step)).isNotEmpty()) continue
                 val cond = step.opt("if") ?: step.opt("unless")
-                var hit = evaluate(cond!!, 0.0)
+                var hit = check(cond!!, shared)
                 if (step.has("unless")) hit = !hit
                 if (!hit) continue
+                freshTree = null
                 note(step.optString("note").takeIf { it.isNotEmpty() }?.let { text(it) } ?: "끼어든 화면 처리")
                 runSteps(step.optJSONArray("then") ?: JSONArray())
+                shared = lazy { screen.tree() }   // 처리했으면 화면이 바뀜 → 다음 조건은 새로 읽은 화면으로
                 val end = now() + 3000
                 while (now() < end) {
                     var still = evaluate(cond, 0.0)
@@ -151,6 +163,7 @@ class Scenario(private val screen: Screen, private val app: AppControl) {
                     sleep(0.3)
                 }
             }
+            if (shared.isInitialized()) { freshTree = shared.value; freshAt = now() }
         } finally {
             handlingInterrupt = false
         }
@@ -166,12 +179,12 @@ class Scenario(private val screen: Screen, private val app: AppControl) {
             }
             step.has("tap") -> {
                 val target = step.get("tap")
-                waitFor(target, number(step.opt("timeout")) ?: 10.0)
+                val seen = waitFor(target, number(step.opt("timeout")) ?: 10.0)
                 val effect = step.opt("expect")?.let { frontmost(it) }
                 if (effect != null && check(effect)) {
                     throw fail("누르기 전에 이미 기대 효과가 맞음 → 탭의 효과를 확인할 수 없음: ${compact(effect)}")
                 }
-                val node = waitUntilSettled(target) ?: throw fail("10초 안에 나타나지 않음: ${compact(target)}")
+                val node = waitUntilSettled(target, seen) ?: throw fail("10초 안에 나타나지 않음: ${compact(target)}")
                 screen.tap(node)
                 if (effect != null && !evaluate(effect, number(step.opt("expect-timeout")) ?: 10.0)) {
                     throw fail("탭 뒤 기대 효과가 나타나지 않음 (탭이 무시됐거나 다른 곳에 닿았을 수 있음): ${compact(effect)}")
@@ -444,11 +457,13 @@ class Scenario(private val screen: Screen, private val app: AppControl) {
         return false
     }
 
-    private fun check(raw: Any?): Boolean {
+    /** shared: 한 번 읽은 화면 구조를 여러 조건이 같이 쓴다 (all·any·not 안쪽, 끼어드는 화면 여러 개).
+     *  화면이 필요 없는 조건(equals·pref)은 읽지 않는다. 화면 구조 한 번 읽기 = 접근성 캐시 비우고 전체 트리 (수십~100ms) */
+    private fun check(raw: Any?, shared: Lazy<Screen.Tree> = lazy { screen.tree() }): Boolean {
         val c = raw as? JSONObject
         val key = c?.keys()?.asSequence()?.firstOrNull() ?: throw fail("조건 형식 오류: ${compact(raw)}")
         val value = c.get(key)
-        val tree = screen.tree()
+        val tree by shared
         return when (key) {
             "exists" -> find(value, tree) != null
             "missing" -> find(value, tree) == null
@@ -496,9 +511,9 @@ class Scenario(private val screen: Screen, private val app: AppControl) {
                 if (spec.has("ne")) return formatPref(actual) != text(spec.get("ne"))
                 throw fail("pref 비교 연산이 없음 (gte/lte/gt/lt/eq/ne/exists)")
             }
-            "not" -> !check(value)
-            "all" -> (value as? JSONArray)?.let { a -> (0 until a.length()).all { check(a.get(it)) } } ?: true
-            "any" -> (value as? JSONArray)?.let { a -> (0 until a.length()).any { check(a.get(it)) } } ?: false
+            "not" -> !check(value, shared)
+            "all" -> (value as? JSONArray)?.let { a -> (0 until a.length()).all { check(a.get(it), shared) } } ?: true
+            "any" -> (value as? JSONArray)?.let { a -> (0 until a.length()).any { check(a.get(it), shared) } } ?: false
             else -> throw fail("알 수 없는 조건: $key")
         }
     }
@@ -579,21 +594,21 @@ class Scenario(private val screen: Screen, private val app: AppControl) {
 
     // ───────────────────────────── 도움 함수 ─────────────────────────────
 
-    private fun waitFor(target: Any?, timeout: Double, what: Any? = target) {
-        if (find(target) != null) return
+    private fun waitFor(target: Any?, timeout: Double, what: Any? = target): Screen.Node? {
+        find(target, takeFresh() ?: screen.tree())?.let { return it }
         val deadline = now() + (timeout * 1000).toLong()
         do {
             pollInterrupts()
             sleep(0.5)
-            if (find(target) != null) return
+            find(target)?.let { return it }
         } while (now() < deadline)
         throw fail("${timeout.toInt()}초 안에 나타나지 않음: ${compact(what)}")
     }
 
     /** 누르기 직전: 위치가 두 번 연달아 같을 때까지 (최대 2초). 마지막에 본 노드를 돌려준다. */
-    private fun waitUntilSettled(target: Any?): Screen.Node? {
+    private fun waitUntilSettled(target: Any?, first: Screen.Node? = null): Screen.Node? {
         val deadline = now() + 2000
-        var last = find(target)
+        var last = first ?: find(target)
         while (now() < deadline) {
             sleep(0.1)
             val cur = find(target)
