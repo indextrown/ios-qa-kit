@@ -216,7 +216,7 @@ def cmd_serve(args):
             info("상주 실행기 없음")
         return
     with sim_lock(ws, "qakit serve"):
-        if st and serve_alive(st) and st.get("workspace") == str(ws.root) \
+        if st and serve_alive(st) and st.get("workspace") == str(ws.root) and serve_same_app(ws, st) \
                 and st.get("runnerHash") == scenario_runner_source_hash():
             ok(f"이미 실행 중입니다 (포트 {st['port']}). 멈추려면 qakit serve --stop")
             return
