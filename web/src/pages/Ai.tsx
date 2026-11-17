@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
-import { Layers, Loader2, MousePointer2, RefreshCw } from "lucide-react";
-import { get, type AiSession, type El, type Elements } from "../lib/api";
+import { Camera, Layers, Loader2, MonitorSmartphone, MousePointer2, RefreshCw } from "lucide-react";
+import { get, screenUrl, type AiSession, type El, type Elements } from "../lib/api";
+import { Sep, ToolBtn } from "../components/ToolBar";
 import { aiSecs, aiWhen } from "./AiSession";
 import { cx, store, stored } from "../lib/util";
 import { AiActivity } from "../components/AiActivity";
 import { AiChat } from "../components/AiChat";
 import { RobotCursor } from "../components/RobotCursor";
-import { Badge, Button, Card, Empty, PageHeader } from "../components/ui";
+import { Badge, Card, Empty, PageHeader } from "../components/ui";
 import { StreamImg } from "../components/StreamImg";
 
 const noop = () => {};
@@ -38,6 +39,18 @@ export function Ai() {
     return () => { alive = false; clearTimeout(t); };
   }, []);
   useEffect(() => { if (layer && !aiRunning) readEls(); }, [layer, aiRunning, readEls]);
+  const [note, setNote] = useState<string | null>(null);
+  useEffect(() => { if (!note) return; const t = setTimeout(() => setNote(null), 5000); return () => clearTimeout(t); }, [note]);
+  const saveShot = async () => {   // 지금 화면을 내 컴퓨터로 (라이브 세션과 같음)
+    try {
+      const r = await fetch(screenUrl(), { cache: "no-store" });
+      if (!r.ok) throw new Error(String(r.status));
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a"); a.href = url; a.download = `qakit-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.jpg`;
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+      setNote("사진을 내려받았습니다");
+    } catch (e) { setNote(`사진 저장 실패: ${(e as Error).message}`); }
+  };
   const [past, setPast] = useState<AiSession[] | null>(null);
   const loadPast = useCallback(() => { get<AiSession[]>("/api/ai/sessions").then(setPast).catch(() => {}); }, []);
   useEffect(() => { loadPast(); const t = setInterval(loadPast, 15000); return () => clearInterval(t); }, [loadPast]);
@@ -47,17 +60,21 @@ export function Ai() {
       <PageHeader title="AI" description="말로 시키면 AI(Claude Code)가 qakit 도구로 앱을 직접 조작합니다. 짧은 건 대화로, 오래 걸리는 QA는 맡기기로, 확인한 흐름은 시나리오로 남깁니다. 사용량은 그 AI 계정에서 씁니다." />
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_460px]">
         <div className="min-w-0 space-y-4">
-          <div className="flex items-center justify-between">
-            <span className="text-[12px] text-sub">AI가 누르는 자리로 커서가 움직입니다 · 직접 조작은 <a href="#/live" className="text-link hover:underline">라이브 세션</a></span>
-            <span className="flex items-center gap-1">
-              {layer && <Button size="sm" variant="ghost" onClick={readEls} disabled={reading || aiRunning} title={aiRunning ? "AI가 조작하는 동안은 끝나면 다시 읽습니다" : "화면 구조 다시 읽기"}>
-                {reading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}</Button>}
-              <Button size="sm" variant="ghost" onClick={() => setLayer(!layer)} className={cx(layer ? "bg-muted font-medium" : "text-sub")}
-                title="화면 요소 상자 (파랑: ID 있음, 노랑 점선: ID 없음)"><Layers className="h-3.5 w-3.5" />레이어 {layer ? "켬" : "끔"}</Button>
-              <Button size="sm" variant="ghost" onClick={() => setCursor(!cursor)} className={cx(cursor ? "bg-muted font-medium" : "text-sub")}>
-                <MousePointer2 className="h-3.5 w-3.5" />커서 {cursor ? "켬" : "끔"}</Button>
-            </span>
-          </div>
+          <div className="flex items-start justify-center gap-4">
+            {/* 세로 도구 막대 (라이브 세션과 같은 모양) */}
+            <div className="sticky top-4 z-30 flex flex-col gap-0.5 rounded-xl bg-card p-1 ring-1 ring-line">
+              <ToolBtn label={`레이어 ${layer ? "끄기" : "켜기"} — 화면 요소 상자 (파랑: ID 있음, 노랑 점선: ID 없음)`} active={layer} onClick={() => setLayer(!layer)}>
+                <Layers className="h-4 w-4" /></ToolBtn>
+              <ToolBtn label={aiRunning ? "AI가 조작하는 동안은 끝나면 다시 읽습니다" : "화면 구조 다시 읽기"} onClick={() => { setLayer(true); readEls(); }} disabled={reading || aiRunning}>
+                {reading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}</ToolBtn>
+              <Sep />
+              <ToolBtn label={`커서 ${cursor ? "끄기" : "켜기"} — AI가 누르는 자리`} active={cursor} onClick={() => setCursor(!cursor)}>
+                <MousePointer2 className="h-4 w-4" /></ToolBtn>
+              <Sep />
+              <ToolBtn label="사진 내려받기" onClick={saveShot}><Camera className="h-4 w-4" /></ToolBtn>
+              <ToolBtn label="라이브 세션에서 직접 조작" onClick={() => { location.hash = "#/live"; }}><MonitorSmartphone className="h-4 w-4" /></ToolBtn>
+            </div>
+            <div className="w-full min-w-0 space-y-2">
           <div className={cx("mx-auto w-full bg-neutral-900 shadow-e3 ring-1 ring-black/40", wide ? "max-w-[880px] rounded-[30px] p-[9px]" : "max-w-[360px] rounded-[44px] p-[11px]")}>
             <div className={cx("relative overflow-hidden bg-black", wide ? "rounded-[22px]" : "rounded-[34px]")}>
               <StreamImg src="/api/stream?k=ai" alt="기기 화면 (실시간)" className="block w-full" style={{ aspectRatio: wide ? undefined : "9 / 19.5" }}
@@ -78,6 +95,9 @@ export function Ai() {
             {hover ? <><code className="font-mono">{hover.type}{hover.id ? ` #${hover.id}` : ""}</code>{hover.label ? ` "${hover.label}"` : ""}</>
               : aiRunning ? "AI가 조작하는 중 — 끝나면 레이어를 다시 읽습니다" : els ? `요소 ${els.elements.length}개 · 상자에 마우스를 올리면 이름` : "화면 구조 읽는 중…"}
           </div>}
+          {note && <div className="text-center text-[11.5px] text-sub">{note}</div>}
+            </div>
+          </div>
           <AiActivity onBusy={noop} />
           <Card title="지난 대화·작업" actions={<span className="text-[11px] text-sub">results/ai/</span>}>
             {past == null ? <Empty>불러오는 중…</Empty> : past.length === 0 ? <Empty>아직 없습니다 (터미널의 Claude Code·Codex가 qakit mcp로 한 것도 여기에 쌓입니다)</Empty> : (
