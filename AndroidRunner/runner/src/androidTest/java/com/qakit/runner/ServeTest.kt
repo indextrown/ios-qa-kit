@@ -73,6 +73,7 @@ class ServeTest {
                     val body = if (req.body.isBlank()) JSONObject() else JSONTokener(req.body).nextValue()
                     runner.notes.clear()
                     runner.dumpFiles = mutableMapOf()
+                    FrameServer.busy += 1   // 명령을 하는 동안 라이브 화면은 천천히 (화면 캡처와 화면 구조 읽기가 UiAutomation 하나를 나눠 씀)
                     try {
                         when (req.path) {
                             "/ping" -> json.put("appState", app.state())
@@ -115,6 +116,8 @@ class ServeTest {
                         ok = false; message = e.message ?: ""
                     } catch (e: Throwable) {
                         ok = false; message = "실행기 오류: ${e.javaClass.simpleName}: ${e.message}"
+                    } finally {
+                        FrameServer.busy -= 1
                     }
                     if (!ok && (req.path == "/step" || req.path == "/run") && app.isRunning()) {
                         runCatching { json.put("xml", screen.xml()) }   // 실패 시점 화면 구조

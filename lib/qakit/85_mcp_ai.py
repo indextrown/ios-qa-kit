@@ -454,8 +454,44 @@ class McpSession:
         return code == 0, out
 
     def do(self, step):
+        """단계 하나 → (통과, 글). 떠 있는 실행기에 바로 보낸다 (qakit do 프로세스를 띄우는 0.5초+를 아낌, tapflow처럼 한 프로세스에서).
+        실행기가 없거나·옛 코드·다른 빌드면 qakit do로 (실행기를 띄우거나 다시 띄움)."""
+        fast = self.do_direct(step)
+        if fast is not None:
+            return fast
         code, out = self.qakit("do", step)
         return code == 0, out
+
+    def do_direct(self, text):
+        if text.strip() in SERVE_COMMANDS:   # launch·reset·dump 등은 qakit do가 기록·실행기 관리까지
+            return None
+        try:
+            step = scenario_tools.parse_yaml(text)
+            if isinstance(step, list) and len(step) == 1:
+                step = step[0]
+            if not isinstance(step, dict):
+                return None
+            steps = scenario_tools._expand([step], self.ws.root, ["qakit do"])   # use: 공통 단계 펼치기
+        except Exception:  # noqa: BLE001 — 형식 오류는 qakit do가 친절하게 알려 줌
+            return None
+        body = steps[0] if len(steps) == 1 else {"group": "qakit do", "steps": steps}
+        res = self.serve_direct("/step", body, timeout=120)
+        if res is None:
+            return None
+        secs = (res.get("durationMs") or 0) / 1000
+        save_serve_files(self.ws, res)
+        if res.get("ok"):
+            do_log_write(self.ws, {"step": text})
+            return True, f"✅ {secs:.1f}초"
+        lines = [f"❌ {self.mask(res.get('message') or '실패')}  ({secs:.1f}초)"]
+        dump = res.get("dump")
+        if dump:
+            out = self.ws.results_dir / "do-fail-dump.txt"
+            self.ws.results_dir.mkdir(exist_ok=True)
+            out.write_text(self.mask(dump), encoding="utf-8")
+            lines += [self.mask(x) for x in suggestion_lines(res.get("message") or "", dump)]
+            lines.append(f"   실패 시점 화면 구조: {out}")
+        return False, "\n".join(lines)
 
     def after_screen(self, settle=0.5, limit=120):
         """조작 뒤 화면 요약 (AI가 screen을 다시 부르는 왕복을 아낌). QAKIT_AI_AUTOSCREEN=0이면 끔"""
