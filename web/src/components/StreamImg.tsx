@@ -11,5 +11,7 @@ export function StreamImg(props: React.ImgHTMLAttributes<HTMLImageElement>) {
     window.addEventListener("pagehide", stop);
     return () => { window.removeEventListener("pagehide", stop); stop(); };
   }, []);
-  return <img ref={ref} {...props} />;
+  // 기기 화면은 사진이 아니다 — 끌면 그림이 따라오는 브라우저 기본 동작·글자 선택을 막는다 (라이브 세션만 막혀 있었고 AI 화면은 끌렸다)
+  return <img ref={ref} draggable={false} {...props} className={`select-none ${props.className ?? ""}`}
+    onDragStart={(e) => { e.preventDefault(); props.onDragStart?.(e); }} />;
 }
