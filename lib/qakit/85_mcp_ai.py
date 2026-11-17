@@ -424,7 +424,8 @@ class McpSession:
         try:
             udid = self.ws.device["udid"] if self.ws.device else self.udid
             st = serve_load(udid) if udid else None
-            if not st or st.get("workspace") != str(self.ws.root) or not _pid_alive(st.get("pid")):
+            if not st or st.get("workspace") != str(self.ws.root) or not serve_same_app(self.ws, st) \
+                    or not _pid_alive(st.get("pid")):
                 return None
             if self.serve_hash_ok is None:
                 self.serve_hash_ok = st.get("runnerHash") == runner_source_hash(self.ws)
