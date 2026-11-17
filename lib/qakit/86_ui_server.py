@@ -70,7 +70,14 @@ def cmd_ui(args):
     import secrets as pysecrets
     import threading
     import urllib.parse
+    global BUILD_MODE
     ws = find_workspace(args.workspace)
+    if BUILD_MODE is None:   # --build를 안 줬으면 이 작업공간에서 마지막으로 연 빌드 (맥 앱은 --build 없이 연다)
+        last = (_read_json(WORKSPACES_FILE, {}).get(str(ws.root)) or {}).get("build")
+        if last in ("debug", "release") and last != ws.build:
+            BUILD_MODE = last
+            ws = find_workspace(args.workspace)
+            info(f"빌드: {last} (이 작업공간에서 마지막으로 연 빌드 — 바꾸려면 --build)")
     token = pysecrets.token_urlsafe(18)
     android = ws.platform == "android"
     # 안드로이드: 에뮬레이터 serial (꺼져 있으면 띄움). 라이브 화면·터치·녹화는 adb + 상주 실행기 화면 서버
