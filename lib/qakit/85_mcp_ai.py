@@ -774,7 +774,8 @@ AI_EFFORTS = ("low", "medium", "high", "xhigh", "max")   # claude --effort
 def ai_command(engine, ws, d, prompt, turns, read_source=False, direct=False, chat=None, model=None, effort=None):
     """AI CLI 명령 (qakit 도구만 허용, read_source면 앱 소스 읽기(Read·Grep·Glob)도 — 셸·수정은 막음).
     chat: {"id": 세션 uuid, "resume": 이어서인가} — 채팅창 (대화를 이어 가도록 세션을 남긴다)."""
-    mcp = {"command": str(KIT_DIR / "bin" / "qakit"), "args": ["-w", str(ws.root), "mcp"],
+    build = ["--build", ws.build] if ws.build != "debug" else []   # UI를 --build release로 열었으면 AI도 같은 앱을 (없으면 debug 앱을 조작함)
+    mcp = {"command": str(KIT_DIR / "bin" / "qakit"), "args": ["-w", str(ws.root), *build, "mcp"],
            "env": {"QAKIT_AI_DIR": str(d), **({"QAKIT_TOUCH": "direct"} if direct else {})}}
     if engine == "claude":
         cfg = d / "mcp.json"
@@ -975,7 +976,7 @@ def mcp_loop(session, tools, send):
 def mcp_install(ws, args):
     """AI 도구에 qakit MCP 서버를 등록한다. Claude Code: 작업공간 .mcp.json (이 폴더에서 연 세션). Codex: codex mcp add."""
     command = str(KIT_DIR / "bin" / "qakit")   # 지금 실행 중인 qakit (설치본이면 ~/qa-kit/bin/qakit)
-    margs = ["-w", str(ws.root), "mcp"]
+    margs = ["-w", str(ws.root), *(["--build", ws.build] if ws.build != "debug" else []), "mcp"]
     if not (args.claude or args.codex):
         fail("어디에 등록할지 고르세요", "qakit mcp install --claude  또는  --codex")
     if args.claude:
