@@ -300,12 +300,32 @@ def device_team(ws):
     return team
 
 
+def signing_certificate_sha1(app_path):
+    """앱에 서명한 인증서(맨 앞 인증서)의 SHA-1을 돌려준다. 못 읽으면 None.
+
+    `security find-identity`가 보여 주는 해시와 같은 값이라 `codesign --sign`에 그대로 쓸 수 있다.
+    """
+    tmp = Path(tempfile.mkdtemp())
+    try:
+        subprocess.run(["codesign", "-d", f"--extract-certificates={tmp}/cert", str(app_path)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        leaf = tmp / "cert0"
+        if not leaf.exists():
+            return None
+        return hashlib.sha1(leaf.read_bytes()).hexdigest().upper()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def embed_autoid(app_path, dylib):
     """AutoID dylib을 앱의 Frameworks/에 넣고 앱과 같은 인증서·권한으로 다시 서명한다."""
     r = run(["codesign", "-dvvv", str(app_path)], check=False)
     identity = next((l.split("=", 1)[1] for l in (r.stdout or "").splitlines() if l.startswith("Authority=")), None)
     if not identity:
         fail(f"{app_path.name}의 서명 인증서를 읽지 못했습니다.", "Xcode에서 이 앱을 기기로 한 번 실행해 서명을 확인하세요")
+    # 키체인에 같은 이름의 인증서가 둘 이상이면 이름으로는 "ambiguous"로 실패한다.
+    # 앱에 실제로 서명한 인증서의 SHA-1으로 지정하면 어느 것인지 정확히 고를 수 있다.
+    identity = signing_certificate_sha1(app_path) or identity
     ent = Path(tempfile.mkstemp(suffix=".plist")[1])
     try:
         # stdout만 (stderr의 "Executable=…" 줄이 섞이면 plist가 깨진다)
